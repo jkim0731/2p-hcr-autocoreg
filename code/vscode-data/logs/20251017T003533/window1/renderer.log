@@ -1,0 +1,61 @@
+2025-10-17 00:35:34.311 [info] Started local extension host with pid 2051.
+2025-10-17 00:35:34.736 [info] MCP Registry configured: https://api.mcp.github.com/2025-09-15
+2025-10-17 00:35:35.061 [info] Settings Sync: Account status changed from uninitialized to unavailable
+2025-10-17 00:35:37.018 [info] [perf] Render performance baseline is 28ms
+2025-10-17 00:37:06.251 [info] ChatSessionStore: Migrating 0 chat sessions from storage service to file system
+2025-10-17 00:37:06.377 [info] Started local extension host with pid 2319.
+2025-10-17 00:37:07.132 [info] MCP Registry configured: https://api.mcp.github.com/2025-09-15
+2025-10-17 00:37:07.285 [info] Settings Sync: Account status changed from uninitialized to unavailable
+2025-10-17 00:37:09.083 [info] [perf] Render performance baseline is 29ms
+2025-10-17 01:00:31.565 [error] [File Watcher ('parcel')] Unexpected error: Invalid argument (EUNKNOWN) (path: /root/capsule)
+2025-10-17 01:00:31.566 [error] [File Watcher (universal)] Invalid argument
+2025-10-17 02:53:22.455 [error] [Extension Host] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:594529)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+2025-10-17 02:53:23.457 [error] An unknown error occurred. Please consult the log for more details.
+2025-10-17 02:53:23.521 [error] [Extension Host] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:594529)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+2025-10-17 02:53:24.523 [error] An unknown error occurred. Please consult the log for more details.
+2025-10-17 02:53:35.645 [error] Unknown (FileSystemError): Failed to move '767018_coreg' to the trash (Failed to move item to trash)
+    at v7.create (file:///usr/share/code/resources/app/out/main.js:38:29705)
+    at Qi (file:///usr/share/code/resources/app/out/main.js:38:26959)
+    at y4.z (file:///usr/share/code/resources/app/out/main.js:62:26564)
+2025-10-17 02:53:35.655 [error] Failed to move '767018_coreg' to the trash (Failed to move item to trash): Unknown (FileSystemError): Failed to move '767018_coreg' to the trash (Failed to move item to trash)
+    at v7.create (file:///usr/share/code/resources/app/out/main.js:38:29705)
+    at Qi (file:///usr/share/code/resources/app/out/main.js:38:26959)
+    at y4.z (file:///usr/share/code/resources/app/out/main.js:62:26564)
+2025-10-17 03:02:58.289 [error] [Extension Host] (node:2319) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `exe --trace-warnings ...` to show where the warning was created)
+2025-10-17 03:03:01.045 [error] chatParticipant must be declared in package.json: claude-code
+2025-10-17 03:04:52.583 [error] [Extension Host] [AsyncCompletionManager] [1c1a9b16-4ecf-4718-9c95-7ce40cd89b98] Request errored with AbortError: The operation was aborted.
+    at AbortSignal.abortHandler (/root/.vscode/extensions/github.copilot-1.372.0/node_modules/@adobe/helix-fetch/src/fetch/index.js:106:17)
+    at AbortSignal.[nodejs.internal.kHybridDispatch] (node:internal/event_target:827:20)
+    at AbortSignal.dispatchEvent (node:internal/event_target:762:26)
+    at runAbort (node:internal/abort_controller:486:10)
+    at abortSignal (node:internal/abort_controller:457:3)
+    at AbortController.abort (node:internal/abort_controller:505:5)
+    at /root/.vscode/extensions/github.copilot-1.372.0/lib/src/networking.ts:105:19
+    at jie.invoke (/root/.vscode/extensions/github.copilot-1.372.0/node_modules/vscode-jsonrpc/lib/common/events.js:55:39)
+    at t.fire (/root/.vscode/extensions/github.copilot-1.372.0/node_modules/vscode-jsonrpc/lib/common/events.js:117:36)
+    at wU.cancel (/root/.vscode/extensions/github.copilot-1.372.0/node_modules/vscode-jsonrpc/lib/common/cancellation.js:41:31)
+    at Zie.cancel (/root/.vscode/extensions/github.copilot-1.372.0/node_modules/vscode-jsonrpc/lib/common/cancellation.js:82:25)
+    at ll.cancelRequest (/root/.vscode/extensions/github.copilot-1.372.0/lib/src/ghostText/asyncCompletions.ts:257:41)
+    at ll.getFirstMatchingRequest (/root/.vscode/extensions/github.copilot-1.372.0/lib/src/ghostText/asyncCompletions.ts:234:22)
+    at /root/.vscode/extensions/github.copilot-1.372.0/lib/src/ghostText/ghostText.ts:955:22
+    at getGhostText (/root/.vscode/extensions/github.copilot-1.372.0/lib/src/ghostText/ghostText.ts:1101:16)
+    at getInlineCompletionsResult (/root/.vscode/extensions/github.copilot-1.372.0/lib/src/inlineCompletion.ts:31:20)
+    at getInlineCompletions (/root/.vscode/extensions/github.copilot-1.372.0/lib/src/inlineCompletion.ts:92:20)
+    at ste.provideInlineCompletionItems (/root/.vscode/extensions/github.copilot-1.372.0/extension/src/ghostText/ghostText.ts:47:32)
+    at Ove.provideInlineCompletionItems (/root/.vscode/extensions/github.copilot-1.372.0/extension/src/inlineCompletion.ts:93:25)
+    at da.provideInlineCompletions (file:///usr/share/code/resources/app/out/vs/workbench/api/node/extensionHostProcess.js:142:145872) {
+  type: 'aborted',
+  _name: 'AbortError'
+}
+2025-10-17 03:06:09.035 [error] [Extension Host] Error: Git error
+    at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:594529)
+    at ChildProcess.emit (node:events:531:35)
+    at Process.ChildProcess._handle.onexit (node:internal/child_process:293:12)
+2025-10-17 03:06:10.037 [error] An unknown error occurred. Please consult the log for more details.
