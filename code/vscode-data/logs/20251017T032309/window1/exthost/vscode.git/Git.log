@@ -1,0 +1,39 @@
+2025-10-17 03:23:11.381 [info] [main] Log level: Info
+2025-10-17 03:23:11.381 [info] [main] Validating found git in: "git"
+2025-10-17 03:23:11.381 [info] [main] Using git "2.34.1" from "git"
+2025-10-17 03:23:11.381 [info] [Model][doInitialScan] Initial repository scan started
+2025-10-17 03:23:11.381 [info] > git rev-parse --show-toplevel [12ms]
+2025-10-17 03:23:11.381 [info] > git rev-parse --git-dir --git-common-dir --show-superproject-working-tree [23ms]
+2025-10-17 03:23:11.381 [info] [Model][openRepository] Opened repository (path): /root/capsule
+2025-10-17 03:23:11.381 [info] [Model][openRepository] Opened repository (real path): /root/capsule
+2025-10-17 03:23:11.381 [info] [Model][openRepository] Opened repository (kind): repository
+2025-10-17 03:23:11.381 [info] > git rev-parse --show-toplevel [30ms]
+2025-10-17 03:23:11.381 [info] > git config --get commit.template [33ms]
+2025-10-17 03:23:11.382 [info] > git rev-parse --show-toplevel [6ms]
+2025-10-17 03:23:11.386 [info] > git for-each-ref --format=%(refname)%00%(upstream:short)%00%(objectname)%00%(upstream:track)%00%(upstream:remotename)%00%(upstream:remoteref) refs/heads/master refs/remotes/master [6ms]
+2025-10-17 03:23:11.387 [info] > git rev-parse --show-toplevel [2ms]
+2025-10-17 03:23:11.399 [info] > git rev-parse --show-toplevel [9ms]
+2025-10-17 03:23:11.402 [info] > git for-each-ref --sort -committerdate --format %(refname)%00%(objectname)%00%(*objectname) [4ms]
+2025-10-17 03:23:11.404 [info] > git rev-parse --show-toplevel [2ms]
+2025-10-17 03:23:11.406 [info] [Model][doInitialScan] Initial repository scan completed - repositories (1), closed repositories (0), parent repositories (0), unsafe repositories (0)
+2025-10-17 03:23:11.878 [info] > git status -z -uall [483ms]
+2025-10-17 03:23:11.879 [info] > git check-ignore -v -z --stdin [1ms]
+2025-10-17 03:23:11.905 [info] > git for-each-ref --format=%(refname)%00%(upstream:short)%00%(objectname)%00%(upstream:track)%00%(upstream:remotename)%00%(upstream:remoteref) refs/heads/master refs/remotes/master [5ms]
+2025-10-17 03:23:11.910 [info] > git config --get --local branch.master.vscode-merge-base [2ms]
+2025-10-17 03:23:11.910 [warning] [Git][config] git config failed: Failed to execute git
+2025-10-17 03:23:11.913 [info] > git config --get commit.template [9ms]
+2025-10-17 03:23:11.916 [info] > git reflog master --grep-reflog=branch: Created from *. [3ms]
+2025-10-17 03:23:11.919 [info] > git for-each-ref --format=%(refname)%00%(upstream:short)%00%(objectname)%00%(upstream:track)%00%(upstream:remotename)%00%(upstream:remoteref) refs/heads/master refs/remotes/master [3ms]
+2025-10-17 03:23:11.925 [info] > git symbolic-ref --short refs/remotes/origin/HEAD [6ms]
+2025-10-17 03:23:11.928 [info] > git for-each-ref --sort -committerdate --format %(refname)%00%(objectname)%00%(*objectname) [3ms]
+2025-10-17 03:23:11.929 [info] > git for-each-ref --format=%(refname)%00%(upstream:short)%00%(objectname)%00%(upstream:track)%00%(upstream:remotename)%00%(upstream:remoteref) refs/heads/origin/master refs/remotes/origin/master [1ms]
+2025-10-17 03:23:11.933 [info] > git config --add --local branch.master.vscode-merge-base origin/master [1ms]
+2025-10-17 03:23:11.938 [info] > git status -z -uall [16ms] (cancelled)
+2025-10-17 03:23:11.942 [info] > git config --get commit.template [5ms]
+2025-10-17 03:23:11.943 [info] > git for-each-ref --format=%(refname)%00%(upstream:short)%00%(objectname)%00%(upstream:track)%00%(upstream:remotename)%00%(upstream:remoteref) refs/heads/master refs/remotes/master [1ms]
+2025-10-17 03:23:11.950 [info] > git for-each-ref --sort -committerdate --format %(refname)%00%(objectname)%00%(*objectname) [1ms]
+2025-10-17 03:23:12.428 [info] > git status -z -uall [481ms]
+2025-10-17 03:23:12.438 [info] > git merge-base refs/heads/master refs/remotes/origin/master [4ms]
+2025-10-17 03:23:12.443 [info] > git merge-base refs/heads/master refs/remotes/origin/master [6ms]
+2025-10-17 03:23:12.446 [info] > git diff --name-status -z --diff-filter=ADMR 3affa5439594ce070841d7e04430cfdec7633dd1...refs/remotes/origin/master [5ms]
+2025-10-17 03:23:12.447 [info] > git diff --name-status -z --diff-filter=ADMR 3affa5439594ce070841d7e04430cfdec7633dd1...refs/remotes/origin/master [2ms]

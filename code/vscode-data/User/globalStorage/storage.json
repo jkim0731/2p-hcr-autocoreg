@@ -1,7 +1,7 @@
 {
     "telemetry.sqmId": "",
     "telemetry.machineId": "1fde4f83e9ac0bc731f7112ac00b419bd90723a4c9a1ad2bdcc62abf5b7711ef",
-    "telemetry.devDeviceId": "e53b997c-14c5-4f80-b10e-beddbc706ea1",
+    "telemetry.devDeviceId": "676f5197-bb55-4c6e-a2ef-91948129c028",
     "backupWorkspaces": {
         "workspaces": [],
         "folders": [
@@ -9,11 +9,7 @@
                 "folderUri": "file:///root/capsule"
             }
         ],
-        "emptyWindows": [
-            {
-                "backupFolder": "1760654449960"
-            }
-        ]
+        "emptyWindows": []
     },
     "windowControlHeight": 35,
     "profileAssociations": {
