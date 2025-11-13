@@ -1,0 +1,42 @@
+2025-11-06 23:28:03.378 [info] (Client) Pylance client (2025.8.3) started with python extension (2025.16.0)
+2025-11-06 23:28:05.136 [info] (6325) Server root directory: file:///root/.vscode/extensions/ms-python.vscode-pylance-2025.8.3/dist
+2025-11-06 23:28:05.136 [info] (6325) Pylance language server 2025.8.3 (pyright version 1.1.405, commit d64f3fa0) starting
+2025-11-06 23:28:05.143 [info] (6325) Starting service instance "capsule" for workspace "/root/capsule"
+2025-11-06 23:28:05.239 [info] (6325) Starting Mcp server id:4741 ...
+2025-11-06 23:28:05.271 [info] (6325) Setting environmentName for service "capsule": "3.10.6 (global)"
+2025-11-06 23:28:05.272 [info] (6325) Setting pythonPath for service "capsule": "/usr/bin/python3"
+2025-11-06 23:28:05.272 [info] (6325) No include entries specified; assuming /root/capsule
+2025-11-06 23:28:05.273 [info] (6325) Auto-excluding **/node_modules
+2025-11-06 23:28:05.273 [info] (6325) Auto-excluding **/__pycache__
+2025-11-06 23:28:05.273 [info] (6325) Auto-excluding **/.*
+2025-11-06 23:28:05.308 [info] (6325) Assuming Python version 3.10.6.final.0
+2025-11-06 23:28:05.412 [info] (6325) Settings have not changed. Skipping update.
+2025-11-06 23:28:05.416 [info] (6325) Starting service instance "capsule" for workspace "/root/capsule"
+2025-11-07 03:02:28.952 [info] (6325) Found 2 source files
+2025-11-07 03:02:28.986 [info] (6325) BG: Priority queue background worker(2) root directory: file:///root/.vscode/extensions/ms-python.vscode-pylance-2025.8.3/dist
+2025-11-07 03:02:28.986 [info] (6325) BG: Priority queue background worker(2) started
+2025-11-07 03:02:29.077 [info] (6325) Setting environmentName for service "capsule": "3.10.6 (global)"
+2025-11-07 03:02:29.078 [info] (6325) Setting pythonPath for service "capsule": "/opt/conda/bin/python"
+2025-11-07 03:02:29.078 [info] (6325) No include entries specified; assuming /root/capsule
+2025-11-07 03:02:29.078 [info] (6325) Auto-excluding **/node_modules
+2025-11-07 03:02:29.078 [info] (6325) Auto-excluding **/__pycache__
+2025-11-07 03:02:29.079 [info] (6325) Auto-excluding **/.*
+2025-11-07 03:02:29.110 [info] (6325) Assuming Python version 3.10.12.final.0
+2025-11-07 07:16:38.842 [info] (6325) Found 2 source files
+2025-11-07 07:16:38.864 [info] (6325) BG: Priority queue background worker(4) root directory: file:///root/.vscode/extensions/ms-python.vscode-pylance-2025.8.3/dist
+2025-11-07 07:16:38.864 [info] (6325) BG: Priority queue background worker(4) started
+2025-11-07 07:16:39.020 [info] (6325) BG: Indexer background runner(5) root directory: file:///root/.vscode/extensions/ms-python.vscode-pylance-2025.8.3/dist (index)
+2025-11-07 07:16:39.020 [info] (6325) BG: Indexing(5) started
+2025-11-07 07:16:39.020 [info] (6325) BG: scanned(5) 795 files over 1 exec env
+2025-11-07 07:16:39.169 [error] Request textDocument/codeAction failed.
+  Message: Request textDocument/codeAction failed with message: Cannot read properties of undefined (reading 'fileInfo')
+  Code: -32603 
+2025-11-07 07:16:39.171 [error] Request textDocument/codeAction failed.
+  Message: Request textDocument/codeAction failed with message: Cannot read properties of undefined (reading 'fileInfo')
+  Code: -32603 
+2025-11-07 07:16:40.894 [info] (6325) BG: indexed(5) 795 files over 1 exec env
+2025-11-07 07:16:41.596 [info] (6325) BG: scanned(5) 249 files over 1 exec env
+2025-11-07 07:16:44.378 [info] (6325) BG: [IDX(5)] Long operation: index execution environment file:///root/capsule (2533ms)
+2025-11-07 07:16:44.414 [info] (6325) BG: [IDX(5)] Long operation: index packages file:///root/capsule (2575ms)
+2025-11-07 07:16:44.414 [info] (6325) BG: indexed(5) 249 files over 1 exec env
+2025-11-07 07:16:44.490 [info] (6325) BG: Indexing finished(5).

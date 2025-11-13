@@ -16,9 +16,7 @@
         "workspaces": {
             "file:///root/capsule": "__default__profile__"
         },
-        "emptyWindows": {
-            "1760654449960": "__default__profile__"
-        }
+        "emptyWindows": {}
     },
     "theme": "vs-dark",
     "themeBackground": "#1f1f1f",

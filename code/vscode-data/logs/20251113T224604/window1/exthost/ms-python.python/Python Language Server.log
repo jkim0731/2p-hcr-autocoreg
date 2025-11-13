@@ -1,0 +1,13 @@
+2025-11-13 22:47:22.947 [info] (Client) Pylance client (2025.9.1) started with python extension (2025.16.0)
+2025-11-13 22:47:24.360 [info] (3101) Server root directory: file:///root/.vscode/extensions/ms-python.vscode-pylance-2025.9.1/dist
+2025-11-13 22:47:24.361 [info] (3101) Pylance language server 2025.9.1 (pyright version 1.1.406, commit 20aa20a1) starting
+2025-11-13 22:47:24.365 [info] (3101) Starting service instance "capsule" for workspace "/root/capsule"
+2025-11-13 22:47:24.456 [info] (3101) Starting Mcp server id:4591 ...
+2025-11-13 22:47:24.482 [info] (3101) Setting environmentName for service "capsule": "3.10.6 (global)"
+2025-11-13 22:47:24.483 [info] (3101) Setting pythonPath for service "capsule": "/usr/bin/python3"
+2025-11-13 22:47:24.483 [info] (3101) No include entries specified; assuming /root/capsule
+2025-11-13 22:47:24.484 [info] (3101) Auto-excluding **/node_modules
+2025-11-13 22:47:24.484 [info] (3101) Auto-excluding **/__pycache__
+2025-11-13 22:47:24.484 [info] (3101) Auto-excluding **/.*
+2025-11-13 22:47:24.509 [info] (3101) Assuming Python version 3.10.6.final.0
+2025-11-13 22:47:24.595 [info] (3101) Settings have not changed. Skipping update.

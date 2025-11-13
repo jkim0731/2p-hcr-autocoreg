@@ -1,0 +1,40 @@
+2025-11-06 23:27:51.403 [info] Started local extension host with pid 5905.
+2025-11-06 23:27:59.974 [error] [Extension Host] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:594529)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+2025-11-06 23:27:59.978 [info] MCP Registry configured: https://api.mcp.github.com/2025-09-15
+2025-11-06 23:27:59.983 [error] An unknown error occurred. Please consult the log for more details.
+2025-11-06 23:28:01.010 [info] Settings Sync: Account status changed from uninitialized to unavailable
+2025-11-06 23:28:01.948 [info] [perf] Render performance baseline is 33ms
+2025-11-06 23:28:01.966 [info] Auto updating outdated extensions. ms-python.vscode-pylance
+2025-11-06 23:28:03.381 [error] [UriError]: Scheme contains illegal characters.: Error: [UriError]: Scheme contains illegal characters.
+    at z6 (file:///usr/share/code/resources/app/out/main.js:30:64302)
+    at new nd (file:///usr/share/code/resources/app/out/main.js:30:67682)
+    at new zr (file:///usr/share/code/resources/app/out/main.js:30:69120)
+    at nd.revive (file:///usr/share/code/resources/app/out/main.js:30:68897)
+    at o5.call (file:///usr/share/code/resources/app/out/main.js:88:105739)
+    at Lf.s (file:///usr/share/code/resources/app/out/main.js:31:14859)
+    at Lf.q (file:///usr/share/code/resources/app/out/main.js:31:14382)
+    at Xo.value (file:///usr/share/code/resources/app/out/main.js:31:13784)
+    at P.C (file:///usr/share/code/resources/app/out/main.js:30:2373)
+    at P.D (file:///usr/share/code/resources/app/out/main.js:30:2443)
+    at P.fire (file:///usr/share/code/resources/app/out/main.js:30:2660)
+    at Xo.value (file:///usr/share/code/resources/app/out/main.js:28:5145)
+    at P.C (file:///usr/share/code/resources/app/out/main.js:30:2373)
+    at P.fire (file:///usr/share/code/resources/app/out/main.js:30:2591)
+    at Xo.value (file:///usr/share/code/resources/app/out/main.js:28:5333)
+    at P.C (file:///usr/share/code/resources/app/out/main.js:30:2373)
+    at P.fire (file:///usr/share/code/resources/app/out/main.js:30:2591)
+    at F (file:///usr/share/code/resources/app/out/main.js:28:7627)
+    at IpcMainImpl.i (file:///usr/share/code/resources/app/out/main.js:36:10776)
+    at IpcMainImpl.emit (node:events:519:28)
+    at Session.<anonymous> (node:electron/js2c/browser_init:2:106370)
+    at Session.emit (node:events:519:28)
+2025-11-06 23:28:19.945 [error] [Extension Host] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:594529)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+2025-11-06 23:28:20.949 [error] An unknown error occurred. Please consult the log for more details.
+2025-11-07 00:11:58.985 [error] [File Watcher ('parcel')] Unexpected error: Invalid argument (EUNKNOWN) (path: /root/capsule)
+2025-11-07 00:11:58.985 [error] [File Watcher (universal)] Invalid argument

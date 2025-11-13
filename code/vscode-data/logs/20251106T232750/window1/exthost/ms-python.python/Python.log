@@ -1,0 +1,19 @@
+2025-11-06 23:28:01.145 [info] Native locator: Refresh started
+2025-11-06 23:28:01.145 [info] Conda environment manager found at: /opt/conda/bin/conda
+2025-11-06 23:28:01.145 [info] Using conda: /opt/conda/bin/conda
+2025-11-06 23:28:01.184 [info] Native locator: Refresh finished in 184 ms
+2025-11-06 23:28:01.514 [info] Native locator: Refresh started
+2025-11-06 23:28:01.531 [info] Native locator: Refresh started
+2025-11-06 23:28:01.548 [info] > /opt/conda/bin/conda info --json
+2025-11-06 23:28:01.587 [info] Conda environment manager found at: /opt/conda/bin/conda
+2025-11-06 23:28:01.587 [info] Conda set to: /opt/conda/bin/conda
+2025-11-06 23:28:01.632 [info] > pyenv which python
+2025-11-06 23:28:01.633 [info] cwd: .
+2025-11-06 23:28:01.805 [info] Native locator: Refresh finished in 290 ms
+2025-11-06 23:28:02.812 [info] > /opt/conda/bin/conda config --get auto_activate_base
+2025-11-06 23:28:02.821 [info] > /opt/conda/bin/conda run -p /opt/conda --no-capture-output python ~/.vscode/extensions/ms-python.python-2025.16.0-linux-x64/python_files/get_output_via_markers.py ~/.vscode/extensions/ms-python.python-2025.16.0-linux-x64/python_files/printEnvVariables.py
+2025-11-06 23:28:02.821 [info] shell: bash
+2025-11-06 23:28:02.821 [info] > /opt/conda/bin/conda run -p /opt/conda --no-capture-output python ~/.vscode/extensions/ms-python.python-2025.16.0-linux-x64/python_files/get_output_via_markers.py ~/.vscode/extensions/ms-python.python-2025.16.0-linux-x64/python_files/printEnvVariables.py
+2025-11-06 23:28:02.821 [info] shell: bash
+2025-11-06 23:28:02.836 [info] Python interpreter path: /usr/bin/python3
+2025-11-06 23:28:05.167 [info] Starting Pylance language server.
