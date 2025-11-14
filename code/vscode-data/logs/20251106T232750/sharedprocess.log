@@ -1,7 +1,0 @@
-2025-11-06 23:28:02.971 [info] Getting Manifest... ms-python.vscode-pylance
-2025-11-06 23:28:03.043 [info] Installing extension: ms-python.vscode-pylance {"productVersion":{"version":"1.105.1","date":"2025-10-14T22:33:36.618Z"},"pinned":false,"operation":3,"isApplicationScoped":false,"profileLocation":{"$mid":1,"external":"vscode-userdata:/root/.vscode/extensions/extensions.json","path":"/root/.vscode/extensions/extensions.json","scheme":"vscode-userdata"}}
-2025-11-06 23:28:06.170 [info] Extension signature verification result for ms-python.vscode-pylance: Success. Internal Code: 0. Executed: true. Duration: 2127ms.
-2025-11-06 23:28:11.235 [info] Extracted extension to file:///root/.vscode/extensions/ms-python.vscode-pylance-2025.9.1: ms-python.vscode-pylance
-2025-11-06 23:28:11.541 [info] Renamed to /root/.vscode/extensions/ms-python.vscode-pylance-2025.9.1
-2025-11-06 23:28:11.569 [info] Marked extension as removed ms-python.vscode-pylance-2025.8.3
-2025-11-06 23:28:11.578 [info] Extension installed successfully: ms-python.vscode-pylance vscode-userdata:/root/.vscode/extensions/extensions.json

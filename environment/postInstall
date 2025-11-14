@@ -58,7 +58,7 @@ else
 fi
 
 # Ensure the folder exists
-mkdir -p /root/capsule/code/vscode-data
+mkdir -p /root/capsule/scratch/vscode-data
 
 # Upgrade pip and install Jupyter
 echo "Installing/Upgrading pip and Jupyter..."
@@ -69,18 +69,29 @@ python3 -m pip install jupyter
 # (These will go into /root/.vscode-server/extensions or ~/.vscode/extensions)
 if command -v code >/dev/null 2>&1; then
   echo "Installing VS Code Python and Jupyter extensions..."
-  code --install-extension ms-python.python --force --user-data-dir=/root/capsule/code/vscode-data --no-sandbox
-  code --install-extension ms-toolsai.jupyter --force --user-data-dir=/root/capsule/code/vscode-data --no-sandbox
+  code --install-extension ms-python.python --force --user-data-dir=/root/capsule/scratch/vscode-data --no-sandbox
+  code --install-extension ms-toolsai.jupyter --force --user-data-dir=/root/capsule/scratch/vscode-data --no-sandbox
 else
   echo "Warning: 'code' command not found ? skipping VS Code extension installation."
 fi
 
 # Create a system-wide alias for all future shells
 # now you can simply run 'code' in Terminal
-echo "alias code='code --user-data-dir=/root/capsule/code/vscode-data --no-sandbox'" >> /etc/bash.bashrc
+echo "alias code='code --user-data-dir=/root/capsule/scratch/vscode-data --no-sandbox'" >> /etc/bash.bashrc
 # installing necessary python packages
-pip install --no-cache pandas matplotlib scipy tifffile zarr opencv-python
+pip install --no-cache pandas matplotlib scipy tifffile zarr opencv-python scikit-image codeocean aind_session
 
+cd /
+git clone https://github.com/AllenNeuralDynamics/comb
+cd comb
+pip install -e .
+#git checkout 21b9cae9431f7f83e1973af6f1fc1ecd40fc765d
+git checkout for_gcamp_validation
+
+cd /
+git clone https://github.com/AllenNeuralDynamics/lamf-analysis
+cd lamf-analysis
+pip install -e .
 
 # Update Fiji
 FIJI_DIR=/Fiji.app
@@ -90,6 +101,8 @@ FIJI="$FIJI_DIR/ImageJ-linux64"
 
 echo "Fiji/BDV ecosystem updated."
 
+# make numlock for numpad from mac 
+echo 'setxkbmap -option numpad:mac' >> /root/.xsessionrc
 
 
 

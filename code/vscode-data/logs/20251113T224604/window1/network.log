@@ -1,9 +1,0 @@
-2025-11-13 22:46:20.021 [error] #1: https://marketplace.visualstudio.com/_apis/public/gallery/vscode/ms-python/debugpy/latest - error GET Fetch timeout: 10000ms
-2025-11-13 22:46:20.021 [error] #2: https://marketplace.visualstudio.com/_apis/public/gallery/vscode/ms-python/python/latest - error GET Fetch timeout: 10000ms
-2025-11-13 22:46:20.021 [error] #3: https://marketplace.visualstudio.com/_apis/public/gallery/vscode/ms-python/vscode-pylance/latest - error GET Fetch timeout: 10000ms
-2025-11-13 22:46:20.021 [error] #4: https://marketplace.visualstudio.com/_apis/public/gallery/vscode/ms-python/vscode-python-envs/latest - error GET Fetch timeout: 10000ms
-2025-11-13 22:46:20.021 [error] #5: https://marketplace.visualstudio.com/_apis/public/gallery/vscode/ms-toolsai/jupyter/latest - error GET Fetch timeout: 10000ms
-2025-11-13 22:46:20.021 [error] #6: https://marketplace.visualstudio.com/_apis/public/gallery/vscode/ms-toolsai/jupyter-keymap/latest - error GET Fetch timeout: 10000ms
-2025-11-13 22:46:20.021 [error] #7: https://marketplace.visualstudio.com/_apis/public/gallery/vscode/ms-toolsai/jupyter-renderers/latest - error GET Fetch timeout: 10000ms
-2025-11-13 22:46:20.021 [error] #8: https://marketplace.visualstudio.com/_apis/public/gallery/vscode/ms-toolsai/vscode-jupyter-cell-tags/latest - error GET Fetch timeout: 10000ms
-2025-11-13 22:46:20.021 [error] #9: https://marketplace.visualstudio.com/_apis/public/gallery/vscode/ms-toolsai/vscode-jupyter-slideshow/latest - error GET Fetch timeout: 10000ms
