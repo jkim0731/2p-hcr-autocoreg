@@ -4,6 +4,7 @@ FROM $REGISTRY_HOST/codeocean/ubuntu-desktop-igv-fiji-mambaforge:23.1.0-4-python
 
 # force rebuild
 ARG DEBIAN_FRONTEND=noninteractive
+ARG GIT_ASKPASS
 COPY git-askpass /
 
 COPY postInstall /
