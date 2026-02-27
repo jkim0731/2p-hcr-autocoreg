@@ -1,0 +1,106 @@
+2026-02-27 16:33:14.424 [info] Client: Pylance client (2026.1.1) started with python extension (2026.2.0)
+2026-02-27 16:33:15.123 [info] (1766): Server root directory: file:///root/.vscode/extensions/ms-python.vscode-pylance-2026.1.1/dist
+2026-02-27 16:33:15.124 [info] (1766): Pylance language server 2026.1.1 (pyright version 1.1.408, commit 138238b4) starting
+2026-02-27 16:33:15.132 [info] (1766): Starting service instance "capsule" for workspace "/root/capsule"
+2026-02-27 16:33:16.438 [info] (1766): Loading background bundle file:///root/.vscode/extensions/ms-python.vscode-pylance-2026.1.1/dist/copilot-background.bundle.js into file:///root/capsule...
+2026-02-27 16:33:16.562 [info] (1766): FG(capsule): Setting environmentName for service "capsule": "3.10.12 (base conda)"
+2026-02-27 16:33:16.563 [info] (1766): FG(capsule): Setting pythonPath for service "capsule": "/opt/conda/bin/python"
+2026-02-27 16:33:16.563 [info] (1766): FG(capsule): No include entries specified; assuming /root/capsule
+2026-02-27 16:33:16.564 [info] (1766): FG(capsule): Auto-excluding **/node_modules
+2026-02-27 16:33:16.565 [info] (1766): FG(capsule): Auto-excluding **/__pycache__
+2026-02-27 16:33:16.565 [info] (1766): FG(capsule): Auto-excluding **/.*
+2026-02-27 16:33:16.596 [info] (1766): FG(capsule): Assuming Python version 3.10.12.final.0
+2026-02-27 16:33:16.712 [info] (1766): [Editable Installs] Starting dynamic pth file resolution for Python: /opt/conda/bin/python
+2026-02-27 16:33:16.721 [info] (1766): [Editable Installs] No sandbox available for Python /opt/conda/bin/python. Dynamic pth file resolution requires Python 3.13 or later.
+2026-02-27 18:50:19.980 [info] (1766): FG(capsule): Found 2 source files
+2026-02-27 18:50:20.003 [info] (1766): PQ(capsule): Priority queue background worker(2) root directory: file:///root/.vscode/extensions/ms-python.vscode-pylance-2026.1.1/dist
+2026-02-27 18:50:20.003 [info] (1766): PQ(capsule): Priority queue background worker(2) started
+2026-02-27 18:50:20.003 [info] (1766): Settings have not changed. Skipping update.
+2026-02-27 18:50:20.310 [info] (1766): Starting Mcp server id:4813 ...
+2026-02-27 18:50:20.859 [info] (1766): FG(capsule): IDX(capsule): Indexer background runner(3) root directory: file:///root/.vscode/extensions/ms-python.vscode-pylance-2026.1.1/dist (index)
+2026-02-27 18:50:20.860 [info] (1766): FG(capsule): IDX(capsule): Indexing(3) started
+2026-02-27 18:50:21.755 [info] (1766): virtual workspace: vscode-chat-code-block://dnnjb2rllwnoyxqtc2vzc2lvbjovl2xvy2fsl01xvtbnekv4wtjzdflqwtrzetawt1rneuxubg1zbvl0wvrfmvpettbore5otudgag/
+2026-02-27 18:50:21.755 [info] (1766): Starting service instance "<default>" for workspace "vscode-chat-code-block://dnnjb2rllwnoyxqtc2vzc2lvbjovl2xvy2fsl01xvtbnekv4wtjzdflqwtrzetawt1rneuxubg1zbvl0wvrfmvpettbore5otudgag/"
+2026-02-27 18:50:21.782 [info] (1766): FG(capsule): IDX(capsule): scanned(3) 445 files over 1 exec env
+2026-02-27 18:50:22.171 [info] (1766): FG(capsule): IDX(capsule): indexed(3) 445 files over 1 exec env
+2026-02-27 18:50:22.332 [info] (1766): FG(capsule): IDX(capsule): Indexing finished(3).
+2026-02-27 18:50:23.626 [info] (1766): FG(<default>): Setting environmentName for service "<default>": "3.10.12 (base conda)"
+2026-02-27 18:50:23.626 [info] (1766): FG(<default>): No include entries specified; assuming vscode-chat-code-block://dnnjb2rllwnoyxqtc2vzc2lvbjovl2xvy2fsl01xvtbnekv4wtjzdflqwtrzetawt1rneuxubg1zbvl0wvrfmvpettbore5otudgag/
+2026-02-27 18:50:23.626 [info] (1766): FG(<default>): Auto-excluding **/node_modules
+2026-02-27 18:50:23.626 [info] (1766): FG(<default>): Auto-excluding **/__pycache__
+2026-02-27 18:50:23.626 [info] (1766): FG(<default>): Auto-excluding **/.*
+2026-02-27 18:50:23.657 [info] (1766): FG(<default>): Assuming Python version 3.10.12.final.0
+2026-02-27 18:50:23.712 [info] (1766): [Editable Installs] Starting dynamic pth file resolution for Python: 
+2026-02-27 18:50:23.722 [info] (1766): [Editable Installs] No sandbox available for Python . Dynamic pth file resolution requires Python 3.13 or later.
+2026-02-27 18:50:25.885 [error] (1766): FG(<default>): File or directory "vscode-chat-code-block://dnnjb2rllwnoyxqtc2vzc2lvbjovl2xvy2fsl01xvtbnekv4wtjzdflqwtrzetawt1rneuxubg1zbvl0wvrfmvpettbore5otudgag/" does not exist.
+2026-02-27 18:50:25.885 [info] (1766): FG(<default>): No source files found.
+2026-02-27 18:50:39.935 [info] (1766): 
+*Warning*: Pylance failed to parse docstring at offset 2253
+
+ Outputting literal text instead.
+2026-02-27 18:50:39.935 [info] (1766): 
+*Warning*: Pylance failed to parse docstring at offset 2253
+
+ Outputting literal text instead.
+2026-02-27 18:50:39.935 [info] (1766): 
+*Warning*: Pylance failed to parse docstring at offset 2253
+
+ Outputting literal text instead.
+2026-02-27 18:50:39.935 [info] (1766): 
+*Warning*: Pylance failed to parse docstring at offset 2253
+
+ Outputting literal text instead.
+2026-02-27 18:50:40.610 [error] Request textDocument/codeAction failed.
+  Message: Request textDocument/codeAction failed with message: request cancelled
+  Code: -32603 
+2026-02-27 18:50:40.631 [error] Request textDocument/codeAction failed.
+  Message: Request textDocument/codeAction failed with message: request cancelled
+  Code: -32603 
+2026-02-27 18:50:40.650 [error] Request textDocument/codeAction failed.
+  Message: Request textDocument/codeAction failed with message: request cancelled
+  Code: -32603 
+2026-02-27 18:50:40.686 [error] Request textDocument/codeAction failed.
+  Message: Request textDocument/codeAction failed with message: request cancelled
+  Code: -32603 
+2026-02-27 18:50:40.690 [error] Request textDocument/codeAction failed.
+  Message: Request textDocument/codeAction failed with message: request cancelled
+  Code: -32603 
+2026-02-27 18:50:42.380 [error] Request textDocument/codeAction failed.
+  Message: Request textDocument/codeAction failed with message: request cancelled
+  Code: -32603 
+2026-02-27 18:50:42.382 [error] Request textDocument/codeAction failed.
+  Message: Request textDocument/codeAction failed with message: request cancelled
+  Code: -32603 
+2026-02-27 18:58:46.818 [info] (1766): 
+*Warning*: Pylance failed to parse docstring at offset 882
+
+ Outputting literal text instead.
+2026-02-27 18:58:46.858 [info] (1766): 
+*Warning*: Pylance failed to parse docstring at offset 882
+
+ Outputting literal text instead.
+2026-02-27 18:58:47.812 [info] (1766): 
+*Warning*: Pylance failed to parse docstring at offset 882
+
+ Outputting literal text instead.
+2026-02-27 18:58:48.058 [info] (1766): 
+*Warning*: Pylance failed to parse docstring at offset 20088
+
+ Outputting literal text instead.
+2026-02-27 18:58:48.150 [info] (1766): 
+*Warning*: Pylance failed to parse docstring at offset 20088
+
+ Outputting literal text instead.
+2026-02-27 18:58:49.340 [info] (1766): Starting service instance "<default>" for workspace ""
+2026-02-27 18:58:49.342 [info] (1766): Loading background bundle file:///root/.vscode/extensions/ms-python.vscode-pylance-2026.1.1/dist/copilot-background.bundle.js into ...
+2026-02-27 18:58:49.413 [info] (1766): FG(<default>): Setting environmentName for service "<default>": "3.10.12 (base conda)"
+2026-02-27 18:58:49.413 [info] (1766): FG(<default>): Setting pythonPath for service "<default>": "/opt/conda/bin/python"
+2026-02-27 18:58:49.413 [info] (1766): FG(<default>): No include entries specified; assuming /<default workspace root>
+2026-02-27 18:58:49.414 [info] (1766): FG(<default>): Auto-excluding **/node_modules
+2026-02-27 18:58:49.414 [info] (1766): FG(<default>): Auto-excluding **/__pycache__
+2026-02-27 18:58:49.414 [info] (1766): FG(<default>): Auto-excluding **/.*
+2026-02-27 18:58:49.451 [info] (1766): FG(<default>): Assuming Python version 3.10.12.final.0
+2026-02-27 18:58:49.564 [error] (1766): FG(<default>): File or directory "/<default workspace root>" does not exist.
+2026-02-27 18:58:49.564 [info] (1766): FG(<default>): No source files found.
+2026-02-27 18:58:50.089 [info] (1766): PQ(<default>): Priority queue background worker(5) root directory: file:///root/.vscode/extensions/ms-python.vscode-pylance-2026.1.1/dist
+2026-02-27 18:58:50.091 [info] (1766): PQ(<default>): Priority queue background worker(5) started

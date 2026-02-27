@@ -1,0 +1,218 @@
+2026-02-26 22:12:27.808 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:12:28.016 [info] read schema from vscode: vscode://schemas/settings/resourceLanguage
+2026-02-26 22:12:28.027 [info] read schema from vscode: vscode://schemas/launch
+2026-02-26 22:12:28.032 [info] read schema from vscode: vscode://schemas/token-styling
+2026-02-26 22:12:28.033 [info] read schema from vscode: vscode://schemas/textmate-colors
+2026-02-26 22:12:28.033 [info] read schema from vscode: vscode://schemas/workbench-colors
+2026-02-26 22:12:28.899 [info] schema change detected vscode://schemas/settings/folder
+2026-02-26 22:12:28.900 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:12:56.049 [info] schema change detected vscode://schemas/launch
+2026-02-26 22:12:56.057 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:12:56.259 [info] read schema from vscode: vscode://schemas/launch
+2026-02-26 22:12:57.013 [info] schema change detected vscode://schemas/settings/folder
+2026-02-26 22:12:57.015 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:13:59.358 [info] schema change detected vscode://schemas/settings/folder
+2026-02-26 22:13:59.359 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:14:40.526 [info] schema change detected vscode://schemas/launch
+2026-02-26 22:14:40.528 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:14:40.837 [info] read schema from vscode: vscode://schemas/launch
+2026-02-26 22:14:41.561 [info] schema change detected vscode://schemas/settings/folder
+2026-02-26 22:14:41.564 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:15:13.030 [info] schema change detected vscode://schemas/launch
+2026-02-26 22:15:13.032 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:15:13.245 [info] read schema from vscode: vscode://schemas/launch
+2026-02-26 22:15:14.109 [info] schema change detected vscode://schemas/settings/folder
+2026-02-26 22:15:14.111 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:15:16.152 [info] schema change detected vscode://schemas/launch
+2026-02-26 22:15:16.153 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:15:16.470 [info] read schema from vscode: vscode://schemas/launch
+2026-02-26 22:15:17.201 [info] schema change detected vscode://schemas/settings/folder
+2026-02-26 22:15:17.203 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:16:06.380 [info] schema change detected vscode://schemas/launch
+2026-02-26 22:16:06.381 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:16:06.677 [info] read schema from vscode: vscode://schemas/launch
+2026-02-26 22:16:07.372 [info] schema change detected vscode://schemas/settings/folder
+2026-02-26 22:16:07.374 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:16:20.292 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:16:20.665 [info] read schema from vscode: vscode://schemas/settings/resourceLanguage
+2026-02-26 22:16:20.828 [info] read schema from vscode: vscode://schemas/launch
+2026-02-26 22:16:20.892 [info] read schema from vscode: vscode://schemas/token-styling
+2026-02-26 22:16:20.932 [info] read schema from vscode: vscode://schemas/textmate-colors
+2026-02-26 22:16:20.942 [info] read schema from vscode: vscode://schemas/workbench-colors
+2026-02-26 22:16:21.433 [info] schema change detected vscode://schemas/settings/folder
+2026-02-26 22:16:21.922 [info] cancelled
+2026-02-26 22:16:21.935 [info] schema change detected vscode://schemas/settings/folder
+2026-02-26 22:16:22.087 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:16:22.454 [info] cancelled
+2026-02-26 22:16:22.534 [info] schema change detected vscode://schemas/settings/folder
+2026-02-26 22:16:22.576 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:16:22.849 [info] cancelled
+2026-02-26 22:16:27.982 [info] schema change detected vscode://schemas/launch
+2026-02-26 22:16:27.984 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:16:28.179 [info] read schema from vscode: vscode://schemas/launch
+2026-02-26 22:16:29.878 [info] schema change detected vscode://schemas/launch
+2026-02-26 22:16:29.879 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:16:30.066 [info] read schema from vscode: vscode://schemas/launch
+2026-02-26 22:16:31.485 [info] schema change detected vscode://schemas/launch
+2026-02-26 22:16:31.487 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:16:31.595 [info] read schema from vscode: vscode://schemas/launch
+2026-02-26 22:16:54.722 [info] schema change detected vscode://schemas/launch
+2026-02-26 22:16:54.724 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:16:55.001 [info] read schema from vscode: vscode://schemas/launch
+2026-02-26 22:16:55.773 [info] schema change detected vscode://schemas/settings/folder
+2026-02-26 22:16:55.775 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:17:04.619 [info] schema change detected vscode://schemas/launch
+2026-02-26 22:17:04.621 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:17:04.831 [info] read schema from vscode: vscode://schemas/launch
+2026-02-26 22:17:05.631 [info] schema change detected vscode://schemas/settings/folder
+2026-02-26 22:17:05.633 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:19:02.840 [info] schema change detected vscode://schemas/launch
+2026-02-26 22:19:02.841 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:19:03.256 [info] read schema from vscode: vscode://schemas/launch
+2026-02-26 22:19:03.895 [info] schema change detected vscode://schemas/settings/folder
+2026-02-26 22:19:03.897 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:20:26.613 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:20:28.307 [info] schema change detected vscode://schemas/settings/folder
+2026-02-26 22:20:28.389 [info] schema change detected vscode://schemas/settings/folder
+2026-02-26 22:20:28.743 [info] read schema from vscode: vscode://schemas/settings/resourceLanguage
+2026-02-26 22:20:28.804 [info] read schema from vscode: vscode://schemas/launch
+2026-02-26 22:20:28.894 [info] read schema from vscode: vscode://schemas/token-styling
+2026-02-26 22:20:28.988 [info] read schema from vscode: vscode://schemas/textmate-colors
+2026-02-26 22:20:29.023 [info] read schema from vscode: vscode://schemas/workbench-colors
+2026-02-26 22:20:29.187 [info] cancelled
+2026-02-26 22:20:29.207 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:20:29.586 [info] schema change detected vscode://schemas/settings/folder
+2026-02-26 22:20:29.691 [info] schema change detected vscode://schemas/settings/folder
+2026-02-26 22:20:29.872 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:20:30.394 [info] schema change detected vscode://schemas/settings/folder
+2026-02-26 22:20:30.396 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:20:31.417 [info] schema change detected vscode://schemas/settings/folder
+2026-02-26 22:20:31.419 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:20:32.612 [info] schema change detected vscode://schemas/settings/folder
+2026-02-26 22:20:32.614 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:20:38.993 [info] schema change detected vscode://schemas/launch
+2026-02-26 22:20:38.995 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:20:39.116 [info] read schema from vscode: vscode://schemas/launch
+2026-02-26 22:21:01.704 [info] schema change detected vscode://schemas/launch
+2026-02-26 22:21:01.706 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:21:01.826 [info] read schema from vscode: vscode://schemas/launch
+2026-02-26 22:21:03.455 [info] schema change detected vscode://schemas/launch
+2026-02-26 22:21:03.457 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:21:03.561 [info] read schema from vscode: vscode://schemas/launch
+2026-02-26 22:28:55.390 [info] schema change detected vscode://schemas/launch
+2026-02-26 22:28:55.393 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:28:55.595 [info] read schema from vscode: vscode://schemas/launch
+2026-02-26 22:29:23.695 [info] schema change detected vscode://schemas/launch
+2026-02-26 22:29:23.697 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:29:23.872 [info] read schema from vscode: vscode://schemas/launch
+2026-02-26 22:44:48.529 [info] schema change detected vscode://schemas/launch
+2026-02-26 22:44:48.531 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:44:48.743 [info] read schema from vscode: vscode://schemas/launch
+2026-02-26 22:45:04.515 [info] schema change detected vscode://schemas/launch
+2026-02-26 22:45:04.517 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:45:04.766 [info] read schema from vscode: vscode://schemas/launch
+2026-02-26 22:49:28.911 [info] schema change detected vscode://schemas/launch
+2026-02-26 22:49:28.913 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:49:29.110 [info] read schema from vscode: vscode://schemas/launch
+2026-02-26 22:50:56.173 [info] schema change detected vscode://schemas/launch
+2026-02-26 22:50:56.174 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:50:56.321 [info] read schema from vscode: vscode://schemas/launch
+2026-02-26 22:51:01.110 [info] schema change detected vscode://schemas/launch
+2026-02-26 22:51:01.111 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:51:01.282 [info] read schema from vscode: vscode://schemas/launch
+2026-02-26 22:51:55.188 [info] schema change detected vscode://schemas/launch
+2026-02-26 22:51:55.189 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:51:55.723 [info] read schema from vscode: vscode://schemas/launch
+2026-02-26 22:52:41.577 [info] schema change detected vscode://schemas/launch
+2026-02-26 22:52:41.578 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:52:41.895 [info] read schema from vscode: vscode://schemas/launch
+2026-02-26 22:52:43.417 [info] schema change detected vscode://schemas/launch
+2026-02-26 22:52:43.418 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:52:43.730 [info] read schema from vscode: vscode://schemas/launch
+2026-02-26 22:52:51.554 [info] schema change detected vscode://schemas/launch
+2026-02-26 22:52:51.556 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:52:52.458 [info] read schema from vscode: vscode://schemas/launch
+2026-02-26 22:53:07.074 [info] schema change detected vscode://schemas/launch
+2026-02-26 22:53:07.075 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:53:07.475 [info] read schema from vscode: vscode://schemas/launch
+2026-02-26 22:53:26.228 [info] schema change detected vscode://schemas/launch
+2026-02-26 22:53:26.229 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:53:26.670 [info] read schema from vscode: vscode://schemas/launch
+2026-02-26 22:53:39.095 [info] schema change detected vscode://schemas/launch
+2026-02-26 22:53:39.096 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:53:39.304 [info] read schema from vscode: vscode://schemas/launch
+2026-02-26 22:53:41.115 [info] schema change detected vscode://schemas/launch
+2026-02-26 22:53:41.117 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:53:41.312 [info] read schema from vscode: vscode://schemas/launch
+2026-02-26 22:55:38.003 [info] schema change detected vscode://schemas/launch
+2026-02-26 22:55:38.005 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:55:38.145 [info] read schema from vscode: vscode://schemas/launch
+2026-02-26 22:55:57.984 [info] schema change detected vscode://schemas/launch
+2026-02-26 22:55:57.986 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:55:58.184 [info] read schema from vscode: vscode://schemas/launch
+2026-02-26 22:56:01.781 [info] schema change detected vscode://schemas/launch
+2026-02-26 22:56:01.783 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:56:01.921 [info] read schema from vscode: vscode://schemas/launch
+2026-02-26 22:56:04.892 [info] schema change detected vscode://schemas/launch
+2026-02-26 22:56:04.895 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-26 22:56:05.054 [info] read schema from vscode: vscode://schemas/launch
+2026-02-27 00:07:51.726 [info] schema change detected vscode://schemas/launch
+2026-02-27 00:07:51.727 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-27 00:07:51.924 [info] read schema from vscode: vscode://schemas/launch
+2026-02-27 00:08:40.074 [info] schema change detected vscode://schemas/launch
+2026-02-27 00:08:40.075 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-27 00:08:40.393 [info] read schema from vscode: vscode://schemas/launch
+2026-02-27 00:10:16.897 [info] schema change detected vscode://schemas/launch
+2026-02-27 00:10:16.899 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-27 00:10:17.172 [info] read schema from vscode: vscode://schemas/launch
+2026-02-27 00:12:34.058 [info] schema change detected vscode://schemas/launch
+2026-02-27 00:12:34.060 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-27 00:12:34.338 [info] read schema from vscode: vscode://schemas/launch
+2026-02-27 00:12:35.275 [info] schema change detected vscode://schemas/launch
+2026-02-27 00:12:35.277 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-27 00:12:35.488 [info] read schema from vscode: vscode://schemas/launch
+2026-02-27 00:12:37.530 [info] schema change detected vscode://schemas/launch
+2026-02-27 00:12:37.531 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-27 00:12:37.769 [info] read schema from vscode: vscode://schemas/launch
+2026-02-27 04:43:29.627 [info] schema change detected vscode://schemas/launch
+2026-02-27 04:43:29.629 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-27 04:43:29.901 [info] read schema from vscode: vscode://schemas/launch
+2026-02-27 04:44:06.638 [info] schema change detected vscode://schemas/launch
+2026-02-27 04:44:06.640 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-27 04:44:06.924 [info] read schema from vscode: vscode://schemas/launch
+2026-02-27 04:44:15.001 [info] schema change detected vscode://schemas/launch
+2026-02-27 04:44:15.003 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-27 04:44:15.235 [info] read schema from vscode: vscode://schemas/launch
+2026-02-27 04:45:03.426 [info] schema change detected vscode://schemas/launch
+2026-02-27 04:45:03.427 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-27 04:45:03.655 [info] read schema from vscode: vscode://schemas/launch
+2026-02-27 04:46:39.852 [info] schema change detected vscode://schemas/launch
+2026-02-27 04:46:39.854 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-27 04:46:40.087 [info] read schema from vscode: vscode://schemas/launch
+2026-02-27 04:46:55.441 [info] schema change detected vscode://schemas/launch
+2026-02-27 04:46:55.442 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-27 04:46:55.685 [info] read schema from vscode: vscode://schemas/launch
+2026-02-27 04:47:41.160 [info] schema change detected vscode://schemas/launch
+2026-02-27 04:47:41.161 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-27 04:47:41.397 [info] read schema from vscode: vscode://schemas/launch
+2026-02-27 04:48:51.492 [info] schema change detected vscode://schemas/launch
+2026-02-27 04:48:51.494 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-27 04:48:51.647 [info] read schema from vscode: vscode://schemas/launch
+2026-02-27 04:49:48.003 [info] schema change detected vscode://schemas/launch
+2026-02-27 04:49:48.005 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-27 04:49:48.172 [info] read schema from vscode: vscode://schemas/launch
+2026-02-27 04:50:00.433 [info] schema change detected vscode://schemas/launch
+2026-02-27 04:50:00.435 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-27 04:50:00.611 [info] read schema from vscode: vscode://schemas/launch
+2026-02-27 04:50:14.450 [info] schema change detected vscode://schemas/launch
+2026-02-27 04:50:14.459 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-27 04:50:14.591 [info] read schema from vscode: vscode://schemas/launch
+2026-02-27 05:09:17.905 [info] schema change detected vscode://schemas/launch
+2026-02-27 05:09:17.906 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-27 05:09:18.196 [info] read schema from vscode: vscode://schemas/launch
+2026-02-27 05:09:24.893 [info] schema change detected vscode://schemas/launch
+2026-02-27 05:09:24.894 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-27 05:09:25.085 [info] read schema from vscode: vscode://schemas/launch
+2026-02-27 05:09:28.710 [info] schema change detected vscode://schemas/launch
+2026-02-27 05:09:28.712 [info] read schema from vscode: vscode://schemas/settings/folder
+2026-02-27 05:09:28.928 [info] read schema from vscode: vscode://schemas/launch

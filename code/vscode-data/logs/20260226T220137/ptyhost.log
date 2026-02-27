@@ -1,0 +1,19 @@
+2026-02-26 22:12:09.117 [info] Expanding terminal instance, old id 22dc56086958897e6a12dd6cff67f609-3 -> new id undefined
+2026-02-26 22:12:09.118 [info] Expanding terminal instance, old id 22dc56086958897e6a12dd6cff67f609-4 -> new id undefined
+2026-02-26 22:12:10.527 [info] Persistent process reconnection "3"
+2026-02-26 22:12:10.527 [info] Persistent process reconnection "4"
+2026-02-26 22:12:10.597 [info] Persistent process "3": Replaying 175 chars and 1 size events
+2026-02-26 22:12:10.628 [info] Persistent process "4": Replaying 7404 chars and 1 size events
+2026-02-26 22:13:07.849 [info] Persistent process "2": The reconnection grace time of 1m has expired, shutting down pid "2157"
+2026-02-26 22:16:15.142 [info] Expanding terminal instance, old id 22dc56086958897e6a12dd6cff67f609-3 -> new id undefined
+2026-02-26 22:16:15.142 [info] Expanding terminal instance, old id 22dc56086958897e6a12dd6cff67f609-4 -> new id undefined
+2026-02-26 22:16:16.606 [info] Persistent process reconnection "3"
+2026-02-26 22:16:16.607 [info] Persistent process reconnection "4"
+2026-02-26 22:16:16.736 [info] Persistent process "3": Replaying 175 chars and 1 size events
+2026-02-26 22:16:16.758 [info] Persistent process "4": Replaying 7404 chars and 1 size events
+2026-02-26 22:20:22.530 [info] Expanding terminal instance, old id 22dc56086958897e6a12dd6cff67f609-3 -> new id undefined
+2026-02-26 22:20:22.530 [info] Expanding terminal instance, old id 22dc56086958897e6a12dd6cff67f609-4 -> new id undefined
+2026-02-26 22:20:24.039 [info] Persistent process reconnection "3"
+2026-02-26 22:20:24.040 [info] Persistent process reconnection "4"
+2026-02-26 22:20:24.220 [info] Persistent process "3": Replaying 175 chars and 1 size events
+2026-02-26 22:20:24.282 [info] Persistent process "4": Replaying 3484 chars and 1 size events

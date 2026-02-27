@@ -1,0 +1,18 @@
+{
+    "python-envs.defaultEnvManager": "ms-python.python:conda",
+    "python-envs.defaultPackageManager": "ms-python.python:conda",
+    "python.defaultInterpreterPath": "/opt/conda/bin/python",
+    "jupyter.jupyterServerType": "local",
+    "python.terminal.activateEnvironment": true,
+    "files.watcherExclude": {
+        "**/.git/**": true,
+        "**/data/**": true,
+        "**/results/**": true,
+        "**/scratch/**": true
+    },
+    "search.exclude": {
+        "**/data/**": true,
+        "**/results/**": true,
+        "**/scratch/**": true
+    }
+}

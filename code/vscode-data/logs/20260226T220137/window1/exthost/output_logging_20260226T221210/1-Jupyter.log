@@ -1,0 +1,22 @@
+Visual Studio Code (1.109.5, undefined, desktop)
+Jupyter Extension Version: 2025.9.1.
+Python Extension Version: 2026.2.0.
+Python Environment Extension Version: 1.20.1.
+Pylance Extension Version: 2026.1.1.
+Platform: linux (x64).
+Home = /root
+Temp Storage folder ~/capsule/code/vscode-data/User/globalStorage/ms-toolsai.jupyter/version-2025.9.1
+Workspace folder ~/capsule
+22:12:54.317 [info] Starting Kernel (Python Path: /opt/conda/bin/python, Conda, 3.10.12) for '~/capsule/code/step_2_iterate_estimation_and_generate_results.ipynb' (disableUI=true)
+22:12:55.349 [info] Process Execution: /opt/conda/bin/python -m pip list
+22:12:55.356 [info] Process Execution: /opt/conda/bin/python -c "import ipykernel; print(ipykernel.__version__); print("5dc3a68c-e34e-4080-9c3e-2a532b2ccb4d"); print(ipykernel.__file__)"
+22:12:55.361 [info] Process Execution: /opt/conda/bin/python -m ipykernel_launcher --f=~/.local/share/jupyter/runtime/kernel-v3ae9e1cb41d2cee11968f6324c5873bb56541625d.json
+    > cwd: ~/capsule/code
+22:12:56.167 [info] Kernel successfully started
+22:12:56.185 [info] Process Execution: /opt/conda/bin/python ~/.vscode/extensions/ms-toolsai.jupyter-2025.9.1-linux-x64/pythonFiles/printJupyterDataDir.py
+22:12:56.806 [error] Widget Error: Failed to access CDN https://unpkg.com/ after 0 attempt(s), TypeError: Failed to fetch
+22:13:15.320 [error] Failed to refresh the list of interpreters
+22:15:22.356 [warn] Disposing old controller startUsingPythonInterpreter:'.jvsc74a57bd0d4d1e4263499bec80672ea0156c357c1ee493ec2b1c70f0acce89fc37c4a6abe./opt/conda/python./opt/conda/python.-m#ipykernel_launcher (Interactive)' for view = 'interactive'
+22:15:22.357 [warn] Deleting controller .jvsc74a57bd0d4d1e4263499bec80672ea0156c357c1ee493ec2b1c70f0acce89fc37c4a6abe./opt/conda/python./opt/conda/python.-m#ipykernel_launcher as it is associated with a connection that has been deleted startUsingPythonInterpreter:.jvsc74a57bd0d4d1e4263499bec80672ea0156c357c1ee493ec2b1c70f0acce89fc37c4a6abe./opt/conda/python./opt/conda/python.-m#ipykernel_launcher
+22:15:22.358 [warn] The following kernels use interpreters that are no longer valid or not recognized by Python extension, Kernels startUsingPythonInterpreter:'id=.jvsc74a57bd0d4d1e4263499bec80672ea0156c357c1ee493ec2b1c70f0acce89fc37c4a6abe./opt/conda/python./opt/conda/python.-m#ipykernel_launcher'(interpreterId='/opt/conda/bin/python') and valid interpreter ids include 
+22:16:14.006 [info] Dispose Kernel '~/capsule/code/step_2_iterate_estimation_and_generate_results.ipynb' associated with '~/capsule/code/step_2_iterate_estimation_and_generate_results.ipynb'

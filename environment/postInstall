@@ -1,8 +1,7 @@
-# REBUILD_STAMP: 2026-01-09_09:00:00
 #!/usr/bin/env bash
 set -eu
 
-echo "==== Installing Visual Studio Code (.deb) ===="
+echo "==== Minimal VS Code + Python/Jupyter bootstrap ===="
 
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
@@ -16,156 +15,66 @@ fetch() {
   elif command -v wget >/dev/null 2>&1; then
     wget -q "$URL" -O "$OUT"
   else
-    if command -v apt-get >/dev/null 2>&1; then
-      echo "curl/wget not found; installing curl..."
-      apt-get update
-      apt-get install -y curl
-      curl -fsSL "$URL" -o "$OUT"
-    else
-      echo "Error: neither curl nor wget is available, and no apt-get to install them."
-      exit 127
-    fi
+    apt-get update
+    apt-get install -y curl
+    curl -fsSL "$URL" -o "$OUT"
   fi
 }
 
-echo "Downloading VS Code .deb package..."
-fetch "https://code.visualstudio.com/sha/download?build=stable&os=linux-deb-x64" "vscode.deb"
-
-if ! command -v dpkg >/dev/null 2>&1; then
-  echo "Error: dpkg not found. This script supports Debian/Ubuntu images only."
-  exit 1
-fi
-
 echo "Installing VS Code..."
-# Try install; if deps missing, fix them and retry
-if ! dpkg -i vscode.deb 2>/dev/null; then
-  if command -v apt-get >/dev/null 2>&1; then
-    apt-get update
-    apt-get install -y -f
-    dpkg -i vscode.deb
-  else
-    echo "Error: apt-get not available to resolve dependencies."
-    exit 1
-  fi
-fi
+fetch "https://code.visualstudio.com/sha/download?build=stable&os=linux-deb-x64" "vscode.deb"
+dpkg -i vscode.deb || (apt-get update && apt-get install -y -f && dpkg -i vscode.deb)
 
-# Simple, build-safe verification (no GUI/sandbox)
-if command -v code >/dev/null 2>&1 && dpkg -s code >/dev/null 2>&1; then
-  echo "VS Code installed successfully:"
-  dpkg -s code | awk -F': ' '/^Version:/{print "Version:", $2}'
-else
-  echo "Error: VS Code installation failed."
-  exit 1
-fi
-
-# Ensure the folder exists
 mkdir -p /root/capsule/code/vscode-data
 
-# Upgrade pip and install Jupyter
-echo "Installing/Upgrading pip and Jupyter..."
-python3 -m pip install --upgrade pip
-python3 -m pip install jupyter
+echo "Installing Python core packages..."
+python3 -m pip install --upgrade pip setuptools wheel
+python3 -m pip install --no-cache-dir \
+  jupyter \
+  ipykernel \
+  numpy==1.26.4 \
+  pandas \
+  scipy \
+  matplotlib \
+  tifffile \
+  zarr \
+  opencv-python-headless==4.11.0.86
 
-# Install VS Code extensions for Python + Jupyter
-# (These will go into /root/.vscode-server/extensions or ~/.vscode/extensions)
+echo "Registering Python kernel..."
+python3 -m ipykernel install --sys-prefix --name python3 --display-name "Python 3"
+
 if command -v code >/dev/null 2>&1; then
-  echo "Installing VS Code Python and Jupyter extensions..."
+  echo "Installing VS Code extensions..."
   code --install-extension ms-python.python --force --user-data-dir=/root/capsule/code/vscode-data --no-sandbox
   code --install-extension ms-toolsai.jupyter --force --user-data-dir=/root/capsule/code/vscode-data --no-sandbox
-else
-  echo "Warning: 'code' command not found ? skipping VS Code extension installation."
 fi
 
-# Create a system-wide alias for all future shells
-# now you can simply run 'code' in Terminal
-echo "alias code='code \
-  --disable-gpu \
-  --force-device-scale-factor=1 \
-  --user-data-dir=/root/capsule/code/vscode-data \
-  --no-sandbox'" >> /etc/bash.bashrc
-#echo "alias code='code --disable---user-data-dir=/root/capsule/code/vscode-data --no-sandbox'" >> /etc/bash.bashrc
-#  --disable-software-rasterizer \
+echo "alias code='code --user-data-dir=/root/capsule/code/vscode-data --no-sandbox'" >> /etc/bash.bashrc
 
-# # installing tools for cellpose
-# apt-get update && apt-get install -y qtbase5-dev qt5-qmake qttools5-dev qttools5-dev-tools && rm -rf /var/lib/apt/lists/*
-# apt-get install -y qtwebengine5-dev libqt5svg5-dev libqt5websockets5-dev && rm -rf /var/lib/apt/lists/*
+echo "Writing workspace settings for fast kernel detection..."
+mkdir -p /root/capsule/.vscode
+cat > /root/capsule/.vscode/settings.json << 'EOF'
+{
+  "python.useEnvironmentsExtension": false,
+  "python.defaultInterpreterPath": "/opt/conda/bin/python",
+  "python.condaPath": "/opt/conda/bin/conda",
+  "jupyter.jupyterServerType": "local",
+  "python.terminal.activateEnvironment": true,
+  "files.watcherExclude": {
+    "**/.git/**": true,
+    "**/data/**": true,
+    "**/results/**": true,
+    "**/scratch/**": true
+  },
+  "search.exclude": {
+    "**/data/**": true,
+    "**/results/**": true,
+    "**/scratch/**": true
+  }
+}
+EOF
 
-# installing numlockx
-apt-get install -y numlockx && apt-get install -y gthumb && rm -rf /var/lib/apt/lists/*
-apt-get clean
-rm -rf /var/cache/apt/archives/*
+apt-get clean || true
+rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
-# installing necessary python packages
-python3 -m pip install --upgrade pip setuptools wheel
-
-#python3 -m pip install --no-cache-dir "boto3>=1.28" "botocore>=1.31"
-#python3 -m pip install --no-cache-dir aind-data-access-api
-
-#python3 -m pip install --no-cache-dir \
-#  boto3==1.28.57 \
-#  botocore==1.31.57 \
-#  aiobotocore==2.5.4 \
-#  s3fs==2023.10.0
-#python3 -m pip install --no-cache-dir \
-#  aind_session \
-#  aind-data-access-api \
-
-python3 -m pip install --no-cache-dir pandas seaborn matplotlib scipy tifffile zarr
-python3 -m pip install --no-cache-dir "numpy==1.26.4"
-python3 -m pip install --no-cache-dir "opencv-python-headless==4.11.0.86"
-# ?then install your heavier GUI stacks (napari/cellpose/etc.) separately if needed
-
-python3 -m pip install --no-cache-dir \
-  codeocean==0.14.0 \
-  aind_session \
-    pytest \
-    pillow \
-    pandas \
-    pyyaml \
-    aind-ophys-utils \
-    pymongo \
-    ipykernel \
-    scikit-learn \
-    suite2p \
-    pyqtgraph \
-    pyqt5 \
-    'napari[all]' \
-    # cellpose==4.0.7 \
-    'pydantic<2.11' \
-    plotly \
-    anywidget \
-    ipympl
-
-# installing git repos
-cd /
-git clone https://github.com/AllenNeuralDynamics/comb
-cd comb
-pip install -e .
-#git checkout 21b9cae9431f7f83e1973af6f1fc1ecd40fc765d
-git checkout for_gcamp_validation
-   
-cd /
-git clone https://github.com/AllenNeuralDynamics/lamf-analysis
-cd lamf-analysis
-pip install -e .   
-
-# Update Fiji
-FIJI_DIR=/Fiji.app
-FIJI="$FIJI_DIR/ImageJ-linux64"
-# Update all components that the Updater would select by default
-"$FIJI" --update update
-
-echo "Fiji/BDV ecosystem updated."
-
-# Set API_SECRET from CUSTOM_KEY if not already set
-if [[ -n "${CUSTOM_KEY:-}" && -z "${API_SECRET:-}" ]]; then
-  export API_SECRET="${CUSTOM_KEY}"
-fi
-
-
-
-
-
-
-
-
+echo "Bootstrap complete."

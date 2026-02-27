@@ -1,0 +1,56 @@
+2026-02-26 22:20:30.869 [info] Client: Pylance client (2026.1.1) started with python extension (2026.2.0)
+2026-02-26 22:20:31.524 [info] (7705): Server root directory: file:///root/.vscode/extensions/ms-python.vscode-pylance-2026.1.1/dist
+2026-02-26 22:20:31.525 [info] (7705): Pylance language server 2026.1.1 (pyright version 1.1.408, commit 138238b4) starting
+2026-02-26 22:20:31.535 [info] (7705): Starting service instance "capsule" for workspace "/root/capsule"
+2026-02-26 22:20:32.735 [info] (7705): Loading background bundle file:///root/.vscode/extensions/ms-python.vscode-pylance-2026.1.1/dist/copilot-background.bundle.js into file:///root/capsule...
+2026-02-26 22:20:32.815 [info] (7705): Starting Mcp server id:5106 ...
+2026-02-26 22:20:32.836 [info] (7705): FG(capsule): Setting environmentName for service "capsule": "3.10.12 (base conda)"
+2026-02-26 22:20:32.837 [info] (7705): FG(capsule): Setting pythonPath for service "capsule": "/opt/conda/bin/python"
+2026-02-26 22:20:32.837 [info] (7705): FG(capsule): No include entries specified; assuming /root/capsule
+2026-02-26 22:20:32.838 [info] (7705): FG(capsule): Auto-excluding **/node_modules
+2026-02-26 22:20:32.838 [info] (7705): FG(capsule): Auto-excluding **/__pycache__
+2026-02-26 22:20:32.838 [info] (7705): FG(capsule): Auto-excluding **/.*
+2026-02-26 22:20:32.867 [info] (7705): FG(capsule): Assuming Python version 3.10.12.final.0
+2026-02-26 22:20:32.975 [info] (7705): [Editable Installs] Starting dynamic pth file resolution for Python: /opt/conda/bin/python
+2026-02-26 22:20:32.984 [info] (7705): [Editable Installs] No sandbox available for Python /opt/conda/bin/python. Dynamic pth file resolution requires Python 3.13 or later.
+2026-02-26 22:20:32.986 [info] (7705): Starting service instance "<default>" for workspace ""
+2026-02-26 22:20:32.986 [info] (7705): Loading background bundle file:///root/.vscode/extensions/ms-python.vscode-pylance-2026.1.1/dist/copilot-background.bundle.js into ...
+2026-02-27 02:16:13.801 [info] (7705): FG(capsule): Found 2 source files
+2026-02-27 02:16:13.824 [info] (7705): PQ(capsule): Priority queue background worker(2) root directory: file:///root/.vscode/extensions/ms-python.vscode-pylance-2026.1.1/dist
+2026-02-27 02:16:13.824 [info] (7705): PQ(capsule): Priority queue background worker(2) started
+2026-02-27 02:16:13.824 [info] (7705): PQ(<default>): Priority queue background worker(4) root directory: file:///root/.vscode/extensions/ms-python.vscode-pylance-2026.1.1/dist
+2026-02-27 02:16:13.824 [info] (7705): PQ(<default>): Priority queue background worker(4) started
+2026-02-27 02:16:13.824 [info] (7705): Settings have not changed. Skipping update.
+2026-02-27 02:16:14.584 [info] (7705): FG(capsule): IDX(capsule): Indexer background runner(5) root directory: file:///root/.vscode/extensions/ms-python.vscode-pylance-2026.1.1/dist (index)
+2026-02-27 02:16:14.584 [info] (7705): FG(capsule): IDX(capsule): Indexing(5) started
+2026-02-27 02:16:15.335 [info] (7705): FG(<default>): Setting environmentName for service "<default>": "3.10.12 (base conda)"
+2026-02-27 02:16:15.335 [info] (7705): FG(<default>): Setting pythonPath for service "<default>": "/opt/conda/bin/python"
+2026-02-27 02:16:15.335 [info] (7705): FG(<default>): No include entries specified; assuming /<default workspace root>
+2026-02-27 02:16:15.336 [info] (7705): FG(<default>): Auto-excluding **/node_modules
+2026-02-27 02:16:15.336 [info] (7705): FG(<default>): Auto-excluding **/__pycache__
+2026-02-27 02:16:15.336 [info] (7705): FG(<default>): Auto-excluding **/.*
+2026-02-27 02:16:15.366 [info] (7705): FG(<default>): Assuming Python version 3.10.12.final.0
+2026-02-27 02:16:24.220 [info] (7705): 
+*Warning*: Pylance failed to parse docstring at offset 3525
+
+ Outputting literal text instead.
+2026-02-27 02:16:24.232 [info] (7705): 
+*Warning*: Pylance failed to parse docstring at offset 3525
+
+ Outputting literal text instead.
+2026-02-27 02:16:24.441 [error] (7705): FG(<default>): File or directory "/<default workspace root>" does not exist.
+2026-02-27 02:16:24.441 [info] (7705): FG(<default>): No source files found.
+2026-02-27 02:16:24.461 [info] (7705): FG(capsule): IDX(capsule): scanned(5) 445 files over 1 exec env
+2026-02-27 02:16:24.732 [error] Request textDocument/codeAction failed.
+  Message: Request textDocument/codeAction failed with message: request cancelled
+  Code: -32603 
+2026-02-27 02:16:26.729 [error] Request textDocument/definition failed.
+  Message: Request textDocument/definition failed with message: Debug Failure. False expression: Symbol resolution stack mismatch: expected symbol 529, got 8408
+  Code: -32603 
+2026-02-27 02:16:26.730 [error] Request textDocument/hover failed.
+  Message: Request textDocument/hover failed with message: Debug Failure. False expression: Symbol resolution stack mismatch: expected symbol 8408, got 529
+  Code: -32603 
+2026-02-27 02:16:30.133 [info] (7705): FG(capsule): IDX(capsule): Long operation: index execution environment file:///root/capsule (5466ms)
+2026-02-27 02:16:30.183 [info] (7705): FG(capsule): IDX(capsule): Long operation: index packages file:///root/capsule (5561ms)
+2026-02-27 02:16:30.184 [info] (7705): FG(capsule): IDX(capsule): indexed(5) 445 files over 1 exec env
+2026-02-27 02:16:30.346 [info] (7705): FG(capsule): IDX(capsule): Indexing finished(5).

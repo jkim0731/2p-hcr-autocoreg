@@ -1,0 +1,22 @@
+{
+    "python-envs.defaultEnvManager": "ms-python.python:venv",
+    "python-envs.defaultPackageManager": "ms-python.python:pip",
+    "python-envs.workspaceSearchPaths": [],
+    "python.useEnvironmentsExtension": false,
+    "python.defaultInterpreterPath": "/opt/conda/bin/python",
+    "python.condaPath": "/opt/conda/bin/conda",
+    "jupyter.jupyterServerType": "local",
+    "jupyter.kernels.excludePythonEnvironments": [],
+    "python.terminal.activateEnvironment": true,
+    "files.watcherExclude": {
+        "**/.git/**": true,
+        "**/data/**": true,
+        "**/results/**": true,
+        "**/scratch/**": true
+    },
+    "search.exclude": {
+        "**/data/**": true,
+        "**/results/**": true,
+        "**/scratch/**": true
+    }
+}

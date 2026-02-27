@@ -1,0 +1,82 @@
+2026-02-26 21:36:41.601 [info] Started local extension host with pid 1239.
+2026-02-26 21:36:41.752 [info] MCP Registry configured: https://api.mcp.github.com
+2026-02-26 21:36:42.262 [info] Settings Sync: Account status changed from uninitialized to unavailable
+2026-02-26 21:36:44.768 [info] [perf] Render performance baseline is 29ms
+2026-02-26 21:36:52.769 [info] Started local extension host with pid 1430.
+2026-02-26 21:36:53.597 [info] MCP Registry configured: https://api.mcp.github.com
+2026-02-26 21:36:53.875 [info] Settings Sync: Account status changed from uninitialized to unavailable
+2026-02-26 21:36:55.465 [info] [perf] Render performance baseline is 29ms
+2026-02-26 21:37:26.019 [error] Cannot read properties of undefined (reading 'notebookType'): TypeError: Cannot read properties of undefined (reading 'notebookType')
+    at a2.str (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:1938:36831)
+    at glt.getSourceActions (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:1938:40758)
+    at xne.D (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:1416:17159)
+    at C.r (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:1416:16184)
+    at new Promise (<anonymous>)
+    at xne.C (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:1416:15657)
+    at xne.C (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:1416:16704)
+    at async xne.showQuickPick (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:1416:11294)
+    at async at.run (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:35:29067)
+    at async dl.u (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:35:29397)
+    at async dl.run (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:35:29321)
+2026-02-26 21:38:13.493 [error] [Extension Host] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+2026-02-26 21:38:14.495 [error] An unknown error occurred. Please consult the log for more details.
+2026-02-26 21:39:10.649 [error] An unknown error occurred. Please consult the log for more details.
+2026-02-26 21:39:21.486 [error] [Extension Host] (node:1430) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `exe --trace-warnings ...` to show where the warning was created)
+2026-02-26 21:40:47.579 [error] Assertion Failed: Argument is `undefined` or `null`.: Error: Assertion Failed: Argument is `undefined` or `null`.
+    at nE (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:10:255)
+    at ai (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:10:1233)
+    at N8.fc (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:3942:13414)
+    at N8.layout (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:3942:26772)
+    at vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:712:59008
+    at Net.W (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:712:59124)
+    at Net.layout (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:712:58994)
+    at $F.layout (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:824:31385)
+    at $F.relayout (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:824:31505)
+    at cde.value (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:824:8091)
+    at L.C (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:29:2349)
+    at L.fire (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:29:2568)
+    at cde.value (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:716:24873)
+    at L.C (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:29:2349)
+    at L.fire (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:29:2568)
+    at Hc.hide (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:716:20246)
+    at Hc.update (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:716:20573)
+    at Jet.C (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:824:8233)
+    at Jet.openEditor (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:824:8158)
+    at $F.Lb (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:824:23580)
+    at $F.Kb (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:824:23127)
+    at $F.openEditor (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:824:22020)
+    at tit.openEditor (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:1329:33426)
+2026-02-26 21:41:59.076 [error] An unknown error occurred. Please consult the log for more details.
+2026-02-26 21:42:00.554 [error] Assertion Failed: Argument is `undefined` or `null`.: Error: Assertion Failed: Argument is `undefined` or `null`.
+    at nE (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:10:255)
+    at ai (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:10:1233)
+    at N8.fc (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:3942:13414)
+    at N8.layout (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:3942:26772)
+    at vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:712:59008
+    at Net.W (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:712:59124)
+    at Net.layout (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:712:58994)
+    at $F.layout (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:824:31385)
+    at $F.relayout (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:824:31505)
+    at cde.value (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:824:8091)
+    at L.C (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:29:2349)
+    at L.fire (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:29:2568)
+    at cde.value (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:716:24873)
+    at L.C (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:29:2349)
+    at L.fire (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:29:2568)
+    at Hc.hide (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:716:20246)
+    at Hc.update (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:716:20573)
+    at Jet.C (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:824:8233)
+    at Jet.openEditor (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:824:8158)
+    at $F.Lb (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:824:23580)
+    at $F.Kb (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:824:23127)
+    at $F.openEditor (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:824:22020)
+    at tit.openEditor (vscode-file://vscode-app/usr/share/code/resources/app/out/vs/workbench/workbench.desktop.main.js:1329:33426)
+2026-02-26 21:42:05.057 [error] [LanguageModelToolsService#invokeTool] Error from tool get_python_environment_details with parameters {"resourcePath":"/root/capsule"}:
+No environment found for the provided resource path: /root/capsule: Error: No environment found for the provided resource path: /root/capsule
+	at d.invokeImpl (/root/.vscode/extensions/ms-python.python-2026.2.0-linux-x64/out/client/extension.js:2:105078)
+	at async d.invoke (/root/.vscode/extensions/ms-python.python-2026.2.0-linux-x64/out/client/extension.js:2:96695)
+	at async zQ.$invokeTool (file:///usr/share/code/resources/app/out/vs/workbench/api/node/extensionHostProcess.js:195:3458)

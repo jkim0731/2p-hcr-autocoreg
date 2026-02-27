@@ -1,0 +1,1216 @@
+2026-02-26 22:01:51.006 [info] Python-envs extension version: 1.20.1
+2026-02-26 22:01:51.006 [info] 
+=== Python Envs Configuration Levels ===
+2026-02-26 22:01:51.006 [info] {
+  "section": "Python Envs Configuration Levels",
+  "defaultEnvManager": {
+    "workspaceFolderValue": "undefined",
+    "workspaceValue": "undefined",
+    "globalValue": "undefined",
+    "defaultValue": "ms-python.python:venv"
+  },
+  "defaultPackageManager": {
+    "workspaceFolderValue": "undefined",
+    "workspaceValue": "undefined",
+    "globalValue": "undefined",
+    "defaultValue": "ms-python.python:pip"
+  }
+}
+2026-02-26 22:01:51.006 [info] [pet] Starting Python Locator /root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/python-env-tools/bin/pet server
+2026-02-26 22:01:51.006 [info] Using conda from persistent state: /opt/conda/bin/conda
+2026-02-26 22:01:51.006 [info] Conda Sourcing Status:
+├─ Conda Path: /opt/conda/bin/conda
+├─ Conda Folder: /opt/conda
+├─ Active on Launch: true
+└─ No Shell-specific Sourcing Scripts Found
+2026-02-26 22:01:51.009 [info] [pet] configure: Sending configuration update: {"workspaceDirectories":["/root/capsule"],"environmentDirectories":["/root/capsule/**/.venv"],"pipenvExecutable":"pipenv","poetryExecutable":"poetry","cacheDirectory":"/root/capsule/code/vscode-data/User/globalStorage/ms-python.vscode-python-envs/pythonLocator"}
+2026-02-26 22:01:51.060 [info] Refreshing Conda Environments
+2026-02-26 22:01:51.060 [info] Refreshing conda environments (hardRefresh=true)
+2026-02-26 22:02:03.033 [info] Refreshing conda environments (hardRefresh=false)
+2026-02-26 22:02:21.010 [warning] [pet] Configure request timed out, killing hung process for restart
+2026-02-26 22:02:21.011 [info] [pet] Killing hung/crashed PET process
+2026-02-26 22:02:21.011 [error] [pet] configure: Configuration error Request 'configure' timed out after 30000ms
+2026-02-26 22:02:21.011 [warning] [pet] Request timed out, killing hung process for restart
+2026-02-26 22:02:21.011 [error] [pet] Error refreshing Request 'configure' timed out after 30000ms
+2026-02-26 22:02:21.012 [warning] [pet] Restarting Python Environment Tools (attempt 1/3, waiting 1000ms)
+2026-02-26 22:02:21.012 [info] Pipenv not found, turning off pipenv features. If you have pipenv installed in a non-standard location, set the "python.pipenvPath" setting. [Error: Request 'configure' timed out after 30000ms
+	at Timeout.<anonymous> (/root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/dist/extension.js:2:534062)
+	at listOnTimeout (node:internal/timers:588:17)
+	at process.processTimers (node:internal/timers:523:7)]
+2026-02-26 22:02:21.013 [error] [pet] Python Environment Tools exited unexpectedly with code null, signal SIGTERM
+2026-02-26 22:02:22.016 [info] [pet] Starting Python Locator /root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/python-env-tools/bin/pet server
+2026-02-26 22:02:22.016 [info] [pet] Python Environment Tools restarted successfully
+2026-02-26 22:02:22.017 [info] [pet] configure: Sending configuration update: {"workspaceDirectories":["/root/capsule"],"environmentDirectories":["/root/capsule/**/.venv"],"pipenvExecutable":"pipenv","poetryExecutable":"poetry","cacheDirectory":"/root/capsule/code/vscode-data/User/globalStorage/ms-python.vscode-python-envs/pythonLocator"}
+2026-02-26 22:02:52.020 [warning] [pet] Configure request timed out, killing hung process for restart
+2026-02-26 22:02:52.020 [info] [pet] Killing hung/crashed PET process
+2026-02-26 22:02:52.020 [error] [pet] configure: Configuration error Request 'configure' timed out after 30000ms
+2026-02-26 22:02:52.020 [warning] [pet] Request timed out, killing hung process for restart
+2026-02-26 22:02:52.020 [error] [pet] Error refreshing Request 'configure' timed out after 30000ms
+2026-02-26 22:02:52.020 [warning] [pet] Restarting Python Environment Tools (attempt 2/3, waiting 2000ms)
+2026-02-26 22:02:52.020 [info] Poetry not found, turning off poetry features. [Error: Request 'configure' timed out after 30000ms
+	at Timeout.<anonymous> (/root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/dist/extension.js:2:534062)
+	at listOnTimeout (node:internal/timers:588:17)
+	at process.processTimers (node:internal/timers:523:7)]
+2026-02-26 22:02:52.021 [error] [pet] Python Environment Tools exited unexpectedly with code null, signal SIGTERM
+2026-02-26 22:02:54.027 [info] [pet] Starting Python Locator /root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/python-env-tools/bin/pet server
+2026-02-26 22:02:54.027 [info] [pet] Python Environment Tools restarted successfully
+2026-02-26 22:02:54.027 [info] [pet] configure: Sending configuration update: {"workspaceDirectories":["/root/capsule"],"environmentDirectories":["/root/capsule/**/.venv"],"pipenvExecutable":"pipenv","poetryExecutable":"poetry","cacheDirectory":"/root/capsule/code/vscode-data/User/globalStorage/ms-python.vscode-python-envs/pythonLocator"}
+2026-02-26 22:03:24.030 [warning] [pet] Configure request timed out, killing hung process for restart
+2026-02-26 22:03:24.030 [info] [pet] Killing hung/crashed PET process
+2026-02-26 22:03:24.030 [error] [pet] configure: Configuration error Request 'configure' timed out after 30000ms
+2026-02-26 22:03:24.030 [warning] [pet] Request timed out, killing hung process for restart
+2026-02-26 22:03:24.030 [error] [pet] Error refreshing Request 'configure' timed out after 30000ms
+2026-02-26 22:03:24.030 [warning] [pet] Restarting Python Environment Tools (attempt 3/3, waiting 4000ms)
+2026-02-26 22:03:24.031 [info] Pyenv not found, turning off pyenv features. [Error: Request 'configure' timed out after 30000ms
+	at Timeout.<anonymous> (/root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/dist/extension.js:2:534062)
+	at listOnTimeout (node:internal/timers:588:17)
+	at process.processTimers (node:internal/timers:523:7)]
+2026-02-26 22:03:24.032 [info] [interpreterSelection] Applying initial environment selection for 1 workspace folder(s)
+2026-02-26 22:03:24.033 [error] [pet] Python Environment Tools exited unexpectedly with code null, signal SIGTERM
+2026-02-26 22:03:30.467 [info] Python-envs extension version: 1.20.1
+2026-02-26 22:03:30.467 [info] 
+=== Python Envs Configuration Levels ===
+2026-02-26 22:03:30.467 [info] {
+  "section": "Python Envs Configuration Levels",
+  "defaultEnvManager": {
+    "workspaceFolderValue": "undefined",
+    "workspaceValue": "undefined",
+    "globalValue": "undefined",
+    "defaultValue": "ms-python.python:venv"
+  },
+  "defaultPackageManager": {
+    "workspaceFolderValue": "undefined",
+    "workspaceValue": "undefined",
+    "globalValue": "undefined",
+    "defaultValue": "ms-python.python:pip"
+  }
+}
+2026-02-26 22:03:30.467 [info] [pet] Starting Python Locator /root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/python-env-tools/bin/pet server
+2026-02-26 22:03:30.467 [info] Using conda from persistent state: /opt/conda/bin/conda
+2026-02-26 22:03:30.467 [info] Conda Sourcing Status:
+├─ Conda Path: /opt/conda/bin/conda
+├─ Conda Folder: /opt/conda
+├─ Active on Launch: true
+└─ No Shell-specific Sourcing Scripts Found
+2026-02-26 22:03:30.523 [info] [pet] configure: Sending configuration update: {"workspaceDirectories":["/root/capsule"],"environmentDirectories":["/root/capsule/**/.venv"],"pipenvExecutable":"pipenv","poetryExecutable":"poetry","cacheDirectory":"/root/capsule/code/vscode-data/User/globalStorage/ms-python.vscode-python-envs/pythonLocator"}
+2026-02-26 22:03:30.557 [info] Refreshing Conda Environments
+2026-02-26 22:03:30.557 [info] Refreshing conda environments (hardRefresh=true)
+2026-02-26 22:04:00.523 [warning] [pet] Configure request timed out, killing hung process for restart
+2026-02-26 22:04:00.523 [info] [pet] Killing hung/crashed PET process
+2026-02-26 22:04:00.524 [error] [pet] configure: Configuration error Request 'configure' timed out after 30000ms
+2026-02-26 22:04:00.524 [warning] [pet] Request timed out, killing hung process for restart
+2026-02-26 22:04:00.524 [error] [pet] Error refreshing Request 'configure' timed out after 30000ms
+2026-02-26 22:04:00.525 [warning] [pet] Restarting Python Environment Tools (attempt 1/3, waiting 1000ms)
+2026-02-26 22:04:00.528 [error] [pet] Python Environment Tools exited unexpectedly with code null, signal SIGTERM
+2026-02-26 22:04:01.533 [info] [pet] Starting Python Locator /root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/python-env-tools/bin/pet server
+2026-02-26 22:04:01.533 [info] [pet] Python Environment Tools restarted successfully
+2026-02-26 22:04:01.535 [info] [pet] configure: Sending configuration update: {"workspaceDirectories":["/root/capsule"],"environmentDirectories":["/root/capsule/**/.venv"],"pipenvExecutable":"pipenv","poetryExecutable":"poetry","cacheDirectory":"/root/capsule/code/vscode-data/User/globalStorage/ms-python.vscode-python-envs/pythonLocator"}
+2026-02-26 22:04:31.535 [warning] [pet] Configure request timed out, killing hung process for restart
+2026-02-26 22:04:31.535 [info] [pet] Killing hung/crashed PET process
+2026-02-26 22:04:31.535 [error] [pet] configure: Configuration error Request 'configure' timed out after 30000ms
+2026-02-26 22:04:31.535 [warning] [pet] Request timed out, killing hung process for restart
+2026-02-26 22:04:31.535 [error] [pet] Error refreshing Request 'configure' timed out after 30000ms
+2026-02-26 22:04:31.536 [warning] [pet] Restarting Python Environment Tools (attempt 2/3, waiting 2000ms)
+2026-02-26 22:04:31.538 [error] [pet] Python Environment Tools exited unexpectedly with code null, signal SIGTERM
+2026-02-26 22:04:33.543 [info] [pet] Starting Python Locator /root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/python-env-tools/bin/pet server
+2026-02-26 22:04:33.543 [info] [pet] Python Environment Tools restarted successfully
+2026-02-26 22:04:33.543 [info] [pet] configure: Sending configuration update: {"workspaceDirectories":["/root/capsule"],"environmentDirectories":["/root/capsule/**/.venv"],"pipenvExecutable":"pipenv","poetryExecutable":"poetry","cacheDirectory":"/root/capsule/code/vscode-data/User/globalStorage/ms-python.vscode-python-envs/pythonLocator"}
+2026-02-26 22:04:43.004 [info] Refreshing Conda Environments
+2026-02-26 22:04:43.004 [info] Refreshing conda environments (hardRefresh=true)
+2026-02-26 22:05:03.547 [warning] [pet] Configure request timed out, killing hung process for restart
+2026-02-26 22:05:03.547 [info] [pet] Killing hung/crashed PET process
+2026-02-26 22:05:03.547 [error] [pet] configure: Configuration error Request 'configure' timed out after 30000ms
+2026-02-26 22:05:03.547 [warning] [pet] Request timed out, killing hung process for restart
+2026-02-26 22:05:03.547 [error] [pet] Error refreshing Request 'configure' timed out after 30000ms
+2026-02-26 22:05:03.548 [warning] [pet] Restarting Python Environment Tools (attempt 3/3, waiting 4000ms)
+2026-02-26 22:05:03.548 [error] [pet] Python Environment Tools exited unexpectedly with code null, signal SIGTERM
+2026-02-26 22:05:07.553 [info] [pet] Starting Python Locator /root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/python-env-tools/bin/pet server
+2026-02-26 22:05:07.553 [info] [pet] Python Environment Tools restarted successfully
+2026-02-26 22:05:07.554 [info] [pet] configure: Sending configuration update: {"workspaceDirectories":["/root/capsule"],"environmentDirectories":["/root/capsule/**/.venv"],"pipenvExecutable":"pipenv","poetryExecutable":"poetry","cacheDirectory":"/root/capsule/code/vscode-data/User/globalStorage/ms-python.vscode-python-envs/pythonLocator"}
+2026-02-26 22:05:10.729 [error] [pet] [2m   3.174482343s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Python in "/opt/conda", trying slower approach
+
+2026-02-26 22:05:10.731 [error] [pet] [2m   3.177451111s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Conda in "/opt/conda", trying slower approach
+
+2026-02-26 22:05:10.762 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:05:10.765 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:05:10.765 [info] Refreshing conda environments (hardRefresh=false)
+2026-02-26 22:05:37.554 [warning] [pet] Configure request timed out, killing hung process for restart
+2026-02-26 22:05:37.554 [info] [pet] Killing hung/crashed PET process
+2026-02-26 22:05:37.554 [error] [pet] configure: Configuration error Request 'configure' timed out after 30000ms
+2026-02-26 22:05:37.554 [warning] [pet] Request timed out, killing hung process for restart
+2026-02-26 22:05:37.554 [error] [pet] Error refreshing Request 'configure' timed out after 30000ms
+2026-02-26 22:05:37.554 [warning] [pet] Restarting Python Environment Tools (attempt 1/3, waiting 1000ms)
+2026-02-26 22:05:37.554 [error] Failed to refresh native finder for conda environments [Error: Request 'configure' timed out after 30000ms
+	at Timeout.<anonymous> (/root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/dist/extension.js:2:534062)
+	at listOnTimeout (node:internal/timers:588:17)
+	at process.processTimers (node:internal/timers:523:7)]
+2026-02-26 22:05:37.554 [error] Failed to refresh native finder: Request 'configure' timed out after 30000ms
+2026-02-26 22:05:37.555 [error] [pet] Python Environment Tools exited unexpectedly with code null, signal SIGTERM
+2026-02-26 22:05:38.564 [info] [pet] Starting Python Locator /root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/python-env-tools/bin/pet server
+2026-02-26 22:05:38.564 [info] [pet] Python Environment Tools restarted successfully
+2026-02-26 22:05:38.565 [info] [pet] configure: Sending configuration update: {"workspaceDirectories":["/root/capsule"],"environmentDirectories":["/root/capsule/**/.venv"],"pipenvExecutable":"pipenv","poetryExecutable":"poetry","cacheDirectory":"/root/capsule/code/vscode-data/User/globalStorage/ms-python.vscode-python-envs/pythonLocator"}
+2026-02-26 22:05:45.070 [error] [pet] [2m   6.505992349s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Python in "/opt/conda", trying slower approach
+
+2026-02-26 22:05:45.078 [error] [pet] [2m   6.510699014s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Conda in "/opt/conda", trying slower approach
+
+2026-02-26 22:05:45.109 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:05:45.110 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:05:49.993 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:05:49.994 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:05:53.573 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:05:53.575 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:06:08.565 [warning] [pet] Configure request timed out, killing hung process for restart
+2026-02-26 22:06:08.565 [info] [pet] Killing hung/crashed PET process
+2026-02-26 22:06:08.565 [error] [pet] configure: Configuration error Request 'configure' timed out after 30000ms
+2026-02-26 22:06:08.565 [warning] [pet] Request timed out, killing hung process for restart
+2026-02-26 22:06:08.565 [error] [pet] Error refreshing Request 'configure' timed out after 30000ms
+2026-02-26 22:06:08.566 [warning] [pet] Restarting Python Environment Tools (attempt 1/3, waiting 1000ms)
+2026-02-26 22:06:08.566 [info] Pipenv not found, turning off pipenv features. If you have pipenv installed in a non-standard location, set the "python.pipenvPath" setting. [Error: Request 'configure' timed out after 30000ms
+	at Timeout.<anonymous> (/root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/dist/extension.js:2:534062)
+	at listOnTimeout (node:internal/timers:588:17)
+	at process.processTimers (node:internal/timers:523:7)]
+2026-02-26 22:06:08.566 [error] [pet] Python Environment Tools exited unexpectedly with code null, signal SIGTERM
+2026-02-26 22:06:09.573 [info] [pet] Starting Python Locator /root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/python-env-tools/bin/pet server
+2026-02-26 22:06:09.573 [info] [pet] Python Environment Tools restarted successfully
+2026-02-26 22:06:09.574 [info] [pet] configure: Sending configuration update: {"workspaceDirectories":["/root/capsule"],"environmentDirectories":["/root/capsule/**/.venv"],"pipenvExecutable":"pipenv","poetryExecutable":"poetry","cacheDirectory":"/root/capsule/code/vscode-data/User/globalStorage/ms-python.vscode-python-envs/pythonLocator"}
+2026-02-26 22:06:14.047 [error] [pet] [2m   4.474245047s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Python in "/opt/conda", trying slower approach
+
+2026-02-26 22:06:14.050 [error] [pet] [2m   4.477308763s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Conda in "/opt/conda", trying slower approach
+
+2026-02-26 22:06:14.086 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:06:14.104 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:06:39.575 [warning] [pet] Configure request timed out, killing hung process for restart
+2026-02-26 22:06:39.575 [info] [pet] Killing hung/crashed PET process
+2026-02-26 22:06:39.575 [error] [pet] configure: Configuration error Request 'configure' timed out after 30000ms
+2026-02-26 22:06:39.575 [warning] [pet] Request timed out, killing hung process for restart
+2026-02-26 22:06:39.575 [error] [pet] Error refreshing Request 'configure' timed out after 30000ms
+2026-02-26 22:06:39.575 [warning] [pet] Restarting Python Environment Tools (attempt 1/3, waiting 1000ms)
+2026-02-26 22:06:39.575 [info] Pyenv not found, turning off pyenv features. [Error: Request 'configure' timed out after 30000ms
+	at Timeout.<anonymous> (/root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/dist/extension.js:2:534062)
+	at listOnTimeout (node:internal/timers:588:17)
+	at process.processTimers (node:internal/timers:523:7)]
+2026-02-26 22:06:39.576 [error] [pet] Python Environment Tools exited unexpectedly with code null, signal SIGTERM
+2026-02-26 22:06:40.583 [info] [pet] Starting Python Locator /root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/python-env-tools/bin/pet server
+2026-02-26 22:06:40.583 [info] [pet] Python Environment Tools restarted successfully
+2026-02-26 22:06:40.584 [info] [pet] configure: Sending configuration update: {"workspaceDirectories":["/root/capsule"],"environmentDirectories":["/root/capsule/**/.venv"],"pipenvExecutable":"pipenv","poetryExecutable":"poetry","cacheDirectory":"/root/capsule/code/vscode-data/User/globalStorage/ms-python.vscode-python-envs/pythonLocator"}
+2026-02-26 22:06:52.367 [error] [pet] [2m  11.783662376s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Python in "/opt/conda", trying slower approach
+
+2026-02-26 22:06:52.370 [error] [pet] [2m  11.786490759s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Conda in "/opt/conda", trying slower approach
+
+2026-02-26 22:06:52.403 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:06:52.404 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:06:55.319 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:06:55.321 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:07:00.518 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:07:00.519 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:07:05.425 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:07:05.426 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:07:07.172 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:07:07.173 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:07:10.584 [warning] [pet] Configure request timed out, killing hung process for restart
+2026-02-26 22:07:10.584 [info] [pet] Killing hung/crashed PET process
+2026-02-26 22:07:10.584 [error] [pet] configure: Configuration error Request 'configure' timed out after 30000ms
+2026-02-26 22:07:10.584 [warning] [pet] Request timed out, killing hung process for restart
+2026-02-26 22:07:10.584 [error] [pet] Error refreshing Request 'configure' timed out after 30000ms
+2026-02-26 22:07:10.584 [warning] [pet] Restarting Python Environment Tools (attempt 1/3, waiting 1000ms)
+2026-02-26 22:07:10.584 [info] Poetry not found, turning off poetry features. [Error: Request 'configure' timed out after 30000ms
+	at Timeout.<anonymous> (/root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/dist/extension.js:2:534062)
+	at listOnTimeout (node:internal/timers:588:17)
+	at process.processTimers (node:internal/timers:523:7)]
+2026-02-26 22:07:10.585 [info] [interpreterSelection] Applying initial environment selection for 1 workspace folder(s)
+2026-02-26 22:07:10.586 [error] [pet] Python Environment Tools exited unexpectedly with code null, signal SIGTERM
+2026-02-26 22:07:11.593 [info] [pet] Starting Python Locator /root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/python-env-tools/bin/pet server
+2026-02-26 22:07:11.593 [info] [pet] Python Environment Tools restarted successfully
+2026-02-26 22:07:11.593 [info] [pet] configure: Sending configuration update: {"workspaceDirectories":["/root/capsule"],"environmentDirectories":["/root/capsule/**/.venv"],"pipenvExecutable":"pipenv","poetryExecutable":"poetry","cacheDirectory":"/root/capsule/code/vscode-data/User/globalStorage/ms-python.vscode-python-envs/pythonLocator"}
+2026-02-26 22:07:20.218 [error] [pet] [2m   8.625631204s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Python in "/opt/conda", trying slower approach
+
+2026-02-26 22:07:20.222 [error] [pet] [2m   8.628911338s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Conda in "/opt/conda", trying slower approach
+
+2026-02-26 22:07:20.258 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:07:20.260 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:07:41.594 [warning] [pet] Configure request timed out, killing hung process for restart
+2026-02-26 22:07:41.595 [info] [pet] Killing hung/crashed PET process
+2026-02-26 22:07:41.595 [error] [pet] configure: Configuration error Request 'configure' timed out after 30000ms
+2026-02-26 22:07:41.595 [warning] [pet] Request timed out, killing hung process for restart
+2026-02-26 22:07:41.595 [error] [pet] Error refreshing Request 'configure' timed out after 30000ms
+2026-02-26 22:07:41.595 [warning] [pet] Restarting Python Environment Tools (attempt 1/3, waiting 1000ms)
+2026-02-26 22:07:41.596 [error] [pet] Python Environment Tools exited unexpectedly with code null, signal SIGTERM
+2026-02-26 22:07:42.603 [info] [pet] Starting Python Locator /root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/python-env-tools/bin/pet server
+2026-02-26 22:07:42.603 [info] [pet] Python Environment Tools restarted successfully
+2026-02-26 22:07:42.604 [info] [pet] configure: Sending configuration update: {"workspaceDirectories":["/root/capsule"],"environmentDirectories":["/root/capsule/**/.venv"],"pipenvExecutable":"pipenv","poetryExecutable":"poetry","cacheDirectory":"/root/capsule/code/vscode-data/User/globalStorage/ms-python.vscode-python-envs/pythonLocator"}
+2026-02-26 22:07:55.765 [error] [pet] [2m  13.161514794s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Python in "/opt/conda", trying slower approach
+
+2026-02-26 22:07:55.768 [error] [pet] [2m  13.164703808s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Conda in "/opt/conda", trying slower approach
+
+2026-02-26 22:07:55.802 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:07:55.803 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:07:58.000 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:07:58.002 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:07:59.684 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:07:59.686 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:08:12.605 [warning] [pet] Configure request timed out, killing hung process for restart
+2026-02-26 22:08:12.605 [info] [pet] Killing hung/crashed PET process
+2026-02-26 22:08:12.606 [error] [pet] configure: Configuration error Request 'configure' timed out after 30000ms
+2026-02-26 22:08:12.606 [warning] [pet] Request timed out, killing hung process for restart
+2026-02-26 22:08:12.606 [error] [pet] Error refreshing Request 'configure' timed out after 30000ms
+2026-02-26 22:08:12.606 [warning] [pet] Restarting Python Environment Tools (attempt 1/3, waiting 1000ms)
+2026-02-26 22:08:12.607 [error] [pet] Python Environment Tools exited unexpectedly with code null, signal SIGTERM
+2026-02-26 22:08:13.613 [info] [pet] Starting Python Locator /root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/python-env-tools/bin/pet server
+2026-02-26 22:08:13.613 [info] [pet] Python Environment Tools restarted successfully
+2026-02-26 22:08:13.614 [info] [pet] configure: Sending configuration update: {"workspaceDirectories":["/root/capsule"],"environmentDirectories":["/root/capsule/**/.venv"],"pipenvExecutable":"pipenv","poetryExecutable":"poetry","cacheDirectory":"/root/capsule/code/vscode-data/User/globalStorage/ms-python.vscode-python-envs/pythonLocator"}
+2026-02-26 22:08:43.615 [warning] [pet] Configure request timed out, killing hung process for restart
+2026-02-26 22:08:43.615 [info] [pet] Killing hung/crashed PET process
+2026-02-26 22:08:43.615 [error] [pet] configure: Configuration error Request 'configure' timed out after 30000ms
+2026-02-26 22:08:43.615 [warning] [pet] Request timed out, killing hung process for restart
+2026-02-26 22:08:43.615 [error] [pet] Error refreshing Request 'configure' timed out after 30000ms
+2026-02-26 22:08:43.616 [warning] [pet] Restarting Python Environment Tools (attempt 2/3, waiting 2000ms)
+2026-02-26 22:08:43.616 [error] Failed to refresh native finder for conda environments [Error: Request 'configure' timed out after 30000ms
+	at Timeout.<anonymous> (/root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/dist/extension.js:2:534062)
+	at listOnTimeout (node:internal/timers:588:17)
+	at process.processTimers (node:internal/timers:523:7)]
+2026-02-26 22:08:43.616 [error] Failed to refresh native finder: Request 'configure' timed out after 30000ms
+2026-02-26 22:08:43.616 [error] [pet] Python Environment Tools exited unexpectedly with code null, signal SIGTERM
+2026-02-26 22:08:45.623 [info] [pet] Starting Python Locator /root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/python-env-tools/bin/pet server
+2026-02-26 22:08:45.623 [info] [pet] Python Environment Tools restarted successfully
+2026-02-26 22:08:45.624 [info] [pet] configure: Sending configuration update: {"workspaceDirectories":["/root/capsule"],"environmentDirectories":["/root/capsule/**/.venv"],"pipenvExecutable":"pipenv","poetryExecutable":"poetry","cacheDirectory":"/root/capsule/code/vscode-data/User/globalStorage/ms-python.vscode-python-envs/pythonLocator"}
+2026-02-26 22:08:52.221 [info] Refreshing Conda Environments
+2026-02-26 22:08:52.221 [info] Refreshing conda environments (hardRefresh=true)
+2026-02-26 22:09:15.632 [warning] [pet] Configure request timed out, killing hung process for restart
+2026-02-26 22:09:15.632 [info] [pet] Killing hung/crashed PET process
+2026-02-26 22:09:15.632 [error] [pet] configure: Configuration error Request 'configure' timed out after 30000ms
+2026-02-26 22:09:15.632 [warning] [pet] Request timed out, killing hung process for restart
+2026-02-26 22:09:15.632 [error] [pet] Error refreshing Request 'configure' timed out after 30000ms
+2026-02-26 22:09:15.632 [warning] [pet] Restarting Python Environment Tools (attempt 3/3, waiting 4000ms)
+2026-02-26 22:09:15.632 [error] Failed to refresh native finder for conda environments [Error: Request 'configure' timed out after 30000ms
+	at Timeout.<anonymous> (/root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/dist/extension.js:2:534062)
+	at listOnTimeout (node:internal/timers:588:17)
+	at process.processTimers (node:internal/timers:523:7)]
+2026-02-26 22:09:15.632 [error] Failed to refresh native finder: Request 'configure' timed out after 30000ms
+2026-02-26 22:09:15.635 [error] Unable to handle /opt/conda/bin/python
+2026-02-26 22:09:15.635 [error] Unable to handle /opt/conda/bin/python
+2026-02-26 22:09:15.635 [error] Unable to handle /opt/conda/bin/python
+2026-02-26 22:09:15.635 [error] Unable to handle /opt/conda/bin/python
+2026-02-26 22:09:15.635 [error] Unable to handle /opt/conda/bin/python
+2026-02-26 22:09:15.635 [error] Unable to handle /opt/conda/bin/python
+2026-02-26 22:09:15.635 [error] Unable to handle /opt/conda/bin/python
+2026-02-26 22:09:15.635 [error] Unable to handle /opt/conda/bin/python
+2026-02-26 22:09:15.635 [error] Unable to handle /opt/conda/bin/python
+2026-02-26 22:09:15.635 [error] Unable to handle /opt/conda/bin/python
+2026-02-26 22:09:15.635 [error] Unable to handle /opt/conda/bin/python
+2026-02-26 22:09:15.635 [error] Unable to handle /opt/conda/bin/python
+2026-02-26 22:09:15.635 [error] Unable to handle /opt/conda/bin/python
+2026-02-26 22:09:15.635 [error] Unable to handle /opt/conda/bin/python
+2026-02-26 22:09:15.635 [error] [pet] Python Environment Tools exited unexpectedly with code null, signal SIGTERM
+2026-02-26 22:09:19.639 [info] [pet] Starting Python Locator /root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/python-env-tools/bin/pet server
+2026-02-26 22:09:19.640 [info] [pet] Python Environment Tools restarted successfully
+2026-02-26 22:09:19.640 [info] [pet] configure: Sending configuration update: {"workspaceDirectories":["/root/capsule"],"environmentDirectories":["/root/capsule/**/.venv"],"pipenvExecutable":"pipenv","poetryExecutable":"poetry","cacheDirectory":"/root/capsule/code/vscode-data/User/globalStorage/ms-python.vscode-python-envs/pythonLocator"}
+2026-02-26 22:09:31.798 [error] [pet] [2m  12.158206757s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Python in "/opt/conda", trying slower approach
+
+2026-02-26 22:09:31.798 [error] [pet] [2m  12.158229064s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Python in "/opt/conda", trying slower approach
+
+2026-02-26 22:09:31.801 [error] [pet] [2m  12.161661998s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Conda in "/opt/conda", trying slower approach
+
+2026-02-26 22:09:31.801 [error] [pet] [2m  12.161811496s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Conda in "/opt/conda", trying slower approach
+
+2026-02-26 22:09:31.830 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:09:31.831 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:09:31.832 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:09:31.833 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:09:31.833 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:09:31.834 [info] Using conda from cache: /opt/conda/bin/conda
+2026-02-26 22:09:31.834 [info] === Conda Shell Activation Map Generation ===
+Environment Configuration:
+    - Identifier: "base"
+    - Prefix: "/opt/conda"
+    - Name: "base"
+
+✓ Conda already active on launch, using default activation commands
+==========================================
+2026-02-26 22:09:31.834 [info] Found base environment: /opt/conda
+2026-02-26 22:09:31.843 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:09:31.849 [info] Using conda from cache: /opt/conda/bin/conda
+2026-02-26 22:09:31.849 [info] === Conda Shell Activation Map Generation ===
+Environment Configuration:
+    - Identifier: "base"
+    - Prefix: "/opt/conda"
+    - Name: "base"
+
+✓ Conda already active on launch, using default activation commands
+==========================================
+2026-02-26 22:09:31.849 [info] Found base environment: /opt/conda
+2026-02-26 22:09:31.961 [info] Python API: Changed environment from undefined to base (3.10.12) for: /root/capsule
+2026-02-26 22:09:31.961 [info] Internal: Changed environment from undefined to base (3.10.12) for: /root/capsule
+2026-02-26 22:09:49.641 [warning] [pet] Configure request timed out, killing hung process for restart
+2026-02-26 22:09:49.641 [info] [pet] Killing hung/crashed PET process
+2026-02-26 22:09:49.641 [error] [pet] configure: Configuration error Request 'configure' timed out after 30000ms
+2026-02-26 22:09:49.641 [warning] [pet] Request timed out, killing hung process for restart
+2026-02-26 22:09:49.641 [error] [pet] Error refreshing Request 'configure' timed out after 30000ms
+2026-02-26 22:09:49.642 [warning] [pet] Restarting Python Environment Tools (attempt 1/3, waiting 1000ms)
+2026-02-26 22:09:49.642 [error] [interpreterSelection] Failed to set environment for /root/capsule: Error: Request 'configure' timed out after 30000ms
+2026-02-26 22:09:49.643 [error] [pet] Python Environment Tools exited unexpectedly with code null, signal SIGTERM
+2026-02-26 22:09:49.643 [info] [interpreterSelection] global: none (source: defaultEnvManager)
+2026-02-26 22:09:49.664 [error] Unable to handle /opt/conda/bin/python3.10
+2026-02-26 22:09:49.666 [error] Unable to handle /opt/conda/bin/python3.10
+2026-02-26 22:09:49.669 [error] Unable to handle /opt/conda/bin/python3.10
+2026-02-26 22:09:49.855 [info] Terminal is activated: /opt/conda
+2026-02-26 22:09:49.859 [info] Terminal is activated: /opt/conda
+2026-02-26 22:09:49.867 [info] Terminal is activated: /opt/conda
+2026-02-26 22:09:50.648 [info] [pet] Starting Python Locator /root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/python-env-tools/bin/pet server
+2026-02-26 22:09:50.648 [info] [pet] Python Environment Tools restarted successfully
+2026-02-26 22:09:50.649 [info] [pet] configure: Sending configuration update: {"workspaceDirectories":["/root/capsule"],"environmentDirectories":["/root/capsule/**/.venv"],"pipenvExecutable":"pipenv","poetryExecutable":"poetry","cacheDirectory":"/root/capsule/code/vscode-data/User/globalStorage/ms-python.vscode-python-envs/pythonLocator"}
+2026-02-26 22:09:56.775 [error] [pet] [2m   6.118763728s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Python in "/opt/conda", trying slower approach
+[2m   6.121564928s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Conda in "/opt/conda", trying slower approach
+
+2026-02-26 22:09:56.800 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:09:56.801 [info] Using conda from cache: /opt/conda/bin/conda
+2026-02-26 22:09:56.801 [info] === Conda Shell Activation Map Generation ===
+Environment Configuration:
+    - Identifier: "base"
+    - Prefix: "/opt/conda"
+    - Name: "base"
+
+✓ Conda already active on launch, using default activation commands
+==========================================
+2026-02-26 22:09:56.801 [info] Found base environment: /opt/conda
+2026-02-26 22:09:56.804 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:09:56.805 [info] Using conda from cache: /opt/conda/bin/conda
+2026-02-26 22:09:56.805 [info] === Conda Shell Activation Map Generation ===
+Environment Configuration:
+    - Identifier: "base"
+    - Prefix: "/opt/conda"
+    - Name: "base"
+
+✓ Conda already active on launch, using default activation commands
+==========================================
+2026-02-26 22:09:56.805 [info] Found base environment: /opt/conda
+2026-02-26 22:09:56.806 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:09:56.806 [info] Using conda from cache: /opt/conda/bin/conda
+2026-02-26 22:09:56.806 [info] === Conda Shell Activation Map Generation ===
+Environment Configuration:
+    - Identifier: "base"
+    - Prefix: "/opt/conda"
+    - Name: "base"
+
+✓ Conda already active on launch, using default activation commands
+==========================================
+2026-02-26 22:09:56.806 [info] Found base environment: /opt/conda
+2026-02-26 22:09:56.806 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:09:56.806 [info] Using conda from cache: /opt/conda/bin/conda
+2026-02-26 22:09:56.807 [info] === Conda Shell Activation Map Generation ===
+Environment Configuration:
+    - Identifier: "base"
+    - Prefix: "/opt/conda"
+    - Name: "base"
+
+✓ Conda already active on launch, using default activation commands
+==========================================
+2026-02-26 22:09:56.807 [info] Found base environment: /opt/conda
+2026-02-26 22:09:56.808 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:09:56.808 [info] Using conda from cache: /opt/conda/bin/conda
+2026-02-26 22:09:56.808 [info] === Conda Shell Activation Map Generation ===
+Environment Configuration:
+    - Identifier: "base"
+    - Prefix: "/opt/conda"
+    - Name: "base"
+
+✓ Conda already active on launch, using default activation commands
+==========================================
+2026-02-26 22:09:56.808 [info] Found base environment: /opt/conda
+2026-02-26 22:09:56.809 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:09:56.809 [info] Using conda from cache: /opt/conda/bin/conda
+2026-02-26 22:09:56.809 [info] === Conda Shell Activation Map Generation ===
+Environment Configuration:
+    - Identifier: "base"
+    - Prefix: "/opt/conda"
+    - Name: "base"
+
+✓ Conda already active on launch, using default activation commands
+==========================================
+2026-02-26 22:09:56.809 [info] Found base environment: /opt/conda
+2026-02-26 22:09:56.819 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:09:56.819 [info] Using conda from cache: /opt/conda/bin/conda
+2026-02-26 22:09:56.819 [info] === Conda Shell Activation Map Generation ===
+Environment Configuration:
+    - Identifier: "base"
+    - Prefix: "/opt/conda"
+    - Name: "base"
+
+✓ Conda already active on launch, using default activation commands
+==========================================
+2026-02-26 22:09:56.819 [info] Found base environment: /opt/conda
+2026-02-26 22:09:58.639 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:09:58.640 [info] Using conda from cache: /opt/conda/bin/conda
+2026-02-26 22:09:58.640 [info] === Conda Shell Activation Map Generation ===
+Environment Configuration:
+    - Identifier: "base"
+    - Prefix: "/opt/conda"
+    - Name: "base"
+
+✓ Conda already active on launch, using default activation commands
+==========================================
+2026-02-26 22:09:58.640 [info] Found base environment: /opt/conda
+2026-02-26 22:10:20.651 [warning] [pet] Configure request timed out, killing hung process for restart
+2026-02-26 22:10:20.651 [info] [pet] Killing hung/crashed PET process
+2026-02-26 22:10:20.651 [error] [pet] configure: Configuration error Request 'configure' timed out after 30000ms
+2026-02-26 22:10:20.651 [warning] [pet] Request timed out, killing hung process for restart
+2026-02-26 22:10:20.651 [error] [pet] Error refreshing Request 'configure' timed out after 30000ms
+2026-02-26 22:10:20.651 [warning] [pet] Restarting Python Environment Tools (attempt 1/3, waiting 1000ms)
+2026-02-26 22:10:20.652 [error] [pet] Python Environment Tools exited unexpectedly with code null, signal SIGTERM
+2026-02-26 22:10:21.660 [info] [pet] Starting Python Locator /root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/python-env-tools/bin/pet server
+2026-02-26 22:10:21.660 [info] [pet] Python Environment Tools restarted successfully
+2026-02-26 22:10:21.660 [info] [pet] configure: Sending configuration update: {"workspaceDirectories":["/root/capsule"],"environmentDirectories":["/root/capsule/**/.venv"],"pipenvExecutable":"pipenv","poetryExecutable":"poetry","cacheDirectory":"/root/capsule/code/vscode-data/User/globalStorage/ms-python.vscode-python-envs/pythonLocator"}
+2026-02-26 22:10:51.661 [warning] [pet] Configure request timed out, killing hung process for restart
+2026-02-26 22:10:51.661 [info] [pet] Killing hung/crashed PET process
+2026-02-26 22:10:51.662 [error] [pet] configure: Configuration error Request 'configure' timed out after 30000ms
+2026-02-26 22:10:51.662 [warning] [pet] Request timed out, killing hung process for restart
+2026-02-26 22:10:51.662 [error] [pet] Error refreshing Request 'configure' timed out after 30000ms
+2026-02-26 22:10:51.662 [warning] [pet] Restarting Python Environment Tools (attempt 2/3, waiting 2000ms)
+2026-02-26 22:10:51.663 [error] [pet] Python Environment Tools exited unexpectedly with code null, signal SIGTERM
+2026-02-26 22:10:53.669 [info] [pet] Starting Python Locator /root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/python-env-tools/bin/pet server
+2026-02-26 22:10:53.669 [info] [pet] Python Environment Tools restarted successfully
+2026-02-26 22:10:53.670 [info] [pet] configure: Sending configuration update: {"workspaceDirectories":["/root/capsule"],"environmentDirectories":["/root/capsule/**/.venv"],"pipenvExecutable":"pipenv","poetryExecutable":"poetry","cacheDirectory":"/root/capsule/code/vscode-data/User/globalStorage/ms-python.vscode-python-envs/pythonLocator"}
+2026-02-26 22:11:18.470 [info] [interpreterSelection] Interpreter settings changed, re-evaluating priority chain for all scopes
+2026-02-26 22:11:18.470 [info] [interpreterSelection] Applying initial environment selection for 1 workspace folder(s)
+2026-02-26 22:11:18.473 [info] [interpreterSelection] capsule: base (3.10.12) (source: defaultEnvManager)
+2026-02-26 22:11:18.475 [info] [interpreterSelection] global: none (source: defaultEnvManager)
+2026-02-26 22:11:23.670 [warning] [pet] Configure request timed out, killing hung process for restart
+2026-02-26 22:11:23.670 [info] [pet] Killing hung/crashed PET process
+2026-02-26 22:11:23.670 [error] [pet] configure: Configuration error Request 'configure' timed out after 30000ms
+2026-02-26 22:11:23.670 [warning] [pet] Request timed out, killing hung process for restart
+2026-02-26 22:11:23.670 [error] [pet] Error refreshing Request 'configure' timed out after 30000ms
+2026-02-26 22:11:23.670 [error] Failed to refresh native finder for conda environments [Error: Request 'configure' timed out after 30000ms
+	at Timeout.<anonymous> (/root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/dist/extension.js:2:534062)
+	at listOnTimeout (node:internal/timers:588:17)
+	at process.processTimers (node:internal/timers:523:7)]
+2026-02-26 22:11:23.670 [error] Failed to refresh native finder: Request 'configure' timed out after 30000ms
+2026-02-26 22:11:23.670 [warning] [pet] Restarting Python Environment Tools (attempt 3/3, waiting 4000ms)
+2026-02-26 22:11:23.671 [error] [pet] Python Environment Tools exited unexpectedly with code null, signal SIGTERM
+2026-02-26 22:11:25.477 [info] Refreshing Conda Environments
+2026-02-26 22:11:25.477 [info] Refreshing conda environments (hardRefresh=true)
+2026-02-26 22:11:25.478 [error] Failed to refresh native finder for conda environments [Error: Python Environment Tools (PET) is currently restarting. Please try again.
+	at S.ensureProcessRunning (/root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/dist/extension.js:2:535752)
+	at S.doRefresh (/root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/dist/extension.js:2:540575)
+	at c.workerFunc (/root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/dist/extension.js:2:535168)
+	at o.workFunc (/root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/dist/extension.js:2:287619)
+	at o.start (/root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/dist/extension.js:2:286434)
+	at runNextTicks (node:internal/process/task_queues:65:5)
+	at process.processImmediate (node:internal/timers:453:9)
+	at process.callbackTrampoline (node:internal/async_hooks:130:17)]
+2026-02-26 22:11:25.478 [error] Failed to refresh native finder: Python Environment Tools (PET) is currently restarting. Please try again.
+2026-02-26 22:11:25.478 [error] Failed to resolve conda environment: /opt/conda
+2026-02-26 22:11:25.480 [info] Python API: Changed environment from base (3.10.12) to undefined for: /root/capsule
+2026-02-26 22:11:25.480 [info] Internal: Changed environment from base (3.10.12) to undefined for: /root/capsule
+2026-02-26 22:11:27.677 [info] [pet] Starting Python Locator /root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/python-env-tools/bin/pet server
+2026-02-26 22:11:27.678 [info] [pet] Python Environment Tools restarted successfully
+2026-02-26 22:11:27.678 [info] [pet] configure: Sending configuration update: {"workspaceDirectories":["/root/capsule"],"environmentDirectories":["/root/capsule/**/.venv"],"pipenvExecutable":"pipenv","poetryExecutable":"poetry","cacheDirectory":"/root/capsule/code/vscode-data/User/globalStorage/ms-python.vscode-python-envs/pythonLocator"}
+2026-02-26 22:11:28.393 [error] [pet] [2m   0.714879770s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Python in "/opt/conda", trying slower approach
+[2m   0.714900424s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Python in "/opt/conda", trying slower approach
+
+2026-02-26 22:11:28.396 [error] [pet] [2m   0.718593445s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Conda in "/opt/conda", trying slower approach
+[2m   0.718669874s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Conda in "/opt/conda", trying slower approach
+
+2026-02-26 22:11:28.431 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:11:28.431 [info] Using conda from cache: /opt/conda/bin/conda
+2026-02-26 22:11:28.431 [info] === Conda Shell Activation Map Generation ===
+Environment Configuration:
+    - Identifier: "base"
+    - Prefix: "/opt/conda"
+    - Name: "base"
+
+✓ Conda already active on launch, using default activation commands
+==========================================
+2026-02-26 22:11:28.431 [info] Found base environment: /opt/conda
+2026-02-26 22:11:28.432 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:11:28.432 [info] Using conda from cache: /opt/conda/bin/conda
+2026-02-26 22:11:28.432 [info] === Conda Shell Activation Map Generation ===
+Environment Configuration:
+    - Identifier: "base"
+    - Prefix: "/opt/conda"
+    - Name: "base"
+
+✓ Conda already active on launch, using default activation commands
+==========================================
+2026-02-26 22:11:28.432 [info] Found base environment: /opt/conda
+2026-02-26 22:11:28.434 [info] Python API: Changed environment from undefined to base (3.10.12) for: /root/capsule
+2026-02-26 22:11:28.434 [info] Internal: Changed environment from undefined to base (3.10.12) for: /root/capsule
+2026-02-26 22:11:30.907 [info] Refreshing Conda Environments
+2026-02-26 22:11:30.907 [info] Refreshing conda environments (hardRefresh=true)
+2026-02-26 22:11:32.354 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:11:32.354 [info] Using conda from cache: /opt/conda/bin/conda
+2026-02-26 22:11:32.354 [info] === Conda Shell Activation Map Generation ===
+Environment Configuration:
+    - Identifier: "base"
+    - Prefix: "/opt/conda"
+    - Name: "base"
+
+✓ Conda already active on launch, using default activation commands
+==========================================
+2026-02-26 22:11:32.354 [info] Found base environment: /opt/conda
+2026-02-26 22:11:32.355 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:11:32.355 [info] Using conda from cache: /opt/conda/bin/conda
+2026-02-26 22:11:32.355 [info] === Conda Shell Activation Map Generation ===
+Environment Configuration:
+    - Identifier: "base"
+    - Prefix: "/opt/conda"
+    - Name: "base"
+
+✓ Conda already active on launch, using default activation commands
+==========================================
+2026-02-26 22:11:32.355 [info] Found base environment: /opt/conda
+2026-02-26 22:11:57.679 [warning] [pet] Configure request timed out, killing hung process for restart
+2026-02-26 22:11:57.679 [info] [pet] Killing hung/crashed PET process
+2026-02-26 22:11:57.679 [error] [pet] configure: Configuration error Request 'configure' timed out after 30000ms
+2026-02-26 22:11:57.679 [warning] [pet] Resolve request timed out, killing hung process for restart
+2026-02-26 22:11:57.679 [error] Failed to resolve conda environment: /opt/conda
+2026-02-26 22:11:57.680 [error] [pet] Python Environment Tools exited unexpectedly with code null, signal SIGTERM
+2026-02-26 22:12:14.272 [info] Python-envs extension version: 1.20.1
+2026-02-26 22:12:14.272 [info] 
+=== Python Envs Configuration Levels ===
+2026-02-26 22:12:14.272 [info] {
+  "section": "Python Envs Configuration Levels",
+  "defaultEnvManager": {
+    "workspaceFolderValue": "undefined",
+    "workspaceValue": "ms-python.python:conda",
+    "globalValue": "undefined",
+    "defaultValue": "ms-python.python:venv"
+  },
+  "defaultPackageManager": {
+    "workspaceFolderValue": "undefined",
+    "workspaceValue": "ms-python.python:conda",
+    "globalValue": "undefined",
+    "defaultValue": "ms-python.python:pip"
+  }
+}
+2026-02-26 22:12:14.272 [info] [pet] Starting Python Locator /root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/python-env-tools/bin/pet server
+2026-02-26 22:12:14.272 [info] Using conda from persistent state: /opt/conda/bin/conda
+2026-02-26 22:12:14.272 [info] Conda Sourcing Status:
+├─ Conda Path: /opt/conda/bin/conda
+├─ Conda Folder: /opt/conda
+├─ Active on Launch: true
+└─ No Shell-specific Sourcing Scripts Found
+2026-02-26 22:12:14.307 [info] Refreshing conda environments (hardRefresh=false)
+2026-02-26 22:12:14.309 [info] [pet] configure: Sending configuration update: {"workspaceDirectories":["/root/capsule"],"environmentDirectories":["/root/capsule/**/.venv"],"pipenvExecutable":"pipenv","poetryExecutable":"poetry","cacheDirectory":"/root/capsule/code/vscode-data/User/globalStorage/ms-python.vscode-python-envs/pythonLocator"}
+2026-02-26 22:12:14.332 [info] Refreshing Conda Environments
+2026-02-26 22:12:14.332 [info] Refreshing conda environments (hardRefresh=true)
+2026-02-26 22:12:44.309 [warning] [pet] Configure request timed out, killing hung process for restart
+2026-02-26 22:12:44.309 [info] [pet] Killing hung/crashed PET process
+2026-02-26 22:12:44.310 [error] [pet] configure: Configuration error Request 'configure' timed out after 30000ms
+2026-02-26 22:12:44.310 [warning] [pet] Request timed out, killing hung process for restart
+2026-02-26 22:12:44.310 [error] [pet] Error refreshing Request 'configure' timed out after 30000ms
+2026-02-26 22:12:44.310 [warning] [pet] Restarting Python Environment Tools (attempt 1/3, waiting 1000ms)
+2026-02-26 22:12:44.310 [error] Failed to refresh native finder for conda environments [Error: Request 'configure' timed out after 30000ms
+	at Timeout.<anonymous> (/root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/dist/extension.js:2:534062)
+	at listOnTimeout (node:internal/timers:588:17)
+	at process.processTimers (node:internal/timers:523:7)]
+2026-02-26 22:12:44.310 [error] Failed to refresh native finder: Request 'configure' timed out after 30000ms
+2026-02-26 22:12:44.311 [error] Failed to resolve conda environment: /opt/conda
+2026-02-26 22:12:44.315 [error] [pet] Python Environment Tools exited unexpectedly with code null, signal SIGTERM
+2026-02-26 22:12:45.317 [info] [pet] Starting Python Locator /root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/python-env-tools/bin/pet server
+2026-02-26 22:12:45.317 [info] [pet] Python Environment Tools restarted successfully
+2026-02-26 22:12:45.318 [info] [pet] configure: Sending configuration update: {"workspaceDirectories":["/root/capsule"],"environmentDirectories":["/root/capsule/**/.venv"],"pipenvExecutable":"pipenv","poetryExecutable":"poetry","cacheDirectory":"/root/capsule/code/vscode-data/User/globalStorage/ms-python.vscode-python-envs/pythonLocator"}
+2026-02-26 22:12:54.237 [error] [pet] [2m   8.919533825s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Python in "/opt/conda", trying slower approach
+[2m   8.919542776s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Python in "/opt/conda", trying slower approach
+
+2026-02-26 22:12:54.241 [error] [pet] [2m   8.923229903s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Conda in "/opt/conda", trying slower approach
+
+2026-02-26 22:12:54.241 [error] [pet] [2m   8.923298564s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Conda in "/opt/conda", trying slower approach
+
+2026-02-26 22:12:54.281 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:12:54.282 [info] Using conda from cache: /opt/conda/bin/conda
+2026-02-26 22:12:54.282 [info] === Conda Shell Activation Map Generation ===
+Environment Configuration:
+    - Identifier: "base"
+    - Prefix: "/opt/conda"
+    - Name: "base"
+
+✓ Conda already active on launch, using default activation commands
+==========================================
+2026-02-26 22:12:54.283 [info] Found base environment: /opt/conda
+2026-02-26 22:12:54.288 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:12:54.298 [info] Using conda from cache: /opt/conda/bin/conda
+2026-02-26 22:12:54.298 [info] === Conda Shell Activation Map Generation ===
+Environment Configuration:
+    - Identifier: "base"
+    - Prefix: "/opt/conda"
+    - Name: "base"
+
+✓ Conda already active on launch, using default activation commands
+==========================================
+2026-02-26 22:12:54.298 [info] Found base environment: /opt/conda
+2026-02-26 22:12:54.321 [info] Python API: Changed environment from undefined to base (3.10.12) for: /root/capsule
+2026-02-26 22:12:54.321 [info] Internal: Changed environment from undefined to base (3.10.12) for: /root/capsule
+2026-02-26 22:12:54.323 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:12:54.323 [info] Using conda from cache: /opt/conda/bin/conda
+2026-02-26 22:12:54.323 [info] === Conda Shell Activation Map Generation ===
+Environment Configuration:
+    - Identifier: "base"
+    - Prefix: "/opt/conda"
+    - Name: "base"
+
+✓ Conda already active on launch, using default activation commands
+==========================================
+2026-02-26 22:12:54.324 [info] Found base environment: /opt/conda
+2026-02-26 22:12:54.337 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:12:54.337 [info] Using conda from cache: /opt/conda/bin/conda
+2026-02-26 22:12:54.337 [info] === Conda Shell Activation Map Generation ===
+Environment Configuration:
+    - Identifier: "base"
+    - Prefix: "/opt/conda"
+    - Name: "base"
+
+✓ Conda already active on launch, using default activation commands
+==========================================
+2026-02-26 22:12:54.337 [info] Found base environment: /opt/conda
+2026-02-26 22:12:54.342 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:12:54.343 [info] Using conda from cache: /opt/conda/bin/conda
+2026-02-26 22:12:54.343 [info] === Conda Shell Activation Map Generation ===
+Environment Configuration:
+    - Identifier: "base"
+    - Prefix: "/opt/conda"
+    - Name: "base"
+
+✓ Conda already active on launch, using default activation commands
+==========================================
+2026-02-26 22:12:54.343 [info] Found base environment: /opt/conda
+2026-02-26 22:12:54.344 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:12:54.345 [info] Using conda from cache: /opt/conda/bin/conda
+2026-02-26 22:12:54.345 [info] === Conda Shell Activation Map Generation ===
+Environment Configuration:
+    - Identifier: "base"
+    - Prefix: "/opt/conda"
+    - Name: "base"
+
+✓ Conda already active on launch, using default activation commands
+==========================================
+2026-02-26 22:12:54.346 [info] Found base environment: /opt/conda
+2026-02-26 22:12:54.356 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:12:54.356 [info] Using conda from cache: /opt/conda/bin/conda
+2026-02-26 22:12:54.356 [info] === Conda Shell Activation Map Generation ===
+Environment Configuration:
+    - Identifier: "base"
+    - Prefix: "/opt/conda"
+    - Name: "base"
+
+✓ Conda already active on launch, using default activation commands
+==========================================
+2026-02-26 22:12:54.356 [info] Found base environment: /opt/conda
+2026-02-26 22:12:54.369 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:12:54.369 [info] Using conda from cache: /opt/conda/bin/conda
+2026-02-26 22:12:54.369 [info] === Conda Shell Activation Map Generation ===
+Environment Configuration:
+    - Identifier: "base"
+    - Prefix: "/opt/conda"
+    - Name: "base"
+
+✓ Conda already active on launch, using default activation commands
+==========================================
+2026-02-26 22:12:54.369 [info] Found base environment: /opt/conda
+2026-02-26 22:12:54.369 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:12:54.370 [info] Using conda from cache: /opt/conda/bin/conda
+2026-02-26 22:12:54.370 [info] === Conda Shell Activation Map Generation ===
+Environment Configuration:
+    - Identifier: "base"
+    - Prefix: "/opt/conda"
+    - Name: "base"
+
+✓ Conda already active on launch, using default activation commands
+==========================================
+2026-02-26 22:12:54.370 [info] Found base environment: /opt/conda
+2026-02-26 22:12:56.176 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:12:56.176 [info] Using conda from cache: /opt/conda/bin/conda
+2026-02-26 22:12:56.176 [info] === Conda Shell Activation Map Generation ===
+Environment Configuration:
+    - Identifier: "base"
+    - Prefix: "/opt/conda"
+    - Name: "base"
+
+✓ Conda already active on launch, using default activation commands
+==========================================
+2026-02-26 22:12:56.176 [info] Found base environment: /opt/conda
+2026-02-26 22:13:15.319 [warning] [pet] Configure request timed out, killing hung process for restart
+2026-02-26 22:13:15.319 [info] [pet] Killing hung/crashed PET process
+2026-02-26 22:13:15.319 [error] [pet] configure: Configuration error Request 'configure' timed out after 30000ms
+2026-02-26 22:13:15.319 [warning] [pet] Request timed out, killing hung process for restart
+2026-02-26 22:13:15.319 [error] [pet] Error refreshing Request 'configure' timed out after 30000ms
+2026-02-26 22:13:15.319 [warning] [pet] Restarting Python Environment Tools (attempt 1/3, waiting 1000ms)
+2026-02-26 22:13:15.322 [error] [pet] Python Environment Tools exited unexpectedly with code null, signal SIGTERM
+2026-02-26 22:13:16.327 [info] [pet] Starting Python Locator /root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/python-env-tools/bin/pet server
+2026-02-26 22:13:16.327 [info] [pet] Python Environment Tools restarted successfully
+2026-02-26 22:13:16.328 [info] [pet] configure: Sending configuration update: {"workspaceDirectories":["/root/capsule"],"environmentDirectories":["/root/capsule/**/.venv"],"pipenvExecutable":"pipenv","poetryExecutable":"poetry","cacheDirectory":"/root/capsule/code/vscode-data/User/globalStorage/ms-python.vscode-python-envs/pythonLocator"}
+2026-02-26 22:13:46.329 [warning] [pet] Configure request timed out, killing hung process for restart
+2026-02-26 22:13:46.329 [info] [pet] Killing hung/crashed PET process
+2026-02-26 22:13:46.329 [error] [pet] configure: Configuration error Request 'configure' timed out after 30000ms
+2026-02-26 22:13:46.329 [warning] [pet] Request timed out, killing hung process for restart
+2026-02-26 22:13:46.329 [error] [pet] Error refreshing Request 'configure' timed out after 30000ms
+2026-02-26 22:13:46.329 [warning] [pet] Restarting Python Environment Tools (attempt 2/3, waiting 2000ms)
+2026-02-26 22:13:46.330 [error] [pet] Python Environment Tools exited unexpectedly with code null, signal SIGTERM
+2026-02-26 22:13:48.336 [info] [pet] Starting Python Locator /root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/python-env-tools/bin/pet server
+2026-02-26 22:13:48.336 [info] [pet] Python Environment Tools restarted successfully
+2026-02-26 22:13:48.337 [info] [pet] configure: Sending configuration update: {"workspaceDirectories":["/root/capsule"],"environmentDirectories":["/root/capsule/**/.venv"],"pipenvExecutable":"pipenv","poetryExecutable":"poetry","cacheDirectory":"/root/capsule/code/vscode-data/User/globalStorage/ms-python.vscode-python-envs/pythonLocator"}
+2026-02-26 22:14:18.336 [warning] [pet] Configure request timed out, killing hung process for restart
+2026-02-26 22:14:18.337 [info] [pet] Killing hung/crashed PET process
+2026-02-26 22:14:18.337 [error] [pet] configure: Configuration error Request 'configure' timed out after 30000ms
+2026-02-26 22:14:18.337 [warning] [pet] Request timed out, killing hung process for restart
+2026-02-26 22:14:18.337 [error] [pet] Error refreshing Request 'configure' timed out after 30000ms
+2026-02-26 22:14:18.337 [warning] [pet] Restarting Python Environment Tools (attempt 3/3, waiting 4000ms)
+2026-02-26 22:14:18.337 [error] Failed to refresh native finder for conda environments [Error: Request 'configure' timed out after 30000ms
+	at Timeout.<anonymous> (/root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/dist/extension.js:2:534062)
+	at listOnTimeout (node:internal/timers:588:17)
+	at process.processTimers (node:internal/timers:523:7)]
+2026-02-26 22:14:18.337 [error] Failed to refresh native finder: Request 'configure' timed out after 30000ms
+2026-02-26 22:14:18.337 [error] Failed to resolve conda environment: /opt/conda
+2026-02-26 22:14:18.338 [error] [pet] Python Environment Tools exited unexpectedly with code null, signal SIGTERM
+2026-02-26 22:14:22.347 [info] [pet] Starting Python Locator /root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/python-env-tools/bin/pet server
+2026-02-26 22:14:22.347 [info] [pet] Python Environment Tools restarted successfully
+2026-02-26 22:14:22.348 [info] [pet] configure: Sending configuration update: {"workspaceDirectories":["/root/capsule"],"environmentDirectories":["/root/capsule/**/.venv"],"pipenvExecutable":"pipenv","poetryExecutable":"poetry","cacheDirectory":"/root/capsule/code/vscode-data/User/globalStorage/ms-python.vscode-python-envs/pythonLocator"}
+2026-02-26 22:14:52.350 [warning] [pet] Configure request timed out, killing hung process for restart
+2026-02-26 22:14:52.350 [info] [pet] Killing hung/crashed PET process
+2026-02-26 22:14:52.350 [error] [pet] configure: Configuration error Request 'configure' timed out after 30000ms
+2026-02-26 22:14:52.350 [warning] [pet] Request timed out, killing hung process for restart
+2026-02-26 22:14:52.350 [error] [pet] Error refreshing Request 'configure' timed out after 30000ms
+2026-02-26 22:14:52.350 [info] Pipenv not found, turning off pipenv features. If you have pipenv installed in a non-standard location, set the "python.pipenvPath" setting. [Error: Request 'configure' timed out after 30000ms
+	at Timeout.<anonymous> (/root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/dist/extension.js:2:534062)
+	at listOnTimeout (node:internal/timers:588:17)
+	at process.processTimers (node:internal/timers:523:7)]
+2026-02-26 22:14:52.351 [info] Pyenv not found, turning off pyenv features. [Error: Python Environment Tools (PET) failed after 3 restart attempts. Please reload the window or check the output channel for details. To debug, run "Python Environments: Run Python Environment Tool (PET) in Terminal" from the Command Palette.
+	at S.ensureProcessRunning (/root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/dist/extension.js:2:535872)
+	at S.doRefresh (/root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/dist/extension.js:2:540575)
+	at c.workerFunc (/root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/dist/extension.js:2:535168)
+	at o.workFunc (/root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/dist/extension.js:2:287619)
+	at o.start (/root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/dist/extension.js:2:286434)]
+2026-02-26 22:14:52.351 [info] Poetry not found, turning off poetry features. [Error: Python Environment Tools (PET) failed after 3 restart attempts. Please reload the window or check the output channel for details. To debug, run "Python Environments: Run Python Environment Tool (PET) in Terminal" from the Command Palette.
+	at S.ensureProcessRunning (/root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/dist/extension.js:2:535872)
+	at S.doRefresh (/root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/dist/extension.js:2:540575)
+	at c.workerFunc (/root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/dist/extension.js:2:535168)
+	at o.workFunc (/root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/dist/extension.js:2:287619)
+	at o.start (/root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/dist/extension.js:2:286434)]
+2026-02-26 22:14:52.352 [info] [interpreterSelection] Applying initial environment selection for 1 workspace folder(s)
+2026-02-26 22:14:52.353 [error] [pet] Python Environment Tools exited unexpectedly with code null, signal SIGTERM
+2026-02-26 22:14:52.354 [info] [interpreterSelection] capsule: none (source: defaultEnvManager)
+2026-02-26 22:14:52.356 [info] Python API: Changed environment from base (3.10.12) to undefined for: /root/capsule
+2026-02-26 22:14:52.356 [info] Internal: Changed environment from base (3.10.12) to undefined for: /root/capsule
+2026-02-26 22:14:52.356 [info] [interpreterSelection] global: none (source: defaultEnvManager)
+2026-02-26 22:15:50.499 [info] [interpreterSelection] Interpreter settings changed, re-evaluating priority chain for all scopes
+2026-02-26 22:15:50.500 [info] [interpreterSelection] Applying initial environment selection for 1 workspace folder(s)
+2026-02-26 22:15:50.500 [error] [interpreterSelection] Failed to set environment for /root/capsule: Error: Python Environment Tools (PET) failed after 3 restart attempts. Please reload the window or check the output channel for details. To debug, run "Python Environments: Run Python Environment Tool (PET) in Terminal" from the Command Palette.
+2026-02-26 22:15:50.524 [error] [interpreterSelection] Failed to set global environment: Error: Python Environment Tools (PET) failed after 3 restart attempts. Please reload the window or check the output channel for details. To debug, run "Python Environments: Run Python Environment Tool (PET) in Terminal" from the Command Palette.
+2026-02-26 22:16:20.305 [info] Python-envs extension version: 1.20.1
+2026-02-26 22:16:20.305 [info] 
+=== Python Envs Configuration Levels ===
+2026-02-26 22:16:20.305 [info] {
+  "section": "Python Envs Configuration Levels",
+  "defaultEnvManager": {
+    "workspaceFolderValue": "undefined",
+    "workspaceValue": "ms-python.python:venv",
+    "globalValue": "undefined",
+    "defaultValue": "ms-python.python:venv"
+  },
+  "defaultPackageManager": {
+    "workspaceFolderValue": "undefined",
+    "workspaceValue": "ms-python.python:pip",
+    "globalValue": "undefined",
+    "defaultValue": "ms-python.python:pip"
+  }
+}
+2026-02-26 22:16:20.305 [info] [pet] Starting Python Locator /root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/python-env-tools/bin/pet server
+2026-02-26 22:16:20.305 [info] Using conda from persistent state: /opt/conda/bin/conda
+2026-02-26 22:16:20.305 [info] Conda Sourcing Status:
+├─ Conda Path: /opt/conda/bin/conda
+├─ Conda Folder: /opt/conda
+├─ Active on Launch: true
+└─ No Shell-specific Sourcing Scripts Found
+2026-02-26 22:16:20.379 [info] [pet] configure: Sending configuration update: {"workspaceDirectories":["/root/capsule"],"environmentDirectories":["/root/capsule/**/.venv"],"pipenvExecutable":"pipenv","poetryExecutable":"poetry","cacheDirectory":"/root/capsule/code/vscode-data/User/globalStorage/ms-python.vscode-python-envs/pythonLocator"}
+2026-02-26 22:16:20.513 [info] Refreshing Conda Environments
+2026-02-26 22:16:20.513 [info] Refreshing conda environments (hardRefresh=true)
+2026-02-26 22:16:50.380 [warning] [pet] Configure request timed out, killing hung process for restart
+2026-02-26 22:16:50.380 [info] [pet] Killing hung/crashed PET process
+2026-02-26 22:16:50.380 [error] [pet] configure: Configuration error Request 'configure' timed out after 30000ms
+2026-02-26 22:16:50.380 [warning] [pet] Request timed out, killing hung process for restart
+2026-02-26 22:16:50.380 [error] [pet] Error refreshing Request 'configure' timed out after 30000ms
+2026-02-26 22:16:50.381 [warning] [pet] Restarting Python Environment Tools (attempt 1/3, waiting 1000ms)
+2026-02-26 22:16:50.381 [info] Pipenv not found, turning off pipenv features. If you have pipenv installed in a non-standard location, set the "python.pipenvPath" setting. [Error: Request 'configure' timed out after 30000ms
+	at Timeout.<anonymous> (/root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/dist/extension.js:2:534062)
+	at listOnTimeout (node:internal/timers:588:17)
+	at process.processTimers (node:internal/timers:523:7)]
+2026-02-26 22:16:50.382 [error] [pet] Python Environment Tools exited unexpectedly with code null, signal SIGTERM
+2026-02-26 22:16:51.388 [info] [pet] Starting Python Locator /root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/python-env-tools/bin/pet server
+2026-02-26 22:16:51.388 [info] [pet] Python Environment Tools restarted successfully
+2026-02-26 22:16:51.389 [info] [pet] configure: Sending configuration update: {"workspaceDirectories":["/root/capsule"],"environmentDirectories":["/root/capsule/**/.venv"],"pipenvExecutable":"pipenv","poetryExecutable":"poetry","cacheDirectory":"/root/capsule/code/vscode-data/User/globalStorage/ms-python.vscode-python-envs/pythonLocator"}
+2026-02-26 22:17:21.392 [warning] [pet] Configure request timed out, killing hung process for restart
+2026-02-26 22:17:21.393 [info] [pet] Killing hung/crashed PET process
+2026-02-26 22:17:21.393 [error] [pet] configure: Configuration error Request 'configure' timed out after 30000ms
+2026-02-26 22:17:21.393 [warning] [pet] Request timed out, killing hung process for restart
+2026-02-26 22:17:21.393 [error] [pet] Error refreshing Request 'configure' timed out after 30000ms
+2026-02-26 22:17:21.393 [warning] [pet] Restarting Python Environment Tools (attempt 2/3, waiting 2000ms)
+2026-02-26 22:17:21.393 [info] Pyenv not found, turning off pyenv features. [Error: Request 'configure' timed out after 30000ms
+	at Timeout.<anonymous> (/root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/dist/extension.js:2:534062)
+	at listOnTimeout (node:internal/timers:588:17)
+	at process.processTimers (node:internal/timers:523:7)]
+2026-02-26 22:17:21.394 [error] [pet] Python Environment Tools exited unexpectedly with code null, signal SIGTERM
+2026-02-26 22:17:23.402 [info] [pet] Starting Python Locator /root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/python-env-tools/bin/pet server
+2026-02-26 22:17:23.402 [info] [pet] Python Environment Tools restarted successfully
+2026-02-26 22:17:23.403 [info] [pet] configure: Sending configuration update: {"workspaceDirectories":["/root/capsule"],"environmentDirectories":["/root/capsule/**/.venv"],"pipenvExecutable":"pipenv","poetryExecutable":"poetry","cacheDirectory":"/root/capsule/code/vscode-data/User/globalStorage/ms-python.vscode-python-envs/pythonLocator"}
+2026-02-26 22:17:26.301 [error] [pet] [2m   2.898317513s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Python in "/opt/conda", trying slower approach
+
+2026-02-26 22:17:26.303 [error] [pet] [2m   2.901191156s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Conda in "/opt/conda", trying slower approach
+
+2026-02-26 22:17:26.337 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:17:26.342 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:17:26.342 [info] Refreshing conda environments (hardRefresh=false)
+2026-02-26 22:17:28.596 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:17:28.598 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:17:33.631 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:17:33.633 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:17:40.776 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:17:40.778 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:17:43.115 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:17:43.116 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:17:44.810 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:17:44.811 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:17:53.403 [warning] [pet] Configure request timed out, killing hung process for restart
+2026-02-26 22:17:53.404 [info] [pet] Killing hung/crashed PET process
+2026-02-26 22:17:53.404 [error] [pet] configure: Configuration error Request 'configure' timed out after 30000ms
+2026-02-26 22:17:53.404 [warning] [pet] Request timed out, killing hung process for restart
+2026-02-26 22:17:53.404 [error] [pet] Error refreshing Request 'configure' timed out after 30000ms
+2026-02-26 22:17:53.404 [warning] [pet] Restarting Python Environment Tools (attempt 1/3, waiting 1000ms)
+2026-02-26 22:17:53.404 [info] Poetry not found, turning off poetry features. [Error: Request 'configure' timed out after 30000ms
+	at Timeout.<anonymous> (/root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/dist/extension.js:2:534062)
+	at listOnTimeout (node:internal/timers:588:17)
+	at process.processTimers (node:internal/timers:523:7)]
+2026-02-26 22:17:53.405 [info] [interpreterSelection] Applying initial environment selection for 1 workspace folder(s)
+2026-02-26 22:17:53.405 [error] [pet] Python Environment Tools exited unexpectedly with code null, signal SIGTERM
+2026-02-26 22:17:54.413 [info] [pet] Starting Python Locator /root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/python-env-tools/bin/pet server
+2026-02-26 22:17:54.413 [info] [pet] Python Environment Tools restarted successfully
+2026-02-26 22:17:54.414 [info] [pet] configure: Sending configuration update: {"workspaceDirectories":["/root/capsule"],"environmentDirectories":["/root/capsule/**/.venv"],"pipenvExecutable":"pipenv","poetryExecutable":"poetry","cacheDirectory":"/root/capsule/code/vscode-data/User/globalStorage/ms-python.vscode-python-envs/pythonLocator"}
+2026-02-26 22:18:09.274 [error] [pet] [2m  14.860087854s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Python in "/opt/conda", trying slower approach
+
+2026-02-26 22:18:09.277 [error] [pet] [2m  14.863107918s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Conda in "/opt/conda", trying slower approach
+
+2026-02-26 22:18:09.307 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:18:09.309 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:18:15.917 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:18:15.919 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:18:24.415 [warning] [pet] Configure request timed out, killing hung process for restart
+2026-02-26 22:18:24.415 [info] [pet] Killing hung/crashed PET process
+2026-02-26 22:18:24.415 [error] [pet] configure: Configuration error Request 'configure' timed out after 30000ms
+2026-02-26 22:18:24.415 [warning] [pet] Request timed out, killing hung process for restart
+2026-02-26 22:18:24.415 [error] [pet] Error refreshing Request 'configure' timed out after 30000ms
+2026-02-26 22:18:24.415 [warning] [pet] Restarting Python Environment Tools (attempt 1/3, waiting 1000ms)
+2026-02-26 22:18:24.418 [error] [pet] Python Environment Tools exited unexpectedly with code null, signal SIGTERM
+2026-02-26 22:18:24.419 [info] [interpreterSelection] capsule: none (source: defaultEnvManager)
+2026-02-26 22:18:25.424 [info] [pet] Starting Python Locator /root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/python-env-tools/bin/pet server
+2026-02-26 22:18:25.424 [info] [pet] Python Environment Tools restarted successfully
+2026-02-26 22:18:25.425 [info] [pet] configure: Sending configuration update: {"workspaceDirectories":["/root/capsule"],"environmentDirectories":["/root/capsule/**/.venv"],"pipenvExecutable":"pipenv","poetryExecutable":"poetry","cacheDirectory":"/root/capsule/code/vscode-data/User/globalStorage/ms-python.vscode-python-envs/pythonLocator"}
+2026-02-26 22:18:36.785 [error] [pet] [2m  11.360184451s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Python in "/opt/conda", trying slower approach
+
+2026-02-26 22:18:36.792 [error] [pet] [2m  11.364397916s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Conda in "/opt/conda", trying slower approach
+
+2026-02-26 22:18:36.821 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:18:36.822 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:18:55.425 [warning] [pet] Configure request timed out, killing hung process for restart
+2026-02-26 22:18:55.425 [info] [pet] Killing hung/crashed PET process
+2026-02-26 22:18:55.425 [error] [pet] configure: Configuration error Request 'configure' timed out after 30000ms
+2026-02-26 22:18:55.425 [warning] [pet] Request timed out, killing hung process for restart
+2026-02-26 22:18:55.425 [error] [pet] Error refreshing Request 'configure' timed out after 30000ms
+2026-02-26 22:18:55.426 [warning] [pet] Restarting Python Environment Tools (attempt 1/3, waiting 1000ms)
+2026-02-26 22:18:55.430 [error] [pet] Python Environment Tools exited unexpectedly with code null, signal SIGTERM
+2026-02-26 22:18:56.433 [info] [pet] Starting Python Locator /root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/python-env-tools/bin/pet server
+2026-02-26 22:18:56.433 [info] [pet] Python Environment Tools restarted successfully
+2026-02-26 22:18:56.434 [info] [pet] configure: Sending configuration update: {"workspaceDirectories":["/root/capsule"],"environmentDirectories":["/root/capsule/**/.venv"],"pipenvExecutable":"pipenv","poetryExecutable":"poetry","cacheDirectory":"/root/capsule/code/vscode-data/User/globalStorage/ms-python.vscode-python-envs/pythonLocator"}
+2026-02-26 22:19:26.435 [warning] [pet] Configure request timed out, killing hung process for restart
+2026-02-26 22:19:26.435 [info] [pet] Killing hung/crashed PET process
+2026-02-26 22:19:26.435 [error] [pet] configure: Configuration error Request 'configure' timed out after 30000ms
+2026-02-26 22:19:26.435 [warning] [pet] Request timed out, killing hung process for restart
+2026-02-26 22:19:26.435 [error] [pet] Error refreshing Request 'configure' timed out after 30000ms
+2026-02-26 22:19:26.435 [warning] [pet] Restarting Python Environment Tools (attempt 2/3, waiting 2000ms)
+2026-02-26 22:19:26.436 [error] [pet] Python Environment Tools exited unexpectedly with code null, signal SIGTERM
+2026-02-26 22:19:28.442 [info] [pet] Starting Python Locator /root/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-linux-x64/python-env-tools/bin/pet server
+2026-02-26 22:19:28.442 [info] [pet] Python Environment Tools restarted successfully
+2026-02-26 22:19:28.442 [info] [pet] configure: Sending configuration update: {"workspaceDirectories":["/root/capsule"],"environmentDirectories":[],"pipenvExecutable":"pipenv","poetryExecutable":"poetry","cacheDirectory":"/root/capsule/code/vscode-data/User/globalStorage/ms-python.vscode-python-envs/pythonLocator"}
+2026-02-26 22:19:28.462 [error] [pet] [2m   0.020559872s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Python in "/opt/conda", trying slower approach
+
+2026-02-26 22:19:28.468 [error] [pet] [2m   0.026290665s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Conda in "/opt/conda", trying slower approach
+
+2026-02-26 22:19:28.473 [info] Discovered manager: (Conda) /opt/conda/bin/conda
+2026-02-26 22:19:28.473 [info] Discovered env: /opt/conda/bin/python
+2026-02-26 22:19:28.486 [error] [pet] [2m   0.044214114s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Python in "/opt/conda", trying slower approach
+
+2026-02-26 22:19:28.515 [info] Discovered env: /usr/bin/python3
+2026-02-26 22:19:28.546 [info] Using conda from cache: /opt/conda/bin/conda
+2026-02-26 22:19:28.547 [info] === Conda Shell Activation Map Generation ===
+Environment Configuration:
+    - Identifier: "base"
+    - Prefix: "/opt/conda"
+    - Name: "base"
+
+✓ Conda already active on launch, using default activation commands
+==========================================
+2026-02-26 22:19:28.547 [info] Found base environment: /opt/conda
+2026-02-26 22:19:28.552 [info] [pet] Telemetry:  {"event":"RefreshPerformance","data":{"refreshPerformance":{"total":100,"breakdown":{"GlobalVirtualEnvs":1,"Locators":70,"Path":100,"Workspaces":11},"locators":{"Conda":43,"Homebrew":0,"LinuxGlobal":69,"PipEnv":0,"Pixi":0,"Poetry":0,"PyEnv":0,"Uv":0,"Venv":0,"VirtualEnv":0,"VirtualEnvWrapper":0}}}}
+2026-02-26 22:19:28.572 [error] [pet] [2m   0.122306176s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Python in "/opt/conda", trying slower approach
+[2m   0.126187117s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Conda in "/opt/conda", trying slower approach
+
+2026-02-26 22:19:28.577 [info] Discovered manager: (Conda) /opt/conda/bin/conda
+2026-02-26 22:19:28.579 [info] Discovered env: /opt/conda/bin/python
+2026-02-26 22:19:28.595 [error] [pet] [2m   0.148734545s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Python in "/opt/conda", trying slower approach
+
+2026-02-26 22:19:28.597 [info] Discovered env: /usr/bin/python3
+2026-02-26 22:19:28.600 [info] Using conda from cache: /opt/conda/bin/conda
+2026-02-26 22:19:28.600 [info] === Conda Shell Activation Map Generation ===
+Environment Configuration:
+    - Identifier: "base"
+    - Prefix: "/opt/conda"
+    - Name: "base"
+
+✓ Conda already active on launch, using default activation commands
+==========================================
+2026-02-26 22:19:28.600 [info] Found base environment: /opt/conda
+2026-02-26 22:19:28.603 [info] [pet] Telemetry:  {"event":"RefreshPerformance","data":{"refreshPerformance":{"total":44,"breakdown":{"GlobalVirtualEnvs":0,"Locators":40,"Path":44,"Workspaces":4},"locators":{"Conda":39,"Homebrew":0,"LinuxGlobal":37,"PipEnv":0,"Pixi":0,"Poetry":0,"PyEnv":0,"Uv":0,"Venv":0,"VirtualEnv":0,"VirtualEnvWrapper":0}}}}
+2026-02-26 22:19:28.604 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:19:28.605 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:19:28.606 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:19:28.666 [error] [pet] [2m   0.166062249s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Python in "/opt/conda", trying slower approach
+[2m   0.166511353s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Python in "/opt/conda", trying slower approach
+[2m   0.167666495s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Python in "/opt/conda", trying slower approach
+[2m   0.168489171s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Python in "/opt/conda", trying slower approach
+[2m   0.169199562s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Python in "/opt/conda", trying slower approach
+[2m   0.176786208s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Python in "/opt/conda", trying slower approach
+[2m   0.177869371s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Python in "/opt/conda", trying slower approach
+[2m   0.179930064s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Python in "/opt/conda", trying slower approach
+[2m   0.179017442s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Python in "/opt/conda", trying slower approach
+[2m   0.181133250s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Conda in "/opt/conda", trying slower approach
+[2m   0.181230818s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Conda in "/opt/conda", trying slower approach
+[2m   0.181846086s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Python in "/opt/conda", trying slower approach
+[2m   0.182142756s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Python in "/opt/conda", trying slower approach
+[2m   0.182377426s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Conda in "/opt/conda", trying slower approach
+[2m   0.182323989s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Python in "/opt/conda", trying slower approach
+[2m   0.186903665s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Conda in "/opt/conda", trying slower approach
+[2m   0.187253561s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Python in "/opt/conda", trying slower approach
+[2m   0.187405386s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Python in "/opt/conda", trying slower approach
+[2m   0.187899189s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Conda in "/opt/conda", trying slower approach
+[2m   0.216589833s[0m [33m WARN[0m [2mpet_conda::package[0m[2m:[0m Unable to find conda package Python in "/opt/conda", trying slower approach
+
+2026-02-26 22:19:28.668 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:19:28.668 [info] Using conda from cache: /opt/conda/bin/conda
+2026-02-26 22:19:28.668 [info] === Conda Shell Activation Map Generation ===
+Environment Configuration:
+    - Identifier: "base"
+    - Prefix: "/opt/conda"
+    - Name: "base"
+
+✓ Conda already active on launch, using default activation commands
+==========================================
+2026-02-26 22:19:28.668 [info] Found base environment: /opt/conda
+2026-02-26 22:19:28.669 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:19:28.669 [info] Using conda from cache: /opt/conda/bin/conda
+2026-02-26 22:19:28.669 [info] === Conda Shell Activation Map Generation ===
+Environment Configuration:
+    - Identifier: "base"
+    - Prefix: "/opt/conda"
+    - Name: "base"
+
+✓ Conda already active on launch, using default activation commands
+==========================================
+2026-02-26 22:19:28.669 [info] Found base environment: /opt/conda
+2026-02-26 22:19:28.669 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:19:28.669 [info] Using conda from cache: /opt/conda/bin/conda
+2026-02-26 22:19:28.669 [info] === Conda Shell Activation Map Generation ===
+Environment Configuration:
+    - Identifier: "base"
+    - Prefix: "/opt/conda"
+    - Name: "base"
+
+✓ Conda already active on launch, using default activation commands
+==========================================
+2026-02-26 22:19:28.669 [info] Found base environment: /opt/conda
+2026-02-26 22:19:28.670 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:19:28.670 [info] Using conda from cache: /opt/conda/bin/conda
+2026-02-26 22:19:28.670 [info] === Conda Shell Activation Map Generation ===
+Environment Configuration:
+    - Identifier: "base"
+    - Prefix: "/opt/conda"
+    - Name: "base"
+
+✓ Conda already active on launch, using default activation commands
+==========================================
+2026-02-26 22:19:28.670 [info] Found base environment: /opt/conda
+2026-02-26 22:19:28.670 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:19:28.670 [info] Using conda from cache: /opt/conda/bin/conda
+2026-02-26 22:19:28.670 [info] === Conda Shell Activation Map Generation ===
+Environment Configuration:
+    - Identifier: "base"
+    - Prefix: "/opt/conda"
+    - Name: "base"
+
+✓ Conda already active on launch, using default activation commands
+==========================================
+2026-02-26 22:19:28.670 [info] Found base environment: /opt/conda
+2026-02-26 22:19:28.670 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:19:28.672 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:19:28.673 [info] Using conda from cache: /opt/conda/bin/conda
+2026-02-26 22:19:28.673 [info] === Conda Shell Activation Map Generation ===
+Environment Configuration:
+    - Identifier: "base"
+    - Prefix: "/opt/conda"
+    - Name: "base"
+
+✓ Conda already active on launch, using default activation commands
+==========================================
+2026-02-26 22:19:28.673 [info] Found base environment: /opt/conda
+2026-02-26 22:19:28.673 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:19:28.673 [info] Using conda from cache: /opt/conda/bin/conda
+2026-02-26 22:19:28.673 [info] === Conda Shell Activation Map Generation ===
+Environment Configuration:
+    - Identifier: "base"
+    - Prefix: "/opt/conda"
+    - Name: "base"
+
+✓ Conda already active on launch, using default activation commands
+==========================================
+2026-02-26 22:19:28.673 [info] Found base environment: /opt/conda
+2026-02-26 22:19:28.673 [info] Discovered manager: (Conda) /opt/conda/bin/conda
+2026-02-26 22:19:28.673 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:19:28.673 [info] Using conda from cache: /opt/conda/bin/conda
+2026-02-26 22:19:28.674 [info] === Conda Shell Activation Map Generation ===
+Environment Configuration:
+    - Identifier: "base"
+    - Prefix: "/opt/conda"
+    - Name: "base"
+
+✓ Conda already active on launch, using default activation commands
+==========================================
+2026-02-26 22:19:28.674 [info] Found base environment: /opt/conda
+2026-02-26 22:19:28.674 [info] Discovered env: /opt/conda/bin/python
+2026-02-26 22:19:28.674 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:19:28.674 [info] Using conda from cache: /opt/conda/bin/conda
+2026-02-26 22:19:28.674 [info] === Conda Shell Activation Map Generation ===
+Environment Configuration:
+    - Identifier: "base"
+    - Prefix: "/opt/conda"
+    - Name: "base"
+
+✓ Conda already active on launch, using default activation commands
+==========================================
+2026-02-26 22:19:28.674 [info] Found base environment: /opt/conda
+2026-02-26 22:19:28.674 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:19:28.675 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:19:28.675 [info] Using conda from cache: /opt/conda/bin/conda
+2026-02-26 22:19:28.675 [info] === Conda Shell Activation Map Generation ===
+Environment Configuration:
+    - Identifier: "base"
+    - Prefix: "/opt/conda"
+    - Name: "base"
+
+✓ Conda already active on launch, using default activation commands
+==========================================
+2026-02-26 22:19:28.675 [info] Found base environment: /opt/conda
+2026-02-26 22:19:28.675 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:19:28.675 [info] Discovered env: /usr/bin/python3
+2026-02-26 22:19:28.676 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:19:28.676 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:19:28.678 [info] [interpreterSelection] global: none (source: defaultEnvManager)
+2026-02-26 22:19:28.687 [info] [pet] Telemetry:  {"event":"RefreshPerformance","data":{"refreshPerformance":{"total":68,"breakdown":{"GlobalVirtualEnvs":0,"Locators":58,"Path":68,"Workspaces":8},"locators":{"Conda":56,"Homebrew":0,"LinuxGlobal":55,"PipEnv":0,"Pixi":0,"Poetry":0,"PyEnv":0,"Uv":0,"Venv":0,"VirtualEnv":0,"VirtualEnvWrapper":0}}}}
+2026-02-26 22:19:28.688 [info] Python API: Changed environment from undefined to Python 3.10.6 for: global
+2026-02-26 22:19:28.688 [info] Internal: Changed environment from undefined to Python 3.10.6 for: global
+2026-02-26 22:19:28.689 [info] Python API: Changed environment from undefined to Python 3.10.6 for: /root/capsule
+2026-02-26 22:19:28.689 [info] Internal: Changed environment from undefined to Python 3.10.6 for: /root/capsule
+2026-02-26 22:19:28.691 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:19:28.691 [info] Using conda from cache: /opt/conda/bin/conda
+2026-02-26 22:19:28.691 [info] === Conda Shell Activation Map Generation ===
+Environment Configuration:
+    - Identifier: "base"
+    - Prefix: "/opt/conda"
+    - Name: "base"
+
+✓ Conda already active on launch, using default activation commands
+==========================================
+2026-02-26 22:19:28.691 [info] Found base environment: /opt/conda
+2026-02-26 22:19:28.693 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:19:28.693 [info] Using conda from cache: /opt/conda/bin/conda
+2026-02-26 22:19:28.693 [info] === Conda Shell Activation Map Generation ===
+Environment Configuration:
+    - Identifier: "base"
+    - Prefix: "/opt/conda"
+    - Name: "base"
+
+✓ Conda already active on launch, using default activation commands
+==========================================
+2026-02-26 22:19:28.693 [info] Found base environment: /opt/conda
+2026-02-26 22:19:28.694 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:19:28.694 [info] Using conda from cache: /opt/conda/bin/conda
+2026-02-26 22:19:28.694 [info] === Conda Shell Activation Map Generation ===
+Environment Configuration:
+    - Identifier: "base"
+    - Prefix: "/opt/conda"
+    - Name: "base"
+
+✓ Conda already active on launch, using default activation commands
+==========================================
+2026-02-26 22:19:28.694 [info] Found base environment: /opt/conda
+2026-02-26 22:19:28.694 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:19:28.695 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:19:28.696 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:19:28.696 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:19:28.697 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:19:28.698 [info] Using conda from cache: /opt/conda/bin/conda
+2026-02-26 22:19:28.698 [info] === Conda Shell Activation Map Generation ===
+Environment Configuration:
+    - Identifier: "base"
+    - Prefix: "/opt/conda"
+    - Name: "base"
+
+✓ Conda already active on launch, using default activation commands
+==========================================
+2026-02-26 22:19:28.698 [info] Found base environment: /opt/conda
+2026-02-26 22:19:28.698 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:19:28.698 [info] Using conda from cache: /opt/conda/bin/conda
+2026-02-26 22:19:28.698 [info] === Conda Shell Activation Map Generation ===
+Environment Configuration:
+    - Identifier: "base"
+    - Prefix: "/opt/conda"
+    - Name: "base"
+
+✓ Conda already active on launch, using default activation commands
+==========================================
+2026-02-26 22:19:28.698 [info] Found base environment: /opt/conda
+2026-02-26 22:19:28.698 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:19:28.700 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:19:28.701 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:19:28.701 [info] Using conda from cache: /opt/conda/bin/conda
+2026-02-26 22:19:28.701 [info] === Conda Shell Activation Map Generation ===
+Environment Configuration:
+    - Identifier: "base"
+    - Prefix: "/opt/conda"
+    - Name: "base"
+
+✓ Conda already active on launch, using default activation commands
+==========================================
+2026-02-26 22:19:28.701 [info] Found base environment: /opt/conda
+2026-02-26 22:19:28.711 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:19:28.711 [info] Using conda from cache: /opt/conda/bin/conda
+2026-02-26 22:19:28.711 [info] === Conda Shell Activation Map Generation ===
+Environment Configuration:
+    - Identifier: "base"
+    - Prefix: "/opt/conda"
+    - Name: "base"
+
+✓ Conda already active on launch, using default activation commands
+==========================================
+2026-02-26 22:19:28.711 [info] Found base environment: /opt/conda
+2026-02-26 22:19:45.991 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:19:45.992 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:19:45.993 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-26 22:19:45.994 [info] Using conda from cache: /opt/conda/bin/conda
+2026-02-26 22:19:45.994 [info] === Conda Shell Activation Map Generation ===
+Environment Configuration:
+    - Identifier: "base"
+    - Prefix: "/opt/conda"
+    - Name: "base"
+
+✓ Conda already active on launch, using default activation commands
+==========================================
+2026-02-26 22:19:45.994 [info] Found base environment: /opt/conda
+2026-02-26 22:20:09.310 [info] [interpreterSelection] Interpreter settings changed, re-evaluating priority chain for all scopes
+2026-02-26 22:20:09.310 [info] [interpreterSelection] Applying initial environment selection for 1 workspace folder(s)
+2026-02-26 22:20:09.396 [info] [interpreterSelection] capsule: Python 3.10.6 (source: pythonProjects)
+2026-02-26 22:20:09.398 [info] [interpreterSelection] global: Python 3.10.6 (source: defaultEnvManager)

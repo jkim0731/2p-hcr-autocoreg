@@ -1,0 +1,10 @@
+Visual Studio Code (1.109.5, undefined, desktop)
+Jupyter Extension Version: 2025.9.1.
+Python Extension Version: 2026.2.0.
+Python Environment Extension Version: 1.20.1.
+Pylance Extension Version: 2026.1.1.
+Platform: linux (x64).
+Home = /root
+Temp Storage folder ~/capsule/code/vscode-data/User/globalStorage/ms-toolsai.jupyter/version-2025.9.1
+Workspace folder ~/capsule
+21:39:09.642 [error] Failed to refresh the list of interpreters
