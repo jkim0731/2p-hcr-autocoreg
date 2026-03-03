@@ -1,0 +1,47 @@
+Visual Studio Code (1.109.5, undefined, desktop)
+Jupyter Extension Version: 2025.9.1.
+Python Extension Version: 2026.2.0.
+Python Environment Extension Version: 1.20.1.
+Pylance Extension Version: 2026.1.1.
+Platform: linux (x64).
+Home = /root
+Temp Storage folder ~/capsule/code/vscode-data/User/globalStorage/ms-toolsai.jupyter/version-2025.9.1
+Workspace folder ~/capsule
+01:00:46.651 [info] Starting Kernel (Python Path: /opt/conda/bin/python, Conda, 3.10.12) for '~/capsule/code/260227_gfp_count_verification.ipynb' (disableUI=true)
+01:00:46.653 [info] Starting Kernel (Python Path: /opt/conda/bin/python, Conda, 3.10.12) for '~/capsule/code/step_1_process_files.ipynb' (disableUI=true)
+01:00:46.654 [info] Starting Kernel (Python Path: /opt/conda/bin/python, Conda, 3.10.12) for '~/capsule/code/step_3_more_iterations.ipynb' (disableUI=true)
+01:00:48.071 [info] Process Execution: /opt/conda/bin/python -c "import ipykernel; print(ipykernel.__version__); print("5dc3a68c-e34e-4080-9c3e-2a532b2ccb4d"); print(ipykernel.__file__)"
+01:00:48.077 [info] Process Execution: /opt/conda/bin/python -m ipykernel_launcher --f=~/.local/share/jupyter/runtime/kernel-v3182676bd46a08460f09161b549edd397a2c22882.json
+    > cwd: ~/capsule/code
+01:00:48.087 [info] Process Execution: /opt/conda/bin/python -m pip list
+01:00:48.101 [info] Process Execution: /opt/conda/bin/python -c "import ipykernel; print(ipykernel.__version__); print("5dc3a68c-e34e-4080-9c3e-2a532b2ccb4d"); print(ipykernel.__file__)"
+01:00:48.106 [info] Process Execution: /opt/conda/bin/python -m ipykernel_launcher --f=~/.local/share/jupyter/runtime/kernel-v3dbc8042dc316daca80bd9238d9cc520302ac14b8.json
+    > cwd: ~/capsule/code
+01:00:48.112 [info] Process Execution: /opt/conda/bin/python -c "import ipykernel; print(ipykernel.__version__); print("5dc3a68c-e34e-4080-9c3e-2a532b2ccb4d"); print(ipykernel.__file__)"
+01:00:48.117 [info] Process Execution: /opt/conda/bin/python -m ipykernel_launcher --f=~/.local/share/jupyter/runtime/kernel-v363beff4ecf76ea619682b67e8221399f88e21dc0.json
+    > cwd: ~/capsule/code
+01:00:48.581 [info] Kernel successfully started
+01:00:48.588 [info] Process Execution: /opt/conda/bin/python ~/.vscode/extensions/ms-toolsai.jupyter-2025.9.1-linux-x64/pythonFiles/printJupyterDataDir.py
+01:00:48.590 [info] Kernel successfully started
+01:00:48.600 [info] Kernel successfully started
+01:00:48.607 [error] Failed to get baseUrl [Error: EEXIST: file already exists, mkdir '~/.vscode/extensions/ms-toolsai.jupyter-2025.9.1-linux-x64/temp/scripts/7df0c2453e49ed05d3d0f3794defcebd56ad42641b177491fc43aece0cf55ce2/jupyter/nbextensions/anywidget'] {
+  errno: -17,
+  code: 'EEXIST',
+  syscall: 'mkdir',
+  path: '~/.vscode/extensions/ms-toolsai.jupyter-2025.9.1-linux-x64/temp/scripts/7df0c2453e49ed05d3d0f3794defcebd56ad42641b177491fc43aece0cf55ce2/jupyter/nbextensions/anywidget'
+}
+01:00:49.128 [error] Failed to get baseUrl [Error: EEXIST: file already exists, mkdir '~/.vscode/extensions/ms-toolsai.jupyter-2025.9.1-linux-x64/temp/scripts/7df0c2453e49ed05d3d0f3794defcebd56ad42641b177491fc43aece0cf55ce2/jupyter/nbextensions/anywidget'] {
+  errno: -17,
+  code: 'EEXIST',
+  syscall: 'mkdir',
+  path: '~/.vscode/extensions/ms-toolsai.jupyter-2025.9.1-linux-x64/temp/scripts/7df0c2453e49ed05d3d0f3794defcebd56ad42641b177491fc43aece0cf55ce2/jupyter/nbextensions/anywidget'
+}
+01:00:49.129 [warn] Failed to fetch script sources [Error: EEXIST: file already exists, mkdir '~/.vscode/extensions/ms-toolsai.jupyter-2025.9.1-linux-x64/temp/scripts/7df0c2453e49ed05d3d0f3794defcebd56ad42641b177491fc43aece0cf55ce2/jupyter/nbextensions/anywidget'] {
+  errno: -17,
+  code: 'EEXIST',
+  syscall: 'mkdir',
+  path: '~/.vscode/extensions/ms-toolsai.jupyter-2025.9.1-linux-x64/temp/scripts/7df0c2453e49ed05d3d0f3794defcebd56ad42641b177491fc43aece0cf55ce2/jupyter/nbextensions/anywidget'
+}
+01:00:49.168 [error] Widget Error: Failed to access CDN https://unpkg.com/ after 0 attempt(s), TypeError: Failed to fetch
+01:00:49.168 [error] Widget Error: Failed to access CDN https://unpkg.com/ after 0 attempt(s), TypeError: Failed to fetch
+01:12:56.404 [error] Widget Error: Failed to access CDN https://unpkg.com/ after 0 attempt(s), TypeError: Failed to fetch

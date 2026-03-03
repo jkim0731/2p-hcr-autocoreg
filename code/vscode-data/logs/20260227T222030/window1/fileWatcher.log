@@ -1,0 +1,2 @@
+2026-02-27 22:20:35.980 [error] [File Watcher ('parcel')] Unexpected error: inotify_add_watch on '/root/capsule/code/vscode-data/CachedExtensionVSIXs/.trash' failed: No such file or directory (EUNKNOWN) (path: /root/capsule)
+2026-02-27 22:20:35.980 [error] [File Watcher (universal)] inotify_add_watch on '/root/capsule/code/vscode-data/CachedExtensionVSIXs/.trash' failed: No such file or directory

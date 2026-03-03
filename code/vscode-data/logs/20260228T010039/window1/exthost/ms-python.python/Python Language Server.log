@@ -1,0 +1,14 @@
+2026-02-28 01:00:47.877 [info] Client: Pylance client (2026.1.1) started with python extension (2026.2.0)
+2026-02-28 01:00:48.344 [info] (5715): Server root directory: file:///root/.vscode/extensions/ms-python.vscode-pylance-2026.1.1/dist
+2026-02-28 01:00:48.344 [info] (5715): Pylance language server 2026.1.1 (pyright version 1.1.408, commit 138238b4) starting
+2026-02-28 01:00:48.348 [info] (5715): Starting service instance "capsule" for workspace "/root/capsule"
+2026-02-28 01:00:49.168 [info] (5715): Loading background bundle file:///root/.vscode/extensions/ms-python.vscode-pylance-2026.1.1/dist/copilot-background.bundle.js into file:///root/capsule...
+2026-02-28 01:00:49.249 [info] (5715): FG(capsule): Setting environmentName for service "capsule": "3.10.12 (base conda)"
+2026-02-28 01:00:49.249 [info] (5715): FG(capsule): Setting pythonPath for service "capsule": "/opt/conda/bin/python"
+2026-02-28 01:00:49.250 [info] (5715): FG(capsule): No include entries specified; assuming /root/capsule
+2026-02-28 01:00:49.250 [info] (5715): FG(capsule): Auto-excluding **/node_modules
+2026-02-28 01:00:49.250 [info] (5715): FG(capsule): Auto-excluding **/__pycache__
+2026-02-28 01:00:49.251 [info] (5715): FG(capsule): Auto-excluding **/.*
+2026-02-28 01:00:49.274 [info] (5715): FG(capsule): Assuming Python version 3.10.12.final.0
+2026-02-28 01:00:49.349 [info] (5715): [Editable Installs] Starting dynamic pth file resolution for Python: /opt/conda/bin/python
+2026-02-28 01:00:49.361 [info] (5715): [Editable Installs] No sandbox available for Python /opt/conda/bin/python. Dynamic pth file resolution requires Python 3.13 or later.

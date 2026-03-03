@@ -1,0 +1,82 @@
+Visual Studio Code (1.109.5, undefined, desktop)
+Jupyter Extension Version: 2025.9.1.
+Python Extension Version: 2026.2.0.
+Python Environment Extension Version: 1.20.1.
+Pylance Extension Version: 2026.1.1.
+Platform: linux (x64).
+Home = /root
+Temp Storage folder ~/capsule/code/vscode-data/User/globalStorage/ms-toolsai.jupyter/version-2025.9.1
+Workspace folder ~/capsule
+22:59:25.197 [info] Starting Kernel (Python Path: /opt/conda/bin/python, Conda, 3.10.12) for '~/capsule/code/260227_gfp_count_verification.ipynb' (disableUI=true)
+22:59:25.199 [info] Starting Kernel (Python Path: /opt/conda/bin/python, Conda, 3.10.12) for '~/capsule/code/step_1_process_files.ipynb' (disableUI=true)
+22:59:25.199 [info] Starting Kernel (Python Path: /opt/conda/bin/python, Conda, 3.10.12) for '~/capsule/code/step_3_more_iterations.ipynb' (disableUI=true)
+22:59:26.691 [info] Process Execution: /opt/conda/bin/python -c "import ipykernel; print(ipykernel.__version__); print("5dc3a68c-e34e-4080-9c3e-2a532b2ccb4d"); print(ipykernel.__file__)"
+22:59:26.697 [info] Process Execution: /opt/conda/bin/python -m ipykernel_launcher --f=~/.local/share/jupyter/runtime/kernel-v3e26fdd72128345d34ee09df5b374f7a28f3c1a32.json
+    > cwd: ~/capsule/code
+22:59:26.716 [info] Process Execution: /opt/conda/bin/python -c "import ipykernel; print(ipykernel.__version__); print("5dc3a68c-e34e-4080-9c3e-2a532b2ccb4d"); print(ipykernel.__file__)"
+22:59:26.721 [info] Process Execution: /opt/conda/bin/python -m ipykernel_launcher --f=~/.local/share/jupyter/runtime/kernel-v309668c539be34d2bbab2b1a14ebff039e8057ece.json
+    > cwd: ~/capsule/code
+22:59:26.732 [info] Process Execution: /opt/conda/bin/python -m pip list
+22:59:26.743 [info] Process Execution: /opt/conda/bin/python -c "import ipykernel; print(ipykernel.__version__); print("5dc3a68c-e34e-4080-9c3e-2a532b2ccb4d"); print(ipykernel.__file__)"
+22:59:26.747 [info] Process Execution: /opt/conda/bin/python -m ipykernel_launcher --f=~/.local/share/jupyter/runtime/kernel-v3e7efb0afac8e4c1634558a3edc9be4cd2c708ac3.json
+    > cwd: ~/capsule/code
+22:59:27.212 [info] Kernel successfully started
+22:59:27.220 [info] Process Execution: /opt/conda/bin/python ~/.vscode/extensions/ms-toolsai.jupyter-2025.9.1-linux-x64/pythonFiles/printJupyterDataDir.py
+22:59:27.222 [info] Kernel successfully started
+22:59:27.240 [info] Kernel successfully started
+22:59:27.819 [warn] Cell completed with errors [Iu [Error]: No module named 'lamf_analysis'
+	at n.execute (~/.vscode/extensions/ms-toolsai.jupyter-2025.9.1-linux-x64/dist/extension.node.js:302:4958)] {
+  ename: 'ModuleNotFoundError',
+  evalue: "No module named 'lamf_analysis'",
+  traceback: [
+    '\x1B[0;31m---------------------------------------------------------------------------\x1B[0m',
+    '\x1B[0;31mModuleNotFoundError\x1B[0m                       Traceback (most recent call last)',
+    'Cell \x1B[0;32mIn[1], line 9\x1B[0m\n' +
+      '\x1B[1;32m      6\x1B[0m \x1B[38;5;28;01mimport\x1B[39;00m\x1B[38;5;250m \x1B[39m\x1B[38;5;21;01mjson\x1B[39;00m\n' +
+      '\x1B[1;32m      7\x1B[0m \x1B[38;5;28;01mfrom\x1B[39;00m\x1B[38;5;250m \x1B[39m\x1B[38;5;21;01mscipy\x1B[39;00m\x1B[38;5;250m \x1B[39m\x1B[38;5;28;01mimport\x1B[39;00m ndimage \x1B[38;5;28;01mas\x1B[39;00m ndi\n' +
+      '\x1B[0;32m----> 9\x1B[0m \x1B[38;5;28;01mfrom\x1B[39;00m\x1B[38;5;250m \x1B[39m\x1B[38;5;21;01mlamf_analysis\x1B[39;00m\x1B[38;5;21;01m.\x1B[39;00m\x1B[38;5;21;01mcode_ocean\x1B[39;00m\x1B[38;5;250m \x1B[39m\x1B[38;5;28;01mimport\x1B[39;00m code_ocean_utils \x1B[38;5;28;01mas\x1B[39;00m cou\n' +
+      '\x1B[1;32m     10\x1B[0m \x1B[38;5;28;01mfrom\x1B[39;00m\x1B[38;5;250m \x1B[39m\x1B[38;5;21;01mlamf_analysis\x1B[39;00m\x1B[38;5;21;01m.\x1B[39;00m\x1B[38;5;21;01mophys\x1B[39;00m\x1B[38;5;250m \x1B[39m\x1B[38;5;28;01mimport\x1B[39;00m zstack_utils\n' +
+      '\x1B[1;32m     12\x1B[0m \x1B[38;5;28;01mfrom\x1B[39;00m\x1B[38;5;250m \x1B[39m\x1B[38;5;21;01mcodeocean\x1B[39;00m\x1B[38;5;21;01m.\x1B[39;00m\x1B[38;5;21;01mdata_asset\x1B[39;00m\x1B[38;5;250m \x1B[39m\x1B[38;5;28;01mimport\x1B[39;00m DataAssetSearchParams\n',
+    "\x1B[0;31mModuleNotFoundError\x1B[0m: No module named 'lamf_analysis'"
+  ]
+}
+22:59:27.821 [warn] Cancel all remaining cells due to cancellation or failure in execution
+22:59:27.979 [error] Widget Error: Failed to access CDN https://unpkg.com/ after 0 attempt(s), TypeError: Failed to fetch
+22:59:27.986 [error] Widget Error: Failed to access CDN https://unpkg.com/ after 0 attempt(s), TypeError: Failed to fetch
+23:02:09.974 [warn] Cell completed with errors [Iu [Error]: No module named 'lamf_analysis'
+	at n.execute (~/.vscode/extensions/ms-toolsai.jupyter-2025.9.1-linux-x64/dist/extension.node.js:302:4958)] {
+  ename: 'ModuleNotFoundError',
+  evalue: "No module named 'lamf_analysis'",
+  traceback: [
+    '\x1B[0;31m---------------------------------------------------------------------------\x1B[0m',
+    '\x1B[0;31mModuleNotFoundError\x1B[0m                       Traceback (most recent call last)',
+    'Cell \x1B[0;32mIn[2], line 9\x1B[0m\n' +
+      '\x1B[1;32m      6\x1B[0m \x1B[38;5;28;01mimport\x1B[39;00m\x1B[38;5;250m \x1B[39m\x1B[38;5;21;01mjson\x1B[39;00m\n' +
+      '\x1B[1;32m      7\x1B[0m \x1B[38;5;28;01mfrom\x1B[39;00m\x1B[38;5;250m \x1B[39m\x1B[38;5;21;01mscipy\x1B[39;00m\x1B[38;5;250m \x1B[39m\x1B[38;5;28;01mimport\x1B[39;00m ndimage \x1B[38;5;28;01mas\x1B[39;00m ndi\n' +
+      '\x1B[0;32m----> 9\x1B[0m \x1B[38;5;28;01mfrom\x1B[39;00m\x1B[38;5;250m \x1B[39m\x1B[38;5;21;01mlamf_analysis\x1B[39;00m\x1B[38;5;21;01m.\x1B[39;00m\x1B[38;5;21;01mcode_ocean\x1B[39;00m\x1B[38;5;250m \x1B[39m\x1B[38;5;28;01mimport\x1B[39;00m code_ocean_utils \x1B[38;5;28;01mas\x1B[39;00m cou\n' +
+      '\x1B[1;32m     10\x1B[0m \x1B[38;5;28;01mfrom\x1B[39;00m\x1B[38;5;250m \x1B[39m\x1B[38;5;21;01mlamf_analysis\x1B[39;00m\x1B[38;5;21;01m.\x1B[39;00m\x1B[38;5;21;01mophys\x1B[39;00m\x1B[38;5;250m \x1B[39m\x1B[38;5;28;01mimport\x1B[39;00m zstack_utils\n' +
+      '\x1B[1;32m     12\x1B[0m \x1B[38;5;28;01mfrom\x1B[39;00m\x1B[38;5;250m \x1B[39m\x1B[38;5;21;01mcodeocean\x1B[39;00m\x1B[38;5;21;01m.\x1B[39;00m\x1B[38;5;21;01mdata_asset\x1B[39;00m\x1B[38;5;250m \x1B[39m\x1B[38;5;28;01mimport\x1B[39;00m DataAssetSearchParams\n',
+    "\x1B[0;31mModuleNotFoundError\x1B[0m: No module named 'lamf_analysis'"
+  ]
+}
+23:02:23.281 [warn] Cell completed with errors [Iu [Error]: No module named 'lamf_analysis'
+	at n.execute (~/.vscode/extensions/ms-toolsai.jupyter-2025.9.1-linux-x64/dist/extension.node.js:302:4958)] {
+  ename: 'ModuleNotFoundError',
+  evalue: "No module named 'lamf_analysis'",
+  traceback: [
+    '\x1B[0;31m---------------------------------------------------------------------------\x1B[0m',
+    '\x1B[0;31mModuleNotFoundError\x1B[0m                       Traceback (most recent call last)',
+    'Cell \x1B[0;32mIn[3], line 9\x1B[0m\n' +
+      '\x1B[1;32m      6\x1B[0m \x1B[38;5;28;01mimport\x1B[39;00m\x1B[38;5;250m \x1B[39m\x1B[38;5;21;01mjson\x1B[39;00m\n' +
+      '\x1B[1;32m      7\x1B[0m \x1B[38;5;28;01mfrom\x1B[39;00m\x1B[38;5;250m \x1B[39m\x1B[38;5;21;01mscipy\x1B[39;00m\x1B[38;5;250m \x1B[39m\x1B[38;5;28;01mimport\x1B[39;00m ndimage \x1B[38;5;28;01mas\x1B[39;00m ndi\n' +
+      '\x1B[0;32m----> 9\x1B[0m \x1B[38;5;28;01mfrom\x1B[39;00m\x1B[38;5;250m \x1B[39m\x1B[38;5;21;01mlamf_analysis\x1B[39;00m\x1B[38;5;21;01m.\x1B[39;00m\x1B[38;5;21;01mcode_ocean\x1B[39;00m\x1B[38;5;250m \x1B[39m\x1B[38;5;28;01mimport\x1B[39;00m code_ocean_utils \x1B[38;5;28;01mas\x1B[39;00m cou\n' +
+      '\x1B[1;32m     10\x1B[0m \x1B[38;5;28;01mfrom\x1B[39;00m\x1B[38;5;250m \x1B[39m\x1B[38;5;21;01mlamf_analysis\x1B[39;00m\x1B[38;5;21;01m.\x1B[39;00m\x1B[38;5;21;01mophys\x1B[39;00m\x1B[38;5;250m \x1B[39m\x1B[38;5;28;01mimport\x1B[39;00m zstack_utils\n' +
+      '\x1B[1;32m     12\x1B[0m \x1B[38;5;28;01mfrom\x1B[39;00m\x1B[38;5;250m \x1B[39m\x1B[38;5;21;01mcodeocean\x1B[39;00m\x1B[38;5;21;01m.\x1B[39;00m\x1B[38;5;21;01mdata_asset\x1B[39;00m\x1B[38;5;250m \x1B[39m\x1B[38;5;28;01mimport\x1B[39;00m DataAssetSearchParams\n',
+    "\x1B[0;31mModuleNotFoundError\x1B[0m: No module named 'lamf_analysis'"
+  ]
+}
+23:02:26.607 [info] Restart requested ~/capsule/code/step_1_process_files.ipynb
+23:02:26.625 [info] Process Execution: /opt/conda/bin/python -c "import ipykernel; print(ipykernel.__version__); print("5dc3a68c-e34e-4080-9c3e-2a532b2ccb4d"); print(ipykernel.__file__)"
+23:02:26.669 [info] Process Execution: /opt/conda/bin/python -m ipykernel_launcher --f=~/.local/share/jupyter/runtime/kernel-v338f0a4342cfb6c30bf15771fdfe8999bae87a149.json
+    > cwd: ~/capsule/code
+23:02:27.080 [info] Restarted 302f6ca3-087a-48f7-9a4b-c6ed7455fbc8

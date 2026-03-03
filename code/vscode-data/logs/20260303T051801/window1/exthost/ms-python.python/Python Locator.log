@@ -1,0 +1,62 @@
+2026-03-03 05:18:07.503 [info] Starting Python Locator /root/.vscode/extensions/ms-python.python-2026.2.0-linux-x64/python-env-tools/bin/pet server
+2026-03-03 05:18:08.029 [info] Discovered manager: (Conda) /opt/conda/bin/conda
+2026-03-03 05:18:08.430 [info] Discovered env: /opt/conda/bin/python
+2026-03-03 05:18:08.802 [info] Discovered env: /bin/python3
+2026-03-03 05:18:08.808 [info] Discovered env: /usr/bin/python3
+2026-03-03 05:18:08.839 [info] Locator Conda took 61.145813ms
+2026-03-03 05:18:08.839 [info] Locator Homebrew took 749.526µs
+2026-03-03 05:18:08.839 [info] Locator LinuxGlobal took 89.87896ms
+2026-03-03 05:18:08.839 [info] Locator PipEnv took 144.52µs
+2026-03-03 05:18:08.839 [info] Locator Pixi took 167.442µs
+2026-03-03 05:18:08.839 [info] Locator Poetry took 2.029434ms
+2026-03-03 05:18:08.839 [info] Locator PyEnv took 2.11443ms
+2026-03-03 05:18:08.840 [info] Locator Uv took 363.008µs
+2026-03-03 05:18:08.840 [info] Locator Venv took 207.976µs
+2026-03-03 05:18:08.840 [info] Locator VirtualEnv took 257.359µs
+2026-03-03 05:18:08.840 [info] Locator VirtualEnvWrapper took 472.136µs
+2026-03-03 05:18:08.840 [info] Locator GlobalVirtualEnvs took 880.347µs
+2026-03-03 05:18:08.840 [info] Locator Locators took 91.840268ms
+2026-03-03 05:18:08.840 [info] Locator Path took 114.158342ms
+2026-03-03 05:18:08.840 [info] Locator Workspaces took 4.140692ms
+2026-03-03 05:18:08.840 [info] Refresh completed in 114ms
+2026-03-03 05:18:08.842 [info] Resolved Python Environment /opt/conda/bin/python
+2026-03-03 05:18:08.842 [info] Resolved Python Environment /opt/conda/bin/python
+2026-03-03 05:57:25.575 [info] Resolved Python Environment /opt/conda/bin/python
+2026-03-03 05:57:57.634 [info] Resolved Python Environment /opt/conda/bin/python
+2026-03-03 05:58:26.210 [info] Discovered manager: (Conda) /opt/conda/bin/conda
+2026-03-03 05:58:26.210 [info] Discovered env: /opt/conda/bin/python
+2026-03-03 05:58:26.262 [info] Discovered env: /usr/bin/python3
+2026-03-03 05:58:26.265 [info] Discovered env: /bin/python3
+2026-03-03 05:58:26.288 [info] Locator Conda took 74.19395ms
+2026-03-03 05:58:26.288 [info] Locator Homebrew took 592.864µs
+2026-03-03 05:58:26.288 [info] Locator LinuxGlobal took 75.074736ms
+2026-03-03 05:58:26.288 [info] Locator PipEnv took 81.806µs
+2026-03-03 05:58:26.288 [info] Locator Pixi took 60.415µs
+2026-03-03 05:58:26.289 [info] Locator Poetry took 318.754µs
+2026-03-03 05:58:26.289 [info] Locator PyEnv took 296.653µs
+2026-03-03 05:58:26.289 [info] Locator Uv took 186.264µs
+2026-03-03 05:58:26.289 [info] Locator Venv took 40.383µs
+2026-03-03 05:58:26.289 [info] Locator VirtualEnv took 40.183µs
+2026-03-03 05:58:26.289 [info] Locator VirtualEnvWrapper took 83.266µs
+2026-03-03 05:58:26.289 [info] Locator GlobalVirtualEnvs took 70.115µs
+2026-03-03 05:58:26.289 [info] Locator Locators took 78.013137ms
+2026-03-03 05:58:26.289 [info] Locator Path took 100.540222ms
+2026-03-03 05:58:26.289 [info] Locator Workspaces took 3.193649ms
+2026-03-03 05:58:26.289 [info] Refresh completed in 100ms
+2026-03-03 05:58:31.527 [info] Resolved Python Environment /opt/conda/bin/python
+2026-03-03 06:12:32.087 [info] Resolved Python Environment /opt/conda/bin/python
+2026-03-03 06:13:11.286 [info] Resolved Python Environment /opt/conda/bin/python
+2026-03-03 06:14:09.882 [info] Resolved Python Environment /opt/conda/bin/python
+2026-03-03 06:16:28.067 [info] Resolved Python Environment /opt/conda/bin/python
+2026-03-03 06:17:09.936 [info] Resolved Python Environment /opt/conda/bin/python
+2026-03-03 06:18:10.074 [info] Resolved Python Environment /opt/conda/bin/python
+2026-03-03 06:21:00.462 [info] Resolved Python Environment /opt/conda/bin/python
+2026-03-03 06:22:18.663 [info] Resolved Python Environment /opt/conda/bin/python
+2026-03-03 06:23:03.854 [info] Resolved Python Environment /opt/conda/bin/python
+2026-03-03 06:23:38.411 [info] Resolved Python Environment /opt/conda/bin/python
+2026-03-03 06:31:25.140 [info] Resolved Python Environment /opt/conda/bin/python
+2026-03-03 06:31:56.870 [info] Resolved Python Environment /opt/conda/bin/python
+2026-03-03 06:32:58.599 [info] Resolved Python Environment /opt/conda/bin/python
+2026-03-03 06:33:33.101 [info] Resolved Python Environment /opt/conda/bin/python
+2026-03-03 06:34:59.333 [info] Resolved Python Environment /opt/conda/bin/python
+2026-03-03 06:37:04.706 [info] Resolved Python Environment /opt/conda/bin/python

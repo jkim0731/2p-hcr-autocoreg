@@ -1,0 +1,23 @@
+2026-02-27 22:59:24.954 [info] Native locator: Refresh started
+2026-02-27 22:59:25.008 [info] Conda environment manager found at: /opt/conda/bin/conda
+2026-02-27 22:59:25.008 [info] Using conda: /opt/conda/bin/conda
+2026-02-27 22:59:25.012 [info] Native locator: Refresh finished in 448 ms
+2026-02-27 22:59:25.047 [info] Native locator: Refresh started
+2026-02-27 22:59:25.074 [info] > /opt/conda/bin/conda info --json
+2026-02-27 22:59:25.190 [info] Native locator: Refresh started
+2026-02-27 22:59:25.196 [info] > pyenv which python
+2026-02-27 22:59:25.196 [info] cwd: .
+2026-02-27 22:59:25.281 [info] Conda environment manager found at: /opt/conda/bin/conda
+2026-02-27 22:59:25.281 [info] Conda set to: /opt/conda/bin/conda
+2026-02-27 22:59:25.286 [info] Native locator: Refresh finished in 238 ms
+2026-02-27 22:59:25.890 [info] Python interpreter path: /opt/conda/bin/python
+2026-02-27 22:59:25.892 [info] > /opt/conda/bin/conda config --get auto_activate_base
+2026-02-27 22:59:25.917 [info] > /opt/conda/bin/conda run -p /opt/conda --no-capture-output python ~/.vscode/extensions/ms-python.python-2026.2.0-linux-x64/python_files/get_output_via_markers.py ~/.vscode/extensions/ms-python.python-2026.2.0-linux-x64/python_files/printEnvVariables.py
+2026-02-27 22:59:25.917 [info] shell: bash
+2026-02-27 22:59:25.917 [info] > /opt/conda/bin/conda run -p /opt/conda --no-capture-output python ~/.vscode/extensions/ms-python.python-2026.2.0-linux-x64/python_files/get_output_via_markers.py ~/.vscode/extensions/ms-python.python-2026.2.0-linux-x64/python_files/printEnvVariables.py
+2026-02-27 22:59:25.917 [info] shell: bash
+2026-02-27 22:59:25.917 [info] > /opt/conda/bin/conda run -p /opt/conda --no-capture-output python ~/.vscode/extensions/ms-python.python-2026.2.0-linux-x64/python_files/get_output_via_markers.py ~/.vscode/extensions/ms-python.python-2026.2.0-linux-x64/python_files/printEnvVariables.py
+2026-02-27 22:59:25.917 [info] shell: bash
+2026-02-27 22:59:25.917 [info] > /opt/conda/bin/conda run -p /opt/conda --no-capture-output python ~/.vscode/extensions/ms-python.python-2026.2.0-linux-x64/python_files/get_output_via_markers.py ~/.vscode/extensions/ms-python.python-2026.2.0-linux-x64/python_files/printEnvVariables.py
+2026-02-27 22:59:25.917 [info] shell: bash
+2026-02-27 22:59:27.856 [info] Starting Pylance language server.

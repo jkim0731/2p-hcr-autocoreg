@@ -1,0 +1,823 @@
+2026-03-03 05:18:03.017 [info] Extension host with pid 1212 started
+2026-03-03 05:18:03.017 [info] Skipping acquiring lock for /root/capsule/code/vscode-data/User/workspaceStorage/22dc56086958897e6a12dd6cff67f609.
+2026-03-03 05:18:03.113 [info] ExtensionService#_doActivateExtension vscode.github-authentication, startup: false, activationEvent: 'onAuthenticationRequest:github'
+2026-03-03 05:18:03.137 [info] ExtensionService#_doActivateExtension vscode.ipynb, startup: false, activationEvent: 'onNotebookSerializer:jupyter-notebook'
+2026-03-03 05:18:03.149 [info] ExtensionService#_doActivateExtension vscode.emmet, startup: false, activationEvent: 'onLanguage'
+2026-03-03 05:18:03.164 [info] ExtensionService#_doActivateExtension GitHub.copilot-chat, startup: false, activationEvent: 'onChatParticipant:github.copilot.editsAgent'
+2026-03-03 05:18:04.072 [info] ExtensionService#_doActivateExtension vscode.git-base, startup: false, activationEvent: 'api', root cause: GitHub.copilot-chat
+2026-03-03 05:18:04.076 [info] ExtensionService#_doActivateExtension vscode.microsoft-authentication, startup: false, activationEvent: 'onAuthenticationRequest:microsoft'
+2026-03-03 05:18:04.117 [info] ExtensionService#_doActivateExtension vscode.git, startup: false, activationEvent: 'api', root cause: GitHub.copilot-chat
+2026-03-03 05:18:04.171 [info] ExtensionService#_doActivateExtension vscode.github, startup: true, activationEvent: '*'
+2026-03-03 05:18:04.579 [warning] [Decorations] CAPPING events from decorations provider vscode.git 696
+2026-03-03 05:18:04.954 [warning] [Decorations] CAPPING events from decorations provider vscode.git 696
+2026-03-03 05:18:06.402 [warning] [Decorations] CAPPING events from decorations provider vscode.git 696
+2026-03-03 05:18:06.854 [info] Eager extensions activated
+2026-03-03 05:18:06.971 [info] ExtensionService#_doActivateExtension ms-toolsai.jupyter, startup: false, activationEvent: 'onNotebook:jupyter-notebook'
+2026-03-03 05:18:06.972 [info] ExtensionService#_doActivateExtension ms-toolsai.vscode-jupyter-cell-tags, startup: false, activationEvent: 'onNotebook:jupyter-notebook'
+2026-03-03 05:18:06.974 [info] ExtensionService#_doActivateExtension ms-toolsai.vscode-jupyter-slideshow, startup: false, activationEvent: 'onNotebook:jupyter-notebook'
+2026-03-03 05:18:06.975 [info] ExtensionService#_doActivateExtension vscode.debug-auto-launch, startup: false, activationEvent: 'onStartupFinished'
+2026-03-03 05:18:06.976 [info] ExtensionService#_doActivateExtension vscode.merge-conflict, startup: false, activationEvent: 'onStartupFinished'
+2026-03-03 05:18:07.248 [info] ExtensionService#_doActivateExtension ms-python.python, startup: false, activationEvent: 'api', root cause: ms-toolsai.jupyter
+2026-03-03 05:18:07.419 [info] ExtensionService#_doActivateExtension ms-toolsai.jupyter-renderers, startup: false, activationEvent: 'api', root cause: ms-toolsai.jupyter
+2026-03-03 05:18:08.050 [info] ExtensionService#_doActivateExtension ms-python.vscode-pylance, startup: false, activationEvent: 'onLanguage:python'
+2026-03-03 05:18:08.374 [info] ExtensionService#_doActivateExtension ms-python.vscode-python-envs, startup: false, activationEvent: 'onLanguage:python'
+2026-03-03 05:18:08.559 [info] ExtensionService#_doActivateExtension ms-python.debugpy, startup: false, activationEvent: 'onLanguage:python'
+2026-03-03 05:18:09.156 [info] ExtensionService#_doActivateExtension vscode.terminal-suggest, startup: false, activationEvent: 'onTerminalShellIntegration:*'
+2026-03-03 05:18:09.292 [warning] [Decorations] CAPPING events from decorations provider vscode.git 712
+2026-03-03 05:18:11.700 [warning] DiagnosticCollection with name 'Pylance' does already exist.
+2026-03-03 05:18:13.078 [warning] [Decorations] CAPPING events from decorations provider vscode.git 713
+2026-03-03 05:19:21.523 [warning] [Decorations] CAPPING events from decorations provider vscode.git 717
+2026-03-03 05:57:24.735 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 05:57:29.993 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 05:57:35.253 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 05:57:40.515 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 05:57:45.773 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 05:57:51.031 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 05:57:56.287 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 05:58:01.543 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 05:58:06.801 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 05:58:12.057 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 05:58:17.310 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 05:58:22.564 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 05:58:27.820 [warning] [Decorations] CAPPING events from decorations provider vscode.git 717
+2026-03-03 05:58:33.088 [warning] [Decorations] CAPPING events from decorations provider vscode.git 717
+2026-03-03 05:58:38.342 [warning] [Decorations] CAPPING events from decorations provider vscode.git 717
+2026-03-03 05:58:43.595 [warning] [Decorations] CAPPING events from decorations provider vscode.git 717
+2026-03-03 05:58:48.850 [warning] [Decorations] CAPPING events from decorations provider vscode.git 717
+2026-03-03 06:12:26.545 [warning] [Decorations] CAPPING events from decorations provider vscode.git 717
+2026-03-03 06:12:31.801 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:12:37.058 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:12:42.314 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:12:47.569 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:12:52.826 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:12:58.081 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:13:03.334 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:13:08.588 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:13:13.840 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:13:19.094 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:13:24.354 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:13:29.608 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:13:34.862 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:13:40.115 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:13:45.369 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:13:50.623 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:13:55.879 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:14:01.133 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:14:06.386 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:14:11.638 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:14:16.894 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:14:22.143 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:14:27.398 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:14:32.656 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:14:37.913 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:14:43.172 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:14:49.889 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:14:55.150 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:15:00.406 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:15:13.367 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:15:18.625 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:15:23.888 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:15:29.155 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:15:51.288 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:15:56.545 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:16:11.386 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:16:16.640 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:16:21.897 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:16:27.156 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:16:32.411 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:16:37.672 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:16:42.929 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:16:48.187 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:16:53.448 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:16:58.705 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:17:03.964 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:17:09.219 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:17:14.475 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:17:19.732 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:17:24.992 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:17:30.249 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:17:35.525 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:17:40.780 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:17:46.036 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:17:55.975 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:18:01.230 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:18:06.485 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:18:11.741 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:18:16.997 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:18:22.255 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:18:27.510 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:18:32.765 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:18:38.027 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:18:43.661 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:18:48.916 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:18:54.171 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:18:59.423 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:19:04.685 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:19:09.939 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:19:15.197 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:19:20.455 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:19:25.713 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:19:30.970 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:19:36.225 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:19:41.483 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:19:46.742 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:19:51.999 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:19:57.257 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:20:02.515 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:20:07.777 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:20:09.824 [info] ExtensionService#_doActivateExtension vscode.extension-editing, startup: false, activationEvent: 'onLanguage:markdown'
+2026-03-03 06:20:09.835 [info] ExtensionService#_doActivateExtension vscode.markdown-language-features, startup: false, activationEvent: 'onLanguage:markdown'
+2026-03-03 06:20:13.036 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:20:18.299 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:20:23.560 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:20:28.824 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:20:34.084 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:20:39.344 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:20:42.402 [warning] GitHub.copilot-chat - Code actions of kind 'quickfix' requested but returned code action is of kind 'refactor.rewrite.review.copilot'. Code action will be dropped. Please check 'CodeActionContext.only' to only return requested code actions.
+2026-03-03 06:20:43.036 [warning] GitHub.copilot-chat - Code actions of kind 'quickfix' requested but returned code action is of kind 'refactor.rewrite.review.copilot'. Code action will be dropped. Please check 'CodeActionContext.only' to only return requested code actions.
+2026-03-03 06:20:44.599 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:20:49.857 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:20:55.116 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:21:00.385 [warning] [Decorations] CAPPING events from decorations provider vscode.git 716
+2026-03-03 06:21:05.642 [warning] [Decorations] CAPPING events from decorations provider vscode.git 719
+2026-03-03 06:21:10.895 [warning] [Decorations] CAPPING events from decorations provider vscode.git 719
+2026-03-03 06:21:16.151 [warning] [Decorations] CAPPING events from decorations provider vscode.git 719
+2026-03-03 06:21:21.404 [warning] [Decorations] CAPPING events from decorations provider vscode.git 719
+2026-03-03 06:21:26.660 [warning] [Decorations] CAPPING events from decorations provider vscode.git 719
+2026-03-03 06:21:31.922 [warning] [Decorations] CAPPING events from decorations provider vscode.git 719
+2026-03-03 06:21:37.179 [warning] [Decorations] CAPPING events from decorations provider vscode.git 719
+2026-03-03 06:21:42.437 [warning] [Decorations] CAPPING events from decorations provider vscode.git 719
+2026-03-03 06:21:47.705 [warning] [Decorations] CAPPING events from decorations provider vscode.git 719
+2026-03-03 06:21:52.962 [warning] [Decorations] CAPPING events from decorations provider vscode.git 719
+2026-03-03 06:21:58.219 [warning] [Decorations] CAPPING events from decorations provider vscode.git 719
+2026-03-03 06:22:07.626 [warning] [Decorations] CAPPING events from decorations provider vscode.git 721
+2026-03-03 06:22:12.882 [warning] [Decorations] CAPPING events from decorations provider vscode.git 721
+2026-03-03 06:22:18.139 [warning] [Decorations] CAPPING events from decorations provider vscode.git 721
+2026-03-03 06:22:23.401 [warning] [Decorations] CAPPING events from decorations provider vscode.git 721
+2026-03-03 06:22:28.658 [warning] [Decorations] CAPPING events from decorations provider vscode.git 721
+2026-03-03 06:22:31.487 [warning] GitHub.copilot-chat - Code actions of kind 'quickfix' requested but returned code action is of kind 'refactor.rewrite.review.copilot'. Code action will be dropped. Please check 'CodeActionContext.only' to only return requested code actions.
+2026-03-03 06:22:33.916 [warning] [Decorations] CAPPING events from decorations provider vscode.git 721
+2026-03-03 06:22:39.172 [warning] [Decorations] CAPPING events from decorations provider vscode.git 721
+2026-03-03 06:22:44.426 [warning] [Decorations] CAPPING events from decorations provider vscode.git 721
+2026-03-03 06:22:49.683 [warning] [Decorations] CAPPING events from decorations provider vscode.git 721
+2026-03-03 06:22:54.941 [warning] [Decorations] CAPPING events from decorations provider vscode.git 721
+2026-03-03 06:23:00.200 [warning] [Decorations] CAPPING events from decorations provider vscode.git 721
+2026-03-03 06:23:05.457 [warning] [Decorations] CAPPING events from decorations provider vscode.git 723
+2026-03-03 06:23:10.711 [warning] [Decorations] CAPPING events from decorations provider vscode.git 723
+2026-03-03 06:23:15.966 [warning] [Decorations] CAPPING events from decorations provider vscode.git 723
+2026-03-03 06:23:21.223 [warning] [Decorations] CAPPING events from decorations provider vscode.git 723
+2026-03-03 06:23:26.473 [warning] [Decorations] CAPPING events from decorations provider vscode.git 723
+2026-03-03 06:23:31.729 [warning] [Decorations] CAPPING events from decorations provider vscode.git 723
+2026-03-03 06:23:36.985 [warning] [Decorations] CAPPING events from decorations provider vscode.git 723
+2026-03-03 06:23:42.242 [warning] [Decorations] CAPPING events from decorations provider vscode.git 723
+2026-03-03 06:23:47.494 [warning] [Decorations] CAPPING events from decorations provider vscode.git 723
+2026-03-03 06:23:52.749 [warning] [Decorations] CAPPING events from decorations provider vscode.git 723
+2026-03-03 06:31:19.169 [warning] [Decorations] CAPPING events from decorations provider vscode.git 725
+2026-03-03 06:31:24.429 [warning] [Decorations] CAPPING events from decorations provider vscode.git 725
+2026-03-03 06:31:29.697 [warning] [Decorations] CAPPING events from decorations provider vscode.git 725
+2026-03-03 06:31:34.954 [warning] [Decorations] CAPPING events from decorations provider vscode.git 725
+2026-03-03 06:31:40.210 [warning] [Decorations] CAPPING events from decorations provider vscode.git 725
+2026-03-03 06:31:45.469 [warning] [Decorations] CAPPING events from decorations provider vscode.git 725
+2026-03-03 06:31:50.733 [warning] [Decorations] CAPPING events from decorations provider vscode.git 725
+2026-03-03 06:31:55.992 [warning] [Decorations] CAPPING events from decorations provider vscode.git 725
+2026-03-03 06:32:01.251 [warning] [Decorations] CAPPING events from decorations provider vscode.git 725
+2026-03-03 06:32:06.509 [warning] [Decorations] CAPPING events from decorations provider vscode.git 727
+2026-03-03 06:32:57.572 [warning] [Decorations] CAPPING events from decorations provider vscode.git 729
+2026-03-03 06:33:02.830 [warning] [Decorations] CAPPING events from decorations provider vscode.git 731
+2026-03-03 06:33:08.088 [warning] [Decorations] CAPPING events from decorations provider vscode.git 731
+2026-03-03 06:33:13.353 [warning] [Decorations] CAPPING events from decorations provider vscode.git 731
+2026-03-03 06:33:18.613 [warning] [Decorations] CAPPING events from decorations provider vscode.git 731
+2026-03-03 06:33:23.874 [warning] [Decorations] CAPPING events from decorations provider vscode.git 731
+2026-03-03 06:33:29.129 [warning] [Decorations] CAPPING events from decorations provider vscode.git 731
+2026-03-03 06:33:34.384 [warning] [Decorations] CAPPING events from decorations provider vscode.git 731
+2026-03-03 06:33:34.537 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.537 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.537 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.537 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.537 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.537 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.537 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.537 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.537 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.537 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.537 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.537 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.537 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.537 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.537 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.537 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.537 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.537 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.537 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.537 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.537 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.537 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.537 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.537 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.537 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.537 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.537 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.537 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.537 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.537 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.537 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.537 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.537 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.537 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.537 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.537 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.537 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.537 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.538 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.538 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.538 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.538 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.538 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.538 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.538 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.538 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.538 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.538 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.538 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.538 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.538 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.538 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.538 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.538 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.538 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.538 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.538 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:34.538 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.539 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.542 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.542 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.543 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.543 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.543 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.544 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.544 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.544 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.545 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.545 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.546 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.546 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.546 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.546 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.547 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.547 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.547 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.548 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.548 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.548 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.548 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.549 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.549 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.549 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.550 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.550 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.550 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.550 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.551 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.551 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.551 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.552 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.552 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.552 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.552 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.553 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.553 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.553 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.554 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.554 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.554 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.554 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.555 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.555 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.555 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.556 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.556 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.556 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.557 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.557 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.557 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.558 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.558 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.558 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.558 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.559 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:35.559 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:33:39.640 [warning] [Decorations] CAPPING events from decorations provider vscode.git 731
+2026-03-03 06:33:44.899 [warning] [Decorations] CAPPING events from decorations provider vscode.git 731
+2026-03-03 06:33:50.156 [warning] [Decorations] CAPPING events from decorations provider vscode.git 731
+2026-03-03 06:33:55.417 [warning] [Decorations] CAPPING events from decorations provider vscode.git 731
+2026-03-03 06:34:00.673 [warning] [Decorations] CAPPING events from decorations provider vscode.git 731
+2026-03-03 06:34:05.929 [warning] [Decorations] CAPPING events from decorations provider vscode.git 731
+2026-03-03 06:34:11.188 [warning] [Decorations] CAPPING events from decorations provider vscode.git 730
+2026-03-03 06:34:16.448 [warning] [Decorations] CAPPING events from decorations provider vscode.git 730
+2026-03-03 06:34:21.705 [warning] [Decorations] CAPPING events from decorations provider vscode.git 730
+2026-03-03 06:34:26.966 [warning] [Decorations] CAPPING events from decorations provider vscode.git 730
+2026-03-03 06:34:32.224 [warning] [Decorations] CAPPING events from decorations provider vscode.git 730
+2026-03-03 06:34:37.480 [warning] [Decorations] CAPPING events from decorations provider vscode.git 730
+2026-03-03 06:34:40.802 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:34:41.803 [error] Error: Git error
+	at ChildProcess.<anonymous> (/usr/share/code/resources/app/extensions/git/dist/main.js:2:794435)
+	at ChildProcess.emit (node:events:531:35)
+	at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+	at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-03-03 06:34:42.737 [warning] [Decorations] CAPPING events from decorations provider vscode.git 730
+2026-03-03 06:34:47.996 [warning] [Decorations] CAPPING events from decorations provider vscode.git 730
+2026-03-03 06:34:53.251 [warning] [Decorations] CAPPING events from decorations provider vscode.git 730
+2026-03-03 06:34:58.513 [warning] [Decorations] CAPPING events from decorations provider vscode.git 730
+2026-03-03 06:35:03.780 [warning] [Decorations] CAPPING events from decorations provider vscode.git 730
+2026-03-03 06:35:09.038 [warning] [Decorations] CAPPING events from decorations provider vscode.git 730
+2026-03-03 06:35:14.295 [warning] [Decorations] CAPPING events from decorations provider vscode.git 730
+2026-03-03 06:35:19.552 [warning] [Decorations] CAPPING events from decorations provider vscode.git 730
+2026-03-03 06:35:24.810 [warning] [Decorations] CAPPING events from decorations provider vscode.git 730
+2026-03-03 06:35:30.066 [warning] [Decorations] CAPPING events from decorations provider vscode.git 730
+2026-03-03 06:35:35.322 [warning] [Decorations] CAPPING events from decorations provider vscode.git 730
+2026-03-03 06:35:40.579 [warning] [Decorations] CAPPING events from decorations provider vscode.git 730
+2026-03-03 06:35:45.839 [warning] [Decorations] CAPPING events from decorations provider vscode.git 730
+2026-03-03 06:35:51.098 [warning] [Decorations] CAPPING events from decorations provider vscode.git 730
+2026-03-03 06:35:56.356 [warning] [Decorations] CAPPING events from decorations provider vscode.git 730
+2026-03-03 06:36:01.614 [warning] [Decorations] CAPPING events from decorations provider vscode.git 730
+2026-03-03 06:36:06.872 [warning] [Decorations] CAPPING events from decorations provider vscode.git 730
+2026-03-03 06:36:12.132 [warning] [Decorations] CAPPING events from decorations provider vscode.git 730
+2026-03-03 06:36:17.395 [warning] [Decorations] CAPPING events from decorations provider vscode.git 730
+2026-03-03 06:36:22.655 [warning] [Decorations] CAPPING events from decorations provider vscode.git 730
+2026-03-03 06:36:27.915 [warning] [Decorations] CAPPING events from decorations provider vscode.git 730
+2026-03-03 06:36:33.175 [warning] [Decorations] CAPPING events from decorations provider vscode.git 730
+2026-03-03 06:36:38.434 [warning] [Decorations] CAPPING events from decorations provider vscode.git 730
+2026-03-03 06:36:43.694 [warning] [Decorations] CAPPING events from decorations provider vscode.git 730
+2026-03-03 06:36:48.953 [warning] [Decorations] CAPPING events from decorations provider vscode.git 730
+2026-03-03 06:36:54.215 [warning] [Decorations] CAPPING events from decorations provider vscode.git 730
+2026-03-03 06:36:59.474 [warning] [Decorations] CAPPING events from decorations provider vscode.git 730
+2026-03-03 06:37:04.730 [warning] [Decorations] CAPPING events from decorations provider vscode.git 731
+2026-03-03 06:37:09.987 [warning] [Decorations] CAPPING events from decorations provider vscode.git 731

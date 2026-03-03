@@ -22,16 +22,16 @@
 			"mount": "multiplane-ophys_767018_2025-02-19_14-02-36_cortical-zstack-reg_2025-03-09_22-43-48"
 		},
 		{
+			"id": "35d67b23-d8d0-4c79-ad7e-c8d30eb42e2a",
+			"mount": "multiplane-ophys_790322_2025-07-10_15-25-55_cortical-zstack-segmentation_2025-11-14_07-07-05"
+		},
+		{
 			"id": "3e9f641c-cfd2-47b5-99bf-38793f1e4b2f",
 			"mount": "multiplane-ophys_754803_2024-12-11_12-23-13_cortical-zstack-seg_2025-13-08_09-49-00"
 		},
 		{
 			"id": "448ba586-1239-4a75-a5cc-72c19386e085",
 			"mount": "multiplane-ophys_788406_2025-07-18_12-17-32_cortical-zstack-registration_2025-11-11_20-55-55"
-		},
-		{
-			"id": "5035b0e5-6648-4f74-b680-d5f5d65ff3b7",
-			"mount": "HCR_783884-02_2025-08-13_13-00-00_processed_2025-08-19_18-40-23"
 		},
 		{
 			"id": "557ed1b4-fed2-4f26-9d9b-e7519f4fce07",
@@ -78,6 +78,10 @@
 			"mount": "multiplane-ophys_767022_2025-03-06_09-17-27_cortical-zstack-seg_2025-07-09_11-21-00"
 		},
 		{
+			"id": "ad1bb1fc-e054-4c42-b49f-338e08a9adf7",
+			"mount": "HCR_790322_2025-11-05_13-00-00_processed_2025-11-10_20-36-20"
+		},
+		{
 			"id": "ba535a87-8433-41d6-b3a5-1f425bdfadc1",
 			"mount": "HCR_767022_2025-07-03_13-00-00_processed_2025-07-18_09-27-44"
 		},
@@ -108,6 +112,10 @@
 		{
 			"id": "e95ea178-142e-4f7f-ab3f-3d422cf3696f",
 			"mount": "multiplane-ophys_767018_2025-02-13_14-09-49_cortical-zstack-segmentation_2025-11-14_03-42-00"
+		},
+		{
+			"id": "f49d36b6-6011-483d-9036-619be2fc2a73",
+			"mount": "multiplane-ophys_790322_2025-07-10_15-25-55_cortical-zstack-registration_2025-11-11_21-01-40"
 		}
 	]
 }

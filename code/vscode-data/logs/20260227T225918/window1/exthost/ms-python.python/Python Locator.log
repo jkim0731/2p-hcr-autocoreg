@@ -1,0 +1,49 @@
+2026-02-27 22:59:24.955 [info] Starting Python Locator /root/.vscode/extensions/ms-python.python-2026.2.0-linux-x64/python-env-tools/bin/pet server
+2026-02-27 22:59:25.007 [info] Discovered manager: (Conda) /opt/conda/bin/conda
+2026-02-27 22:59:25.008 [info] Discovered env: /opt/conda/bin/python
+2026-02-27 22:59:25.010 [info] Discovered env: /bin/python3
+2026-02-27 22:59:25.010 [info] Discovered env: /usr/bin/python3
+2026-02-27 22:59:25.011 [info] Locator Conda took 209.536517ms
+2026-02-27 22:59:25.011 [info] Locator Homebrew took 452.105µs
+2026-02-27 22:59:25.011 [info] Locator LinuxGlobal took 220.950087ms
+2026-02-27 22:59:25.011 [info] Locator PipEnv took 266.37µs
+2026-02-27 22:59:25.011 [info] Locator Pixi took 396.65µs
+2026-02-27 22:59:25.012 [info] Locator Poetry took 1.676837ms
+2026-02-27 22:59:25.012 [info] Locator PyEnv took 1.560397ms
+2026-02-27 22:59:25.012 [info] Locator Uv took 602.196µs
+2026-02-27 22:59:25.012 [info] Locator Venv took 488.017µs
+2026-02-27 22:59:25.012 [info] Locator VirtualEnv took 161.672µs
+2026-02-27 22:59:25.012 [info] Locator VirtualEnvWrapper took 308.783µs
+2026-02-27 22:59:25.012 [info] Locator GlobalVirtualEnvs took 1.125525ms
+2026-02-27 22:59:25.012 [info] Locator Locators took 223.550814ms
+2026-02-27 22:59:25.012 [info] Locator Path took 244.172527ms
+2026-02-27 22:59:25.012 [info] Locator Workspaces took 5.644735ms
+2026-02-27 22:59:25.012 [info] Refresh completed in 244ms
+2026-02-27 22:59:25.281 [info] Discovered manager: (Conda) /opt/conda/bin/conda
+2026-02-27 22:59:25.281 [info] Discovered env: /opt/conda/bin/python
+2026-02-27 22:59:25.282 [info] Discovered env: /bin/python3
+2026-02-27 22:59:25.283 [info] Discovered env: /usr/bin/python3
+2026-02-27 22:59:25.283 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-27 22:59:25.284 [info] Locator Conda took 95.395326ms
+2026-02-27 22:59:25.284 [info] Locator Homebrew took 745.616µs
+2026-02-27 22:59:25.284 [info] Locator LinuxGlobal took 42.564597ms
+2026-02-27 22:59:25.285 [info] Locator PipEnv took 351.907µs
+2026-02-27 22:59:25.285 [info] Locator Pixi took 431.313µs
+2026-02-27 22:59:25.285 [info] Locator Poetry took 876.166µs
+2026-02-27 22:59:25.285 [info] Locator PyEnv took 1.218522ms
+2026-02-27 22:59:25.285 [info] Locator Uv took 180.984µs
+2026-02-27 22:59:25.285 [info] Locator Venv took 186.825µs
+2026-02-27 22:59:25.285 [info] Locator VirtualEnv took 175.304µs
+2026-02-27 22:59:25.285 [info] Locator VirtualEnvWrapper took 76.096µs
+2026-02-27 22:59:25.285 [info] Locator GlobalVirtualEnvs took 1.299688ms
+2026-02-27 22:59:25.285 [info] Locator Locators took 96.2338ms
+2026-02-27 22:59:25.285 [info] Locator Path took 100.290775ms
+2026-02-27 22:59:25.285 [info] Locator Workspaces took 44.442578ms
+2026-02-27 22:59:25.285 [info] Refresh completed in 100ms
+2026-02-27 22:59:25.287 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-27 22:59:55.913 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-27 23:02:06.717 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-27 23:05:07.240 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-27 23:09:08.438 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-27 23:30:31.700 [info] Resolved Python Environment /opt/conda/bin/python
+2026-02-27 23:37:37.158 [info] Resolved Python Environment /opt/conda/bin/python
