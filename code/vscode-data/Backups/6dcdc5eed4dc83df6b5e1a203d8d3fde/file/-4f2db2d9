@@ -1,0 +1,431 @@
+file:///root/capsule/code/step_4_generate_coreg_table.ipynb {"mtime":1772556703681,"ctime":1772556703681,"size":5014,"etag":"3fls57d6f56n","orphaned":false,"typeId":"notebook/jupyter-notebook/jupyter-notebook"}
+{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "id": "ebd65e85",
+   "metadata": {},
+   "source": [
+    "# Purpose:\n",
+    "- Generate czstack id - hcr id matching table from the last landmarks file"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 1,
+   "id": "27d902b9",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "from pathlib import Path\n",
+    "import pandas as pd\n",
+    "import numpy as np\n",
+    "import os\n",
+    "import json\n",
+    "\n",
+    "from manual_coreg_utils import get_ids_from_landmarks\n",
+    "\n",
+    "DATA_DIR = Path('/root/capsule/data/')\n",
+    "%load_ext autoreload\n",
+    "%autoreload 2"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 2,
+   "id": "704c9d46",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "def get_czstack_id(x):\n",
+    "    if x.startswith('cz'):\n",
+    "        return int(x.split('-')[0][2:])\n",
+    "    else:\n",
+    "        return -1\n",
+    "\n",
+    "\n",
+    "def get_hcr_id(x):\n",
+    "    if x.startswith('cz'):\n",
+    "        return int(x.split('-')[1][3:])\n",
+    "    else:\n",
+    "        return -1"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 10,
+   "id": "03391fad",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "subject_id = 782149\n",
+    "czstack_date = '2025-05-01'\n",
+    "save_dir = Path(f'/root/capsule/scratch/{subject_id}_{czstack_date}_coreg_cpsam/')\n",
+    "\n",
+    "final_iter_num = 4\n",
+    "# final_landmarks_file = save_dir / f'{subject_id}_{czstack_date}_landmarks_matched_ext_iter{final_iter_num}_qced.csv'\n",
+    "final_landmarks_file = save_dir / f'{subject_id}_{czstack_date}_landmarks_matched_ext_iter{final_iter_num}.csv'\n",
+    "next_to_final_landmarks_file = save_dir / f'{subject_id}_{czstack_date}_landmarks_matched_ext_iter{final_iter_num+1}.csv'\n",
+    "assert final_landmarks_file.exists(), f'{final_landmarks_file} does not exist'\n",
+    "assert not next_to_final_landmarks_file.exists(), f'{next_to_final_landmarks_file} does exist'"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 8,
+   "id": "eee89288",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "dict_keys(['czstack_reg_path', 'czstack_reg_dim_swapped_path', 'czstack_seg_path', 'czstack_seg_outline_path', 'czstack_centroid_path', 'hcr_centroid_path', 'hcr_segmentation_metrics_path', 'fused_json_file', 'spot_488_counts_path'])\n"
+     ]
+    }
+   ],
+   "source": [
+    "# Loading\n",
+    "filepaths_iter_json = save_dir / f'{subject_id}_{czstack_date}_filepaths_iter.json'\n",
+    "with open(filepaths_iter_json, 'r') as f:\n",
+    "    filepaths_dict = json.load(f)\n",
+    "for key in filepaths_dict:\n",
+    "    filepaths_dict[key] = Path(filepaths_dict[key])\n",
+    "    assert filepaths_dict[key].exists()\n",
+    "print(filepaths_dict.keys())\n",
+    "# make variables named after each filepath\n",
+    "for key in filepaths_dict:\n",
+    "    globals()[key] = filepaths_dict[key]\n",
+    "czstack_cell_centroids_df = pd.read_csv(czstack_centroid_path, index_col=0)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 9,
+   "id": "a14c57b6",
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "894"
+      ]
+     },
+     "execution_count": 9,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "len(czstack_cell_centroids_df)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 5,
+   "id": "a7f48c34",
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "520"
+      ]
+     },
+     "execution_count": 5,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "sum(final_qced_landmarks.ids.str.startswith('cz'))"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 11,
+   "id": "6b9a6702",
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "text/html": [
+       "<div>\n",
+       "<style scoped>\n",
+       "    .dataframe tbody tr th:only-of-type {\n",
+       "        vertical-align: middle;\n",
+       "    }\n",
+       "\n",
+       "    .dataframe tbody tr th {\n",
+       "        vertical-align: top;\n",
+       "    }\n",
+       "\n",
+       "    .dataframe thead th {\n",
+       "        text-align: right;\n",
+       "    }\n",
+       "</style>\n",
+       "<table border=\"1\" class=\"dataframe\">\n",
+       "  <thead>\n",
+       "    <tr style=\"text-align: right;\">\n",
+       "      <th></th>\n",
+       "      <th>cz431-hcr35489</th>\n",
+       "      <th>False</th>\n",
+       "      <th>205.98128531073445</th>\n",
+       "      <th>397.72369350282486</th>\n",
+       "      <th>198.22581214689265</th>\n",
+       "      <th>1115.4929985666884</th>\n",
+       "      <th>1093.9281075574904</th>\n",
+       "      <th>795.0</th>\n",
+       "    </tr>\n",
+       "  </thead>\n",
+       "  <tbody>\n",
+       "    <tr>\n",
+       "      <th>0</th>\n",
+       "      <td>cz362-hcr27824</td>\n",
+       "      <td>False</td>\n",
+       "      <td>465.766100</td>\n",
+       "      <td>152.481628</td>\n",
+       "      <td>170.982418</td>\n",
+       "      <td>768.494298</td>\n",
+       "      <td>1461.511477</td>\n",
+       "      <td>719.000000</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>1</th>\n",
+       "      <td>cz394-hcr33748</td>\n",
+       "      <td>False</td>\n",
+       "      <td>314.730545</td>\n",
+       "      <td>203.123784</td>\n",
+       "      <td>180.214251</td>\n",
+       "      <td>993.945431</td>\n",
+       "      <td>1370.350801</td>\n",
+       "      <td>780.000000</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>2</th>\n",
+       "      <td>cz280-hcr19898</td>\n",
+       "      <td>False</td>\n",
+       "      <td>299.511963</td>\n",
+       "      <td>377.836859</td>\n",
+       "      <td>144.293516</td>\n",
+       "      <td>1014.530100</td>\n",
+       "      <td>1152.741447</td>\n",
+       "      <td>627.000000</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>3</th>\n",
+       "      <td>cz406-hcr28025</td>\n",
+       "      <td>False</td>\n",
+       "      <td>218.091775</td>\n",
+       "      <td>430.147944</td>\n",
+       "      <td>179.184052</td>\n",
+       "      <td>1107.651220</td>\n",
+       "      <td>1062.560993</td>\n",
+       "      <td>722.000000</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>4</th>\n",
+       "      <td>cz337-hcr26156</td>\n",
+       "      <td>False</td>\n",
+       "      <td>299.165158</td>\n",
+       "      <td>275.630727</td>\n",
+       "      <td>153.133882</td>\n",
+       "      <td>998.846543</td>\n",
+       "      <td>1286.051682</td>\n",
+       "      <td>701.000000</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>...</th>\n",
+       "      <td>...</td>\n",
+       "      <td>...</td>\n",
+       "      <td>...</td>\n",
+       "      <td>...</td>\n",
+       "      <td>...</td>\n",
+       "      <td>...</td>\n",
+       "      <td>...</td>\n",
+       "      <td>...</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>529</th>\n",
+       "      <td>Pt-35</td>\n",
+       "      <td>True</td>\n",
+       "      <td>44.508350</td>\n",
+       "      <td>76.965114</td>\n",
+       "      <td>73.707729</td>\n",
+       "      <td>1487.192801</td>\n",
+       "      <td>1593.686699</td>\n",
+       "      <td>507.230681</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>530</th>\n",
+       "      <td>Pt-41</td>\n",
+       "      <td>True</td>\n",
+       "      <td>456.944805</td>\n",
+       "      <td>20.128588</td>\n",
+       "      <td>37.817713</td>\n",
+       "      <td>862.960206</td>\n",
+       "      <td>1697.778305</td>\n",
+       "      <td>352.586940</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>531</th>\n",
+       "      <td>Pt-44</td>\n",
+       "      <td>True</td>\n",
+       "      <td>279.569391</td>\n",
+       "      <td>41.009976</td>\n",
+       "      <td>46.301850</td>\n",
+       "      <td>1116.037097</td>\n",
+       "      <td>1652.601586</td>\n",
+       "      <td>371.908096</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>532</th>\n",
+       "      <td>Pt-47</td>\n",
+       "      <td>True</td>\n",
+       "      <td>24.124487</td>\n",
+       "      <td>402.832459</td>\n",
+       "      <td>85.008653</td>\n",
+       "      <td>1428.408404</td>\n",
+       "      <td>1092.713330</td>\n",
+       "      <td>474.927881</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>533</th>\n",
+       "      <td>Pt-51</td>\n",
+       "      <td>True</td>\n",
+       "      <td>298.948061</td>\n",
+       "      <td>275.568690</td>\n",
+       "      <td>154.177008</td>\n",
+       "      <td>1012.208637</td>\n",
+       "      <td>1287.848494</td>\n",
+       "      <td>688.780150</td>\n",
+       "    </tr>\n",
+       "  </tbody>\n",
+       "</table>\n",
+       "<p>534 rows × 8 columns</p>\n",
+       "</div>"
+      ],
+      "text/plain": [
+       "     cz431-hcr35489  False  205.98128531073445  397.72369350282486  \\\n",
+       "0    cz362-hcr27824  False          465.766100          152.481628   \n",
+       "1    cz394-hcr33748  False          314.730545          203.123784   \n",
+       "2    cz280-hcr19898  False          299.511963          377.836859   \n",
+       "3    cz406-hcr28025  False          218.091775          430.147944   \n",
+       "4    cz337-hcr26156  False          299.165158          275.630727   \n",
+       "..              ...    ...                 ...                 ...   \n",
+       "529           Pt-35   True           44.508350           76.965114   \n",
+       "530           Pt-41   True          456.944805           20.128588   \n",
+       "531           Pt-44   True          279.569391           41.009976   \n",
+       "532           Pt-47   True           24.124487          402.832459   \n",
+       "533           Pt-51   True          298.948061          275.568690   \n",
+       "\n",
+       "     198.22581214689265  1115.4929985666884  1093.9281075574904       795.0  \n",
+       "0            170.982418          768.494298         1461.511477  719.000000  \n",
+       "1            180.214251          993.945431         1370.350801  780.000000  \n",
+       "2            144.293516         1014.530100         1152.741447  627.000000  \n",
+       "3            179.184052         1107.651220         1062.560993  722.000000  \n",
+       "4            153.133882          998.846543         1286.051682  701.000000  \n",
+       "..                  ...                 ...                 ...         ...  \n",
+       "529           73.707729         1487.192801         1593.686699  507.230681  \n",
+       "530           37.817713          862.960206         1697.778305  352.586940  \n",
+       "531           46.301850         1116.037097         1652.601586  371.908096  \n",
+       "532           85.008653         1428.408404         1092.713330  474.927881  \n",
+       "533          154.177008         1012.208637         1287.848494  688.780150  \n",
+       "\n",
+       "[534 rows x 8 columns]"
+      ]
+     },
+     "execution_count": 11,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "pd.read_csv(final_landmarks_file)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 4,
+   "id": "fef33355",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Total number of czstack ids: 520\n",
+      "Number of matched landmarks: 303\n",
+      "Matching rate: 58.27%\n"
+     ]
+    }
+   ],
+   "source": [
+    "save_fn = save_dir / f'{subject_id}_coreg_table.csv'\n",
+    "\n",
+    "final_qced_landmarks = pd.read_csv(final_landmarks_file)\n",
+    "columns = ['ids', 'active', 'czstack_x', 'czstack_y', 'czstack_z', 'hcr_x', 'hcr_y', 'hcr_z']\n",
+    "final_qced_landmarks.columns = columns\n",
+    "prev_qced_ids = final_qced_landmarks[final_qced_landmarks.ids.str.startswith('qced')].ids.values\n",
+    "prev_qced_ids = [qcid.replace('qced_','') for qcid in prev_qced_ids]\n",
+    "final_qced_landmarks.loc[final_qced_landmarks.ids.str.startswith('qced'), 'active'] = True\n",
+    "final_qced_landmarks.loc[final_qced_landmarks.ids.str.startswith('qced'), 'ids'] = prev_qced_ids\n",
+    "num_roi_points = sum(final_qced_landmarks.ids.str.startswith('cz'))\n",
+    "\n",
+    "final_active_landmarks = final_qced_landmarks.query('active').copy()\n",
+    "\n",
+    "matched_landmarks = final_active_landmarks.copy()\n",
+    "matched_landmarks['czstack_id'] = matched_landmarks.ids.apply(get_czstack_id)\n",
+    "matched_landmarks['hcr_id'] = matched_landmarks.ids.apply(get_hcr_id)\n",
+    "matched_landmarks = matched_landmarks[matched_landmarks.czstack_id != -1]\n",
+    "assert matched_landmarks.active.sum() == len(matched_landmarks)\n",
+    "assert len(set(matched_landmarks.czstack_id)) == len(matched_landmarks)\n",
+    "assert len(set(matched_landmarks.hcr_id)) == len(matched_landmarks)\n",
+    "matched_landmarks = matched_landmarks.sort_values(by='czstack_id')[['czstack_id', 'hcr_id']].reset_index(drop=True)\n",
+    "\n",
+    "# final assurance with alternative method to get ids\n",
+    "czstack_ids, hcr_ids = get_ids_from_landmarks(final_active_landmarks)\n",
+    "check_df = pd.DataFrame({'czstack_id': czstack_ids, 'hcr_id': hcr_ids})\n",
+    "check_df = check_df.sort_values(by='czstack_id').reset_index(drop=True)\n",
+    "assert check_df.equals(matched_landmarks)\n",
+    "\n",
+    "# saving\n",
+    "matched_landmarks.to_csv(save_fn, index=False)\n",
+    "\n",
+    "# report\n",
+    "print(f'Total number of czstack ids: {num_roi_points}')\n",
+    "print(f'Number of matched landmarks: {len(matched_landmarks)}')\n",
+    "print(f'Matching rate: {len(matched_landmarks)/num_roi_points:.2%}')"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "60d1fffe",
+   "metadata": {},
+   "source": [
+    "# Create New Data"
+   ]
+  }
+ ],
+ "metadata": {
+  "kernelspec": {
+   "display_name": "base",
+   "language": "python",
+   "name": "python3"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 3
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.10.12"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 5
+}

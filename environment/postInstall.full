@@ -45,7 +45,7 @@ code --install-extension ms-toolsai.jupyter --force --user-data-dir=/root/capsul
 echo "alias code='code --user-data-dir=/root/capsule/code/vscode-data --no-sandbox'" >> /etc/bash.bashrc
 
 apt-get update
-apt-get install -y numlockx gthumb || true
+apt-get install -y numlockx gthumb
 
 echo "Installing full Python package set..."
 python3 -m pip install --no-cache-dir \
@@ -103,21 +103,22 @@ EOF
 
 echo "Installing optional repos..."
 cd /
-git clone https://github.com/AllenNeuralDynamics/comb || true
-cd /comb && pip install -e . || true
-cd /comb && git checkout for_gcamp_validation || true
+git clone https://github.com/AllenNeuralDynamics/comb
+cd /comb && pip install -e .
+cd /comb && git checkout for_gcamp_validation
 
-git clone https://github.com/AllenNeuralDynamics/lamf-analysis || true
-cd /lamf-analysis && pip install -e . || true
+cd /
+git clone https://github.com/AllenNeuralDynamics/lamf-analysis
+cd /lamf-analysis && pip install -e .
 
 echo "Updating Fiji (optional)..."
 FIJI_DIR=/Fiji.app
 FIJI="$FIJI_DIR/ImageJ-linux64"
 if [ -x "$FIJI" ]; then
-  "$FIJI" --update update || true
+  "$FIJI" --update update
 fi
 
-apt-get clean || true
+apt-get clean
 rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
 echo "Full bootstrap complete."

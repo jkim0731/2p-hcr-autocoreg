@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -eu
+set -euxo pipefail
 
 echo "==== Minimal VS Code + Python/Jupyter bootstrap ===="
 
@@ -106,6 +106,8 @@ if [ -x "$FIJI" ]; then
   "$FIJI" --update update
 fi
 
+apt-get update
+apt-get install -y numlockx gthumb
 apt-get clean
 rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
