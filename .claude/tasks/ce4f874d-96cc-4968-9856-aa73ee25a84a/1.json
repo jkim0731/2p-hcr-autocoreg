@@ -1,0 +1,9 @@
+{
+  "id": "1",
+  "subject": "Read R1 foundation code (surfaces, affine, depth)",
+  "description": "Understand estimate_pia_surface_*, depth_from_surface/depth_profile, anisotropic_similarity_fit and landmark_pairs_um to know exactly what R1 can build on.",
+  "activeForm": "Reading foundation code",
+  "status": "completed",
+  "blocks": [],
+  "blockedBy": []
+}

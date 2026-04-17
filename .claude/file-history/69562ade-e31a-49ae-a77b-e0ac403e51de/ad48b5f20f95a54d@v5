@@ -1,0 +1,230 @@
+"""Build the session 03 v2 notebook.
+
+Outputs (CSV + figures) live under
+/root/capsule/code/sessions/03_surface_estimation_v2/ and are
+version-controlled alongside the notebook.
+"""
+from __future__ import annotations
+from pathlib import Path
+import nbformat as nbf
+
+NB = Path("/root/capsule/code/notebooks/03_surface_estimation_iteration_v2.ipynb")
+
+
+def md(s): return nbf.v4.new_markdown_cell(s)
+def code(s): return nbf.v4.new_code_cell(s)
+
+
+WINNING_METHODS = (
+    "['baseline_image_5pct','N4_image_ceiling_0p5pct_off5',"
+    "'N6_quadratic_ceiling_off3','N9_gauss_sig150_off3',"
+    "'N10_hybrid_sig120_off5']"
+)
+
+
+def build():
+    nb = nbf.v4.new_notebook()
+    cells = []
+
+    cells.append(md(
+        "# Session 03 v2 - HCR/CZ pia surface under corrected criterion\n\n"
+        "**Goal.** Place the pia surface such that (a) ROI density at or\n"
+        "above the surface is close to zero, (b) cortex ROI density rises\n"
+        "immediately below the surface, and (c) the rise depth is uniform\n"
+        "across the (x, y) footprint of the section. Subjects with tissue\n"
+        "tilt (e.g. 782149, 11 deg) or localized curvature (e.g. 790322\n"
+        "at x~2000 um) must also be handled.\n\n"
+        "**Winning protocol - HCR.** `roi_hybrid_quad_gauss_ceiling` with\n"
+        "sigma = 120 um, safety offset = 5 um. A robust quadratic surface\n"
+        "carries the global trend; a Gaussian-smoothed residual field\n"
+        "(sigma 120 um) absorbs localized curvature; a final ceiling clamp\n"
+        "lifts the surface above every density-filtered tile min-z.\n\n"
+        "**Winning protocol - CZ.** `cz_image_with_roi_ceiling`, 2 %\n"
+        "relative margin, 80 um tiles, 3 um safety offset. CZ has no\n"
+        "out-of-tissue junk, so a flat image-plane clamped against ROI\n"
+        "tiles is enough."
+    ))
+
+    cells.append(code(
+        "from pathlib import Path\n"
+        "import pandas as pd\n"
+        "from IPython.display import Image, display\n"
+        "\n"
+        "OUT = Path('/root/capsule/code/sessions/03_surface_estimation_v2')\n"
+        "FIG = OUT / 'figures'\n"
+        "print('Reading from', OUT)"
+    ))
+
+    # ===== HCR =====
+    cells.append(md(
+        "## HCR protocol walkthrough (subject 782149)\n\n"
+        "Subject 782149 is thin and has the largest tilt in the benchmark\n"
+        "(11 deg), so both global trend capture (via the quadratic base)\n"
+        "and local correction (via the Gaussian residuals) are visible in\n"
+        "a single y-slab. The six panels show the protocol step by step."
+    ))
+    cells.append(code(
+        "display(Image(str(FIG / 'hcr_walkthrough.png')))"
+    ))
+    cells.append(md(
+        "### What each step does\n\n"
+        "1. **All ROIs in slab.** Raw HCR centroids (density filter not yet\n"
+        "   applied). Note the scattered singletons above the main cortex\n"
+        "   cloud - segmentation noise in the buffer region.\n"
+        "2. **Density-filtered ROIs.** Keep only ROIs with >= 3 neighbours\n"
+        "   within 30 um. Drops the buffer singletons while preserving the\n"
+        "   true cortical boundary.\n"
+        "3. **Per-tile min-z envelope.** Bin the filtered ROIs into 120 um\n"
+        "   tiles and keep the 2nd-percentile z in each tile. These red\n"
+        "   points trace the top-of-tissue surface.\n"
+        "4. **Robust quadratic base fit.** IRLS-Huber fit of\n"
+        "   `z = a*x + b*y + c + p*x^2 + q*x*y + r*y^2` through the tile\n"
+        "   envelope. Captures tilt and gentle curvature globally.\n"
+        "5. **Residuals + Gaussian correction.** Compute `tile_z - quad`\n"
+        "   for each tile (red dots). Local bumps a global quadratic can't\n"
+        "   absorb appear here as positive/negative residuals. Smooth with\n"
+        "   a Gaussian kernel (sigma = 120 um) to get a locally-flexible\n"
+        "   correction (green curve) that the quadratic plus this trace\n"
+        "   can fit.\n"
+        "6. **Final surface on MIP.** `surface(x,y) = quad(x,y) + "
+        "gauss_residual(x,y) - lift - 5 um`. Lift is the largest positive\n"
+        "   deficit over all tiles so no tile min-z sits above the surface;\n"
+        "   the 5 um safety offset gives a small margin. Red line on the\n"
+        "   488 MIP shows the resulting pia."
+    ))
+
+    cells.append(md(
+        "## HCR estimated surface on every subject\n\n"
+        "10 y-slabs (rows) x 6 subjects (columns). Red line is the final\n"
+        "hybrid surface evaluated at each slab's y; cyan dots are ROI\n"
+        "centroids within +/- 20 um of the slab. The curvature carried by\n"
+        "the Gaussian residual field is visible in 755252/782149 (strong\n"
+        "bend along x) and in 790322 (the x~2000 um dip that previously\n"
+        "left a 75-85 um gap under N6/N9)."
+    ))
+    cells.append(code(
+        "display(Image(str(FIG / 'hcr_surface_overlays.png')))"
+    ))
+
+    cells.append(md(
+        "## HCR validation metrics\n\n"
+        "Metrics on all 6 subjects for the winner and the previous\n"
+        "contenders.\n\n"
+        "- **`above_frac`** - fraction of ROIs at depth < 0. Target close to 0.\n"
+        "- **`onset_depth_um`** - where smoothed density first reaches\n"
+        "  50 % of bulk on the positive side. Smaller = tighter fit.\n"
+        "- **`onset_x_spread`, `onset_y_spread`** - per-quantile-bin spread\n"
+        "  of onset_depth along x and y. Primary fit-uniformity metric:\n"
+        "  small spread means cortex starts at the same depth everywhere."
+    ))
+    cells.append(code(
+        "hcr = pd.read_csv(OUT / 'hcr_results.csv')\n"
+        "winners = " + WINNING_METHODS + "\n"
+        "cols = ['subject','method','c_um','tilt_deg',\n"
+        "        'above_frac','onset_depth_um',\n"
+        "        'onset_x_spread','onset_y_spread']\n"
+        "hcr[hcr['method'].isin(winners)][cols]\\\n"
+        "    .sort_values(['subject','method'])"
+    ))
+    cells.append(code(
+        "display(Image(str(FIG / 'hcr_depth_profiles.png')))"
+    ))
+
+    cells.append(md(
+        "### Why not the earlier contenders?\n\n"
+        "- **Baseline image (5 % margin).** above_frac 3 - 11 %; a large\n"
+        "  spike of ROIs sits above the plane. Fails the criterion.\n"
+        "- **N4 image-ceiling (flat plane + global lift).** Drives\n"
+        "  above_frac to ~0 but one outlier tile pushes the whole plane\n"
+        "  60 - 150 um above the tissue on 755252 / 788406 / 790322,\n"
+        "  giving onset_depth 32 - 82 um. A single tilted plane cannot\n"
+        "  absorb real surface curvature.\n"
+        "- **N6 quadratic ceiling.** Adds curvature, but a 6-parameter\n"
+        "  quadratic still can't fit 790322's localized bend. Residual\n"
+        "  `onset_x_spread` stays at 85 um and onset_depth balloons to\n"
+        "  122 um because the global lift must cover that bend.\n"
+        "- **N9 Gaussian-only (no quadratic base).** Fits local curvature\n"
+        "  but, without a quadratic, needs sigma 150+ um to stay stable,\n"
+        "  which can't follow 790322's sharp x ~ 2000 um dip - onset_depth\n"
+        "  stays at 87 um with x_spread 75 um.\n"
+        "- **N10 hybrid (winner).** Quadratic handles the global trend so\n"
+        "  the residual field is small AND rapidly varying; a narrow\n"
+        "  (sigma 120 um) Gaussian can then absorb 790322's bend without\n"
+        "  destabilising the other subjects. Result on 790322: onset_depth\n"
+        "  62 um (vs 87-122), x_spread 75 (vs 75-85), above_frac 0.03 %\n"
+        "  (vs 0.008 - 0.16 %)."
+    ))
+
+    # ===== CZ =====
+    cells.append(md(
+        "## CZ protocol walkthrough (subject 767022)\n\n"
+        "CZ is cleaner than HCR - no out-of-tissue ROI junk - so a flat\n"
+        "tilted plane plus a per-tile ROI clamp is sufficient."
+    ))
+    cells.append(code(
+        "display(Image(str(FIG / 'cz_walkthrough.png')))"
+    ))
+    cells.append(md(
+        "### What each step does\n\n"
+        "1. **CZ z-stack MIP.** Raw max-intensity projection across a y\n"
+        "   band. Bright region = cortex, dim region above = buffer.\n"
+        "2. **Image plane fit.** Per-column top-of-signal at the\n"
+        "   `relative_margin = 2 %` intensity threshold; `_robust_plane_fit`\n"
+        "   then fits a tilted plane through those column peaks. Good\n"
+        "   first approximation but can miss columns where the image\n"
+        "   threshold is noisy.\n"
+        "3. **Per-tile ROI min-z (80 um tiles).** Smaller tiles than HCR\n"
+        "   because CZ features are more compact. Red dots trace the\n"
+        "   shallowest ROIs.\n"
+        "4. **Ceiling clamp + safety.** Lift the image plane so no tile's\n"
+        "   min-z lies above it; subtract 3 um safety. Red line is the\n"
+        "   final pia surface. Note the lift is typically a few micrometers\n"
+        "   because the CZ image plane is already a good match."
+    ))
+
+    cells.append(md(
+        "## CZ estimated surface on every subject\n\n"
+        "Same 10 x 6 grid for CZ. The plane is tilt-only (max tilt ~3 deg)\n"
+        "and sits cleanly above every ROI column in all subjects."
+    ))
+    cells.append(code(
+        "display(Image(str(FIG / 'cz_surface_overlays.png')))"
+    ))
+    cells.append(code(
+        "cz = pd.read_csv(OUT / 'cz_results.csv')\n"
+        "cz_cols = ['subject','method','c_um','tilt_deg',\n"
+        "           'above_frac','onset_depth_um',\n"
+        "           'onset_x_spread','onset_y_spread']\n"
+        "cz[[c for c in cz_cols if c in cz.columns]]"
+    ))
+    cells.append(code(
+        "display(Image(str(FIG / 'cz_depth_profiles.png')))"
+    ))
+
+    # ===== Promoted protocol =====
+    cells.append(md(
+        "## Promoted protocol summary\n\n"
+        "**HCR** - `roi_hybrid_quad_gauss_ceiling` (N10):\n"
+        "1. Density-filter ROI centroids (>= 3 neighbours within 30 um).\n"
+        "2. Bin into 120 um (x, y) tiles; take 2 %-quantile z per tile.\n"
+        "3. Robust IRLS-Huber quadratic fit through the tile envelope.\n"
+        "4. Compute `tile_z - quad`, smooth with a Gaussian kernel\n"
+        "   (`sigma = 120 um`), add the result to the quadratic.\n"
+        "5. Lift so no tile min-z sits above the surface; subtract 5 um\n"
+        "   safety offset.\n\n"
+        "**CZ** - `cz_image_with_roi_ceiling`:\n"
+        "1. Fit tilted image plane with `relative_margin = 0.02`,\n"
+        "   `min_signal_abs = 50`.\n"
+        "2. Bin ROIs into 80 um tiles, per-tile min-z.\n"
+        "3. Lift the plane to cover every tile; subtract 3 um safety."
+    ))
+
+    nb["cells"] = cells
+    NB.parent.mkdir(parents=True, exist_ok=True)
+    with open(NB, "w") as f:
+        nbf.write(nb, f)
+    print("Wrote", NB)
+
+
+if __name__ == "__main__":
+    build()

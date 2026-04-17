@@ -1,0 +1,210 @@
+# Plan — create the "grand plan" markdown for automated czstack ↔ HCR coregistration
+
+## Context
+
+The project goal is to automate the coregistration that is currently manual (BigWarp). Prior sessions have built solid foundations (benchmark loader, pia surface estimation, anisotropy/expansion analysis, depth-from-surface coordinate) but **no automated registration candidate has been implemented yet**. The user wants a **persistent markdown** that enumerates candidate approaches, ordered by simplicity × likely success rate, so future sessions pick them up one by one and update results in-place.
+
+This plan file is a meta-plan. The deliverable is a new doc in the repo — ordering, candidate sketches, reuse pointers, validation rules — that becomes the single source of truth for what to attempt next.
+
+## What the grand plan builds on (verified during this session)
+
+**Production-ready utilities (under `dev_code/` and `manual workflow/`):**
+- `benchmark_data_loader.load_subject()` — unified loader; handles 3 GFP+ sources (spot-count CSV, raw spot aggregation, intensity CSV).
+- `benchmark_analysis.estimate_pia_surface_quantile_ceiling()` — canonical HCR pia surface (N22 default, validated on all 6 subjects, `above_frac ≤ 0.08 %`, `onset_depth 2.5–7.5 µm`).
+- `benchmark_analysis.estimate_pia_surface_image_ceiling()` — CZ image-based surface (roughness ≤ 12 µm, tilt ≤ 3°).
+- `benchmark_analysis.depth_from_surface()`, `depth_profile()` — depth-from-pia axial feature.
+- `benchmark_analysis.anisotropic_similarity_fit()` — Procrustes rotation + per-axis scale + translation.
+- `manual workflow/manual_coreg_utils.py`: `choose_max_count_nearest_neighbor()` (k-NN + max-density, duplicate-safe), `one_to_one_matching()` (iterative global-min-distance), `get_ids_from_landmarks()`.
+- `manual workflow/landmark_filtering.py`: `grid_sample_landmarks()`, volume bounds, distribution viz.
+- `scipy.interpolate.Rbf(..., function='thin_plate')` — TPS (per-axis, same as manual pipeline uses).
+
+**Benchmark priors (hard-codeable for init):**
+- XY expansion ~1.77× (range 1.64–1.92×); Z expansion ~2.83× (range 2.13–3.58×).
+- Rotation ~180° in XY on all 6 subjects.
+- 1-NN ~20 µm; 5-NN ~33–37 µm.
+- Post-affine residual 16–43 µm RMS — the scale of the nonrigid warp TPS must handle.
+- Manual match rates 34–86 % define the per-subject difficulty ceiling.
+
+**Landmark CSV ground truth (no header, 8 cols):**
+`ids, active, cz_x, cz_y, cz_z, hcr_x, hcr_y, hcr_z`
+`Pt-{n}` rows = manual landmarks (lowest Pt-# = initial constellation, 4–6 cells clustered in (x,y,z), few other ROIs in convex hull); `cz#-hcr#` rows = automatic candidates awaiting QC.
+
+## What is NOT yet built (the gaps the grand plan organises)
+
+- Sub-volume localisation (CZ inside HCR).
+- Constellation detector + initial-match finder.
+- Iterative TPS landmark expansion with automatic confidence gate.
+- ROI-to-ROI classification / QC scorer.
+- **Manual-correction GUI** for reviewing automated results and generating training labels (currently only BigDataViewer/FIJI is used; a bespoke GUI is needed because automated steps must be auditable and correctable, and every correction becomes a training sample).
+- End-to-end pipeline that wires the above into a `coreg_table.csv` writer.
+
+## QC training data — sources of ground truth
+
+The grand plan treats these three sources as the QC supervision signal:
+
+1. **`coreg_table.csv`** — the canonical gold standard per subject (one-to-one `[czstack_id, hcr_id]`, output of manual workflow step 4). Primary positives for training and for final metrics.
+2. **`landmarks_*_qced.csv` rows with `active=true`** — richer superset of coreg_table (contains intermediate QC'd pairs); also positives.
+3. **GUI-generated corrections** — every accept/reject/adjust action becomes a labelled example. This is the only way the training set grows over time, and it is why the GUI is a first-class deliverable rather than an afterthought.
+
+Negatives are random unmatched pairs within spatial neighbourhoods; hard negatives come from candidates that the GUI user rejected.
+
+## Deliverable
+
+- **Path:** `/root/capsule/code/docs/07 Grand Plan.md` (next number in the existing `01..06` doc sequence, matching the spaces-and-title-case naming).
+- **Status contract:** each candidate block ends with a Status line — `not_started | in_progress | validated | abandoned` — plus a one-line Findings summary and a pointer to the session's `log.md` once closed. Future sessions edit the Status line when they pick up / finish a candidate.
+- **One-line reference added to `CLAUDE.md`** under the existing "Project References" list so it shows up alongside `01..06`.
+
+## Structure of the grand plan markdown
+
+```
+# Grand plan — automated czstack ↔ HCR coregistration
+
+## 0. Foundations already available   (pointers only; no content duplication)
+
+## 1. Registration protocol
+   Pipeline sketch:  Surface → Coarse affine → Seed match → TPS expansion → Fine match
+   1.A  Coarse localisation   (R1)
+   1.B  Seed match            (R2)    ← requires QC gate (Q0 or Q1)
+   1.C  Landmark expansion    (R3)    ← requires QC gate (Q1 or Q2)
+   1.D  Optional upgrades     (R4–R6)
+
+## 2. QC protocol (ROI-to-ROI confirmation)
+   2.A  Distance + context filters   (Q1)                    — gate for R3
+   2.B  Seed-match verifier          (Q0, small/special)     — gate for R2
+   2.C  Hand-crafted feature scorer  (Q2, Q3)
+   2.D  Learned embeddings           (Q4, Q5)
+
+## 3. GUI for review & correction      (G1 basic, G2 active-learning loop)
+   3.A  Minimum viable viewer + accept/reject/adjust
+   3.B  Exports updated landmarks.csv and coreg_table.csv
+   3.C  Every action is logged as a labelled training example for Q3/Q4/Q5
+
+## 4. Validation strategy
+   Hold-out policy, metrics, dev-vs-benchmark split.
+
+## 5. Session / result ledger
+   Table:  candidate | session dir | status | headline metric | link to log.md
+```
+
+Each candidate block is short and uniform — **Goal / Inputs / Method sketch / Outputs / Success metric / Dependencies / Estimated effort / Status**.
+
+## Candidate list (ordered by simplicity × success likelihood)
+
+### Registration
+
+**R1 — Depth-profile + XY-density coarse alignment  _(tier 1, simplest)_**
+- Apply anisotropic rescale + 180° prior to CZ GFP+ → approximate HCR space; align axially via 1D cross-correlation of depth-from-pia density profiles; align XY via grid search over 2D Gaussian-blurred GFP+ density maps.
+- Outputs: coarse (R, S, t) — sub-volume localisation.
+- Reuses: `estimate_pia_surface_*`, `depth_profile`, benchmark priors.
+- Why first: all inputs exist; failure modes few.
+
+**R2 — Constellation matching (geometric-hash / graph seed)  _(tier 1; depends on Q0 / Q1 gate)_**
+- In CZ, enumerate candidate 4–6 cell clusters ranked by "convex-hull emptiness" and tight spacing; compute invariant descriptor (pairwise-distance histogram, angles); search matching descriptor in HCR inside R1's coarse region; RANSAC-verify.
+- Outputs: 4–6 seed active landmarks **plus a confidence score** — the top-K candidate seeds are surfaced for QC, not just the single best.
+- Reuses: R1 output, `scipy.spatial.ConvexHull`, `scipy.spatial.distance_matrix`.
+- Directly mimics the manual "initial constellation" step; cluster-uniqueness signature (user-confirmed) is the load-bearing cue.
+- **QC dependency:** the automatic top-1 may be wrong; a seed-match verifier (Q0) or GUI pass must confirm before expansion, otherwise a bad seed propagates.
+
+**R3 — Iterative landmark expansion with TPS  _(tier 1, faithful manual mimic; depends on Q1/Q2 gate)_**
+- Seeded by R2 (or by GUI-selected seed). Per-axis `Rbf` TPS on active landmarks; for each unmatched CZ cell → map to HCR → k-NN among GFP+ (reuse `choose_max_count_nearest_neighbor`, `k=5`, `feature='density'`) → accept if confidence gate passes → re-fit → repeat.
+- Outputs: dense landmarks + candidate coreg table **with per-pair confidence**.
+- Reuses: `manual_coreg_utils.*`, `Rbf`.
+- **QC dependency:** the confidence gate is Q1 (tier 1) or Q2/Q3 (richer); without it, greedy expansion drifts. The landmark set should be **reviewable in the GUI** so a human can catch drift early.
+
+**R4 — Anisotropic ICP + grid-TPS refinement  _(tier 2)_**
+- Anisotropic-scale ICP on all GFP+ seeded from R1/R2; grid TPS control points post-convergence. Tighter global fit than R3 but less robust to outliers.
+
+**R5 — Probabilistic nonrigid point-cloud registration (CPD / FilterReg)  _(tier 3)_**
+- Off-the-shelf GMM-based nonrigid; native handling of partial overlap; parameter-heavy.
+
+**R6 — Learned descriptor / GNN / contrastive embedding  _(tier 3, research lane)_**
+- Neighbourhood encoder → bipartite matching in embedding space; needs the R3+Q3 pipeline to produce training data first.
+
+### QC
+
+**Q0 — Seed-match verifier  _(tier 1; gates R2)_**
+- Specialised check for the initial 4–6 pair constellation: does the CZ cluster's distance matrix match the candidate HCR cluster's within the known anisotropic expansion? Does the seed TPS (after anisotropic affine) have low residual on held-out nearby cells? If the top-1 fails, surface top-K via GUI.
+- Outputs: accept / reject / human-review flag on the seed.
+
+**Q1 — Distance + context-consistency filter  _(tier 1; gates R3)_**
+- Reject a candidate pair if residual > 3·σ of local active-landmark residuals, or if 1-NN-graph topology disagrees (CZ neighbours map near HCR neighbours). Direct confidence gate for R3's expansion loop.
+
+**Q2 — Neighbourhood descriptor scoring  _(tier 1)_**
+- Per-candidate descriptor (sorted k-NN distances, relative angles, local density, depth-from-surface, ROI volume ratio, spot count / intensity); kernel similarity; single threshold. Cheap, auditable upgrade over Q1.
+
+**Q3 — Gradient-boosted classifier on hand-crafted features  _(tier 2; needs labelled data)_**
+- **Training labels:**
+  - Positives = `coreg_table.csv` pairs (canonical ground truth, output of manual step 4) **plus** `active=true` rows from the final iter-N landmarks CSV (supersets coreg_table with intermediate QC'd pairs).
+  - Hard negatives = GUI-rejected candidates (grows over time).
+  - Easy negatives = random unmatched pairs within spatial neighbourhoods.
+- Features from Q2; leave-one-subject-out CV; calibrated match probability. 500–1000 positives per subject × 6 subjects is sufficient for tree methods.
+- Replaces the hand-tuned threshold in Q1/Q2 with a learned one.
+
+**Q4 — Contrastive neighbourhood embedding  _(tier 3)_**
+- Small PointNet / Transformer on local point clouds; InfoNCE loss pairing `coreg_table` matches. Training data same sources as Q3.
+
+**Q5 — GAN-based match classification  _(tier 3, user-mentioned)_**
+- Discriminator between matched vs. unmatched neighbourhood patches; generator for data augmentation. Included for completeness; expected lower ROI than Q3/Q4 at this data scale.
+
+### GUI  (first-class deliverable — enables all of QC training and active learning)
+
+**G1 — Minimum viable review GUI  _(tier 1; blocks Q3/Q4/Q5 training)_**
+- Load CZ z-stack + HCR volume + current landmarks + candidate matches.
+- Side-by-side or overlaid viewer (candidate: [napari](https://napari.org) with a plugin, or a Jupyter/ipywidgets panel — decide in the first G1 session).
+- Per-candidate: accept / reject / adjust HCR target / flag uncertain.
+- Writes updated `landmarks_*_qced.csv` and regenerates `coreg_table.csv` via manual step 4 logic.
+- **Every GUI action is appended to a `qc_actions.jsonl` log** (timestamp, subject, candidate_id, action, before/after coordinates) — this is the training corpus for Q3/Q4/Q5 and for future active-learning rounds.
+
+**G2 — Active-learning loop  _(tier 2; depends on G1 + Q3)_**
+- Given a trained Q3 classifier, surface the highest-uncertainty candidates first; human labels fastest-growing signal; retrain Q3 periodically.
+
+## Ordering rationale (written into the doc)
+
+- Simplicity first: R1 → R2 → R3 all reuse existing utilities and can land in separate small sessions.
+- **QC and GUI are not "after" registration — they are co-requisites.** R2 requires Q0 (seed verifier) or a GUI pass to avoid seeding from a wrong cluster; R3 requires Q1 (or richer gate) to avoid greedy drift. Concretely the recommended session order is:
+  1. R1 (coarse align; no QC dependency)
+  2. Q1 + Q2 (gate logic; ready for R3 as soon as a seed exists)
+  3. G1 (minimum GUI; unblocks Q3 training data collection)
+  4. R2 with Q0 (seed match + verifier; GUI surfaces top-K if top-1 is rejected)
+  5. R3 gated by Q1/Q2 (expansion)
+  6. Q3 on accumulated labels from G1 actions, upgrading the R3 gate
+  7. R4/R5 and Q4/Q5/G2 as later rounds
+- Most of the between-modality variance is explained by the anisotropic affine + surface-plane alignment (benchmark stats); the remaining ~25–45 µm residual is what TPS on ~50–100 landmarks handles in the manual protocol.
+- ML/deep tiers last: they need `coreg_table.csv` + GUI-generated labels; R3+Q3+G1 together bootstrap that corpus.
+
+## Validation strategy (same for every candidate, written into the doc)
+
+- Respect CLAUDE.md dev-protocol rule: **do not use benchmark data to design the algorithms**; use it only to validate afterwards.
+- Primary validation subjects: 788406, 790322 (high-quality spot data).
+- Stress subjects: 767018 (older pipeline, 35 % match rate) and 782149 (thin + tilted, 34 %).
+- Secondary: 755252, 767022 (intensity-only GFP+ — needs threshold sweep).
+- Metrics:
+  - Registration: % of CZ cells within D µm of their manual match (D ∈ {5, 10, 20}); landmark residual RMS; match-rate vs. manual baseline.
+  - QC: precision/recall vs. manual `active=true` labels; calibration plot.
+
+## Session / ledger template (written into the doc)
+
+| Candidate | Session dir                       | Status      | Headline metric | Log |
+|-----------|-----------------------------------|-------------|-----------------|-----|
+| R1        | `sessions/NN_R1_coarse_align/`    | not_started | —               | —   |
+| Q1        | `sessions/NN_Q1_gate/`            | not_started | —               | —   |
+| G1        | `sessions/NN_G1_review_gui/`      | not_started | —               | —   |
+| R2 + Q0   | `sessions/NN_R2_constellation/`   | not_started | —               | —   |
+| R3        | `sessions/NN_R3_tps_expansion/`   | not_started | —               | —   |
+| Q3        | `sessions/NN_Q3_classifier/`      | not_started | —               | —   |
+| …         |                                   |             |                 |     |
+
+## Verification of the grand plan after writing
+
+1. `Grep` `CLAUDE.md` for "07" to confirm the one-line link landed in the Project References block.
+2. Open `07 Grand Plan.md` and confirm every candidate block carries the same fields (Goal/Inputs/Method/Outputs/Success metric/Dependencies/Effort/Status).
+3. Ordering check: R1 precedes R2 precedes R3; Q1 precedes Q2 precedes Q3; tiers monotonically increase.
+4. Sanity read: a new session picking up R1 should be able to start without reading any other doc besides 01–07 and the referenced utility functions.
+
+## Files touched during execution
+
+- `CREATE` `/root/capsule/code/docs/07 Grand Plan.md`
+- `EDIT`  `/root/capsule/CLAUDE.md` — add one line under "Project References":
+  `- /root/capsule/code/docs/07 Grand Plan.md` (the living candidate-ordered plan)
+
+No code changes; no benchmark data read during execution.

@@ -1,0 +1,386 @@
+"""Data loader for benchmark coregistration subjects.
+
+Handles the 6 benchmark subjects (755252, 767018, 767022, 782149, 788406, 790322)
+and the format variations between them.
+
+Coordinate conventions (following manual workflow/step_2):
+- CZ centroids and landmarks are in CZ-pixel coordinates:
+    XY: 0.78 um/pixel (all current subjects; 400 um FOV / 512 pixels)
+    Z : 1.0 um/pixel
+- HCR centroids and landmarks (HCR side) are in level-2 pyramid pixels:
+    XY: (dimensions.x[0] in meters) * 4e6  um/pixel  (approx 0.988)
+    Z : (dimensions.z[0] in meters) * 1e6  um/pixel  (approx 1.0)
+  Column ordering in landmark CSVs is [cz_x, cz_y, cz_z, hcr_x, hcr_y, hcr_z].
+"""
+from __future__ import annotations
+
+import glob
+import json
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+
+DATA_DIR = Path("/root/capsule/data")
+
+# CZ side resolution (um/pixel). All current benchmark subjects use 400 um FOV / 512 px = 0.78125.
+CZ_XY_UM = 0.78
+CZ_Z_UM = 1.0
+
+# Fallback HCR resolution when fused_ng.json is absent (e.g. 767018).
+# Derived from the other subjects (0.2451-0.2474 raw um/pixel => * 4 ~= 0.988 um/level-2-px).
+HCR_XY_UM_FALLBACK = 0.988
+HCR_Z_UM_FALLBACK = 1.0
+
+
+@dataclass
+class SubjectData:
+    subject_id: str
+    coreg_dir: Path
+    hcr_dir: Path
+
+    # resolution in um/pixel for each modality in native pixel space
+    cz_xy_um: float = CZ_XY_UM
+    cz_z_um: float = CZ_Z_UM
+    hcr_xy_um: float = HCR_XY_UM_FALLBACK
+    hcr_z_um: float = HCR_Z_UM_FALLBACK
+
+    # core dataframes
+    cz_centroids: pd.DataFrame = field(default_factory=pd.DataFrame)   # [id, z, y, x] px
+    hcr_centroids: pd.DataFrame = field(default_factory=pd.DataFrame)  # [id, z, y, x] px
+    hcr_gfp_df: pd.DataFrame = field(default_factory=pd.DataFrame)     # GFP+ table w/ hcr_id
+    landmarks_qced: pd.DataFrame = field(default_factory=pd.DataFrame) # final qc'd landmarks
+    coreg_table: pd.DataFrame = field(default_factory=pd.DataFrame)    # [cz_id, hcr_id]
+    landmark_iter_files: list[Path] = field(default_factory=list)
+
+    gfp_feature_name: str = ""  # 'density' or 'mean_488' or 'counts'
+
+
+# -----------------------------------------------------------
+# path resolution
+# -----------------------------------------------------------
+def _find_coreg_dir(subject_id: str) -> Path:
+    matches = sorted(DATA_DIR.glob(f"{subject_id}*ctl-czstack-hcr-coreg_*"))
+    if not matches:
+        raise FileNotFoundError(f"No coreg dir for {subject_id}")
+    # Use the most recent one
+    return matches[-1]
+
+
+def _find_hcr_dir(subject_id: str) -> Path:
+    matches = sorted(DATA_DIR.glob(f"HCR_{subject_id}_*_processed_*"))
+    if not matches:
+        raise FileNotFoundError(f"No HCR processed dir for {subject_id}")
+    return matches[-1]
+
+
+def _find_czstack_reg_dir(subject_id: str) -> Path | None:
+    matches = sorted(DATA_DIR.glob(f"multiplane-ophys_{subject_id}_*cortical-zstack-registration*"))
+    if not matches:
+        return None
+    return matches[-1]
+
+
+# -----------------------------------------------------------
+# resolution extraction
+# -----------------------------------------------------------
+def _read_hcr_resolution(hcr_dir: Path) -> tuple[float, float] | None:
+    """Read HCR level-2 pixel resolution (um/pixel) for (xy, z).
+
+    Follows the step_2_automatic_mapping_for_qc.ipynb convention:
+        scale_xy = dimensions.x[0] (meters) * 4e6
+        scale_z  = dimensions.z[0] (meters) * 1e6
+    """
+    for name in ("fused_ng.json", "tile_subset_corrected_ng.json"):
+        f = hcr_dir / name
+        if f.exists():
+            with open(f) as fp:
+                data = json.load(fp)
+            dims = data.get("dimensions")
+            if dims and "x" in dims and "z" in dims:
+                xy = dims["x"][0] * 4e6
+                z = dims["z"][0] * 1e6
+                return float(xy), float(z)
+    return None
+
+
+def _read_cz_resolution(subject_id: str) -> tuple[float, float]:
+    """CZ pixel resolution (xy_um, z_um). All current subjects are 0.78 um/pixel XY, 1 um/pixel Z.
+
+    Attempts to read from session.json; falls back to the nominal 0.78.
+    """
+    reg_dir = _find_czstack_reg_dir(subject_id)
+    if reg_dir is not None:
+        session_file = reg_dir / "session.json"
+        if session_file.exists():
+            try:
+                with open(session_file) as f:
+                    data = json.load(f)
+                fovs = data["data_streams"][0].get("ophys_fovs", [])
+                if fovs:
+                    scale = float(fovs[0]["fov_scale_factor"])
+                    return scale, 1.0
+            except Exception:
+                pass
+    return CZ_XY_UM, CZ_Z_UM
+
+
+# -----------------------------------------------------------
+# centroid loaders
+# -----------------------------------------------------------
+def _load_cz_centroids(coreg_dir: Path) -> pd.DataFrame:
+    files = list(coreg_dir.glob("*czstack_cell_centroids.csv"))
+    if not files:
+        raise FileNotFoundError(f"No CZ centroid CSV in {coreg_dir}")
+    df = pd.read_csv(files[0])
+    # normalize column names
+    rename = {
+        "czstack_cell_id": "cz_id",
+        "czstack_z": "z_px",
+        "czstack_y": "y_px",
+        "czstack_x": "x_px",
+    }
+    df = df.rename(columns=rename)[["cz_id", "z_px", "y_px", "x_px"]]
+    return df
+
+
+def _load_hcr_centroids(hcr_dir: Path, coreg_dir: Path) -> pd.DataFrame:
+    """Load HCR cell centroids, preferring the NPY from HCR processed dir.
+
+    For 767018 (older pipeline), use the CSV in the coreg dir.
+    Returns columns [hcr_id, z_px, y_px, x_px].
+    """
+    npy = hcr_dir / "cell_body_segmentation" / "cell_centroids.npy"
+    if npy.exists():
+        arr = np.load(npy)  # (N, 4) with columns z, y, x, id
+        df = pd.DataFrame(
+            {
+                "hcr_id": arr[:, 3].astype(int),
+                "z_px": arr[:, 0].astype(float),
+                "y_px": arr[:, 1].astype(float),
+                "x_px": arr[:, 2].astype(float),
+            }
+        )
+        return df
+
+    csvs = list(coreg_dir.glob("*HCR_cell_centroids.csv"))
+    if csvs:
+        df = pd.read_csv(csvs[0])
+        df = df.rename(
+            columns={
+                "hcr_cell_id": "hcr_id",
+                "hcr_z": "z_px",
+                "hcr_y": "y_px",
+                "hcr_x": "x_px",
+            }
+        )[["hcr_id", "z_px", "y_px", "x_px"]]
+        return df
+
+    raise FileNotFoundError(f"No HCR centroid file for {hcr_dir}")
+
+
+# -----------------------------------------------------------
+# GFP+ loader
+# -----------------------------------------------------------
+def _load_gfp(subject_id: str, coreg_dir: Path) -> tuple[pd.DataFrame, str]:
+    """Return (df, feature_name) for GFP+ cells.
+
+    Priority: spot_488_counts.csv (columns include hcr_id, counts, volume, density)
+    Fallback: cell_data_mean_{subj}_R1.csv (channel 488, use mean intensity as feature)
+    If neither, return empty DataFrame.
+    """
+    spot_files = list(coreg_dir.glob("*spot_488_counts.csv"))
+    if spot_files:
+        df = pd.read_csv(spot_files[0])
+        # columns: hcr_id, counts, volume, global_bbox, density
+        return df, "density"
+
+    intensity_file = DATA_DIR / f"cell_data_mean_{subject_id}_R1.csv"
+    if intensity_file.exists():
+        df = pd.read_csv(intensity_file)
+        # Expected columns include channel, cell_id, mean (or similar)
+        df = df[df["channel"] == 488] if "channel" in df.columns else df
+        # normalize
+        rename_candidates = {"cell_id": "hcr_id", "id": "hcr_id"}
+        for k, v in rename_candidates.items():
+            if k in df.columns:
+                df = df.rename(columns={k: v})
+        feature = "mean" if "mean" in df.columns else df.columns[-1]
+        return df.reset_index(drop=True), feature
+
+    return pd.DataFrame(), ""
+
+
+# -----------------------------------------------------------
+# landmarks
+# -----------------------------------------------------------
+LANDMARK_COLS = ["ids", "active", "cz_x", "cz_y", "cz_z", "hcr_x", "hcr_y", "hcr_z"]
+
+
+def _read_landmark_file(path: Path) -> pd.DataFrame:
+    """Read a landmark CSV (no header; values may be quoted)."""
+    df = pd.read_csv(path, header=None)
+    if df.shape[1] != len(LANDMARK_COLS):
+        raise ValueError(
+            f"{path} has {df.shape[1]} cols, expected {len(LANDMARK_COLS)}"
+        )
+    df.columns = LANDMARK_COLS
+    # Normalize active to boolean
+    if df["active"].dtype != bool:
+        df["active"] = df["active"].apply(
+            lambda v: str(v).strip().lower() in ("true", "1", "t")
+        )
+    # Numeric columns
+    for c in LANDMARK_COLS[2:]:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    return df
+
+
+def _find_final_qced_landmarks(coreg_dir: Path) -> tuple[Path | None, list[Path]]:
+    """Return (final_qced_landmark_path, all_iter_paths_sorted)."""
+    pattern = "*landmarks_matched_ext_iter*.csv"
+    all_files = sorted(coreg_dir.glob(pattern))
+
+    def iter_num(p: Path) -> int:
+        name = p.name
+        # extract iter number
+        try:
+            frag = name.split("iter")[1]
+            return int(frag.split("_")[0].split(".")[0])
+        except Exception:
+            return -1
+
+    def is_qced(p: Path) -> bool:
+        return "qced" in p.name and not any(
+            tag in p.name for tag in ("backup", "temp", "test")
+        )
+
+    qced = [p for p in all_files if is_qced(p)]
+    qced.sort(key=iter_num)
+    final = qced[-1] if qced else None
+
+    # keep only per-iteration main files (not temp/backup/test)
+    iter_files = [
+        p for p in all_files
+        if not any(tag in p.name for tag in ("backup", "temp", "test"))
+    ]
+    iter_files.sort(key=iter_num)
+    return final, iter_files
+
+
+def _load_coreg_table(coreg_dir: Path) -> pd.DataFrame:
+    files = list(coreg_dir.glob("*coreg_table.csv"))
+    # Prefer the plainest filename (e.g. '{subj}_coreg_table.csv')
+    files = sorted(files, key=lambda p: len(p.name))
+    if not files:
+        return pd.DataFrame(columns=["cz_id", "hcr_id"])
+    df = pd.read_csv(files[0])
+    df = df.rename(columns={"czstack_id": "cz_id"})
+    return df[["cz_id", "hcr_id"]]
+
+
+# -----------------------------------------------------------
+# main loader
+# -----------------------------------------------------------
+def load_subject(subject_id: str) -> SubjectData:
+    subject_id = str(subject_id)
+    coreg_dir = _find_coreg_dir(subject_id)
+    hcr_dir = _find_hcr_dir(subject_id)
+
+    cz_xy, cz_z = _read_cz_resolution(subject_id)
+    hcr_res = _read_hcr_resolution(hcr_dir)
+    if hcr_res is None:
+        hcr_xy, hcr_z = HCR_XY_UM_FALLBACK, HCR_Z_UM_FALLBACK
+    else:
+        hcr_xy, hcr_z = hcr_res
+
+    cz = _load_cz_centroids(coreg_dir)
+    hcr = _load_hcr_centroids(hcr_dir, coreg_dir)
+    gfp_df, feat = _load_gfp(subject_id, coreg_dir)
+    final_lm, all_lm = _find_final_qced_landmarks(coreg_dir)
+    lm_df = _read_landmark_file(final_lm) if final_lm else pd.DataFrame(columns=LANDMARK_COLS)
+    coreg = _load_coreg_table(coreg_dir)
+
+    return SubjectData(
+        subject_id=subject_id,
+        coreg_dir=coreg_dir,
+        hcr_dir=hcr_dir,
+        cz_xy_um=cz_xy,
+        cz_z_um=cz_z,
+        hcr_xy_um=hcr_xy,
+        hcr_z_um=hcr_z,
+        cz_centroids=cz,
+        hcr_centroids=hcr,
+        hcr_gfp_df=gfp_df,
+        landmarks_qced=lm_df,
+        coreg_table=coreg,
+        landmark_iter_files=all_lm,
+        gfp_feature_name=feat,
+    )
+
+
+# -----------------------------------------------------------
+# coordinate helpers
+# -----------------------------------------------------------
+def cz_px_to_um(arr_px: np.ndarray, s: SubjectData) -> np.ndarray:
+    """arr_px columns = (z, y, x) in pixels."""
+    a = np.asarray(arr_px, dtype=float).copy()
+    a[:, 0] *= s.cz_z_um
+    a[:, 1] *= s.cz_xy_um
+    a[:, 2] *= s.cz_xy_um
+    return a
+
+
+def hcr_px_to_um(arr_px: np.ndarray, s: SubjectData) -> np.ndarray:
+    a = np.asarray(arr_px, dtype=float).copy()
+    a[:, 0] *= s.hcr_z_um
+    a[:, 1] *= s.hcr_xy_um
+    a[:, 2] *= s.hcr_xy_um
+    return a
+
+
+def landmark_pairs_um(s: SubjectData, active_only: bool = True):
+    """Return (cz_um, hcr_um) in physical microns.
+
+    Columns are (x, y, z) -> we return arrays shaped (N, 3) with the same order as stored: x, y, z.
+    """
+    lm = s.landmarks_qced
+    if lm.empty:
+        return np.empty((0, 3)), np.empty((0, 3))
+    if active_only:
+        lm = lm[lm["active"]]
+    cz = lm[["cz_x", "cz_y", "cz_z"]].values.astype(float)
+    hcr = lm[["hcr_x", "hcr_y", "hcr_z"]].values.astype(float)
+    cz_um = cz.copy()
+    cz_um[:, 0] *= s.cz_xy_um
+    cz_um[:, 1] *= s.cz_xy_um
+    cz_um[:, 2] *= s.cz_z_um
+    hcr_um = hcr.copy()
+    hcr_um[:, 0] *= s.hcr_xy_um
+    hcr_um[:, 1] *= s.hcr_xy_um
+    hcr_um[:, 2] *= s.hcr_z_um
+    return cz_um, hcr_um
+
+
+BENCHMARK_SUBJECTS = ["755252", "767018", "767022", "782149", "788406", "790322"]
+
+
+def load_all() -> dict[str, SubjectData]:
+    out = {}
+    for sid in BENCHMARK_SUBJECTS:
+        out[sid] = load_subject(sid)
+    return out
+
+
+if __name__ == "__main__":
+    data = load_all()
+    for sid, s in data.items():
+        print(
+            f"{sid}: cz={len(s.cz_centroids)}, hcr={len(s.hcr_centroids)}, "
+            f"gfp={len(s.hcr_gfp_df)} ({s.gfp_feature_name}), "
+            f"lm_active={int(s.landmarks_qced['active'].sum()) if not s.landmarks_qced.empty else 0}, "
+            f"coreg={len(s.coreg_table)}; res cz={s.cz_xy_um:.3f}, hcr_xy={s.hcr_xy_um:.3f}"
+        )

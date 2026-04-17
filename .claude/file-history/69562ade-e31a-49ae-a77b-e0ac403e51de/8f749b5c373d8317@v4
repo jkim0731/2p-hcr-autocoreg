@@ -1,0 +1,182 @@
+"""Session 03 v2 — render estimated-surface overlays on CZ and HCR data.
+
+Produces two grid figures:
+  - hcr_surface_overlays.png   (quadratic N5 surface; 10 y rows × 6 subjects)
+  - cz_surface_overlays.png    (CZ ceiling plane;      10 y rows × 6 subjects)
+
+Layout: one column per subject, one row per y-slab position. y positions are
+evenly spaced across the ROI-y range of each subject.
+
+The surfaces are re-fit here using the same methods that produced the
+winning rows of `hcr_results.csv` / `cz_results.csv`.
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+
+sys.path.insert(0, str(Path(__file__).parent))
+from benchmark_analysis import (
+    load_cz_y_slab,
+    load_hcr_combined,
+    load_hcr_y_slab,
+    plot_pia_overlay,
+)
+from benchmark_data_loader import BENCHMARK_SUBJECTS, cz_px_to_um, hcr_px_to_um, load_subject
+
+# The sibling file's name starts with a digit, so import it via importlib.
+import importlib.util as _iu
+_spec = _iu.spec_from_file_location(
+    "surface_iteration_v2",
+    Path(__file__).parent / "03_surface_iteration_v2.py",
+)
+_mod = _iu.module_from_spec(_spec)
+sys.modules["surface_iteration_v2"] = _mod
+_spec.loader.exec_module(_mod)
+cz_image_with_roi_ceiling = _mod.cz_image_with_roi_ceiling
+roi_leading_edge_quadratic = _mod.roi_leading_edge_quadratic
+load_cz_image = _mod.load_cz_image
+
+OUT = Path("/root/capsule/code/sessions/03_surface_estimation_v2")
+FIG = OUT / "figures"
+FIG.mkdir(parents=True, exist_ok=True)
+
+N_Y_ROWS = 10
+
+
+def _hcr_surface(hcr_xyz):
+    """Winning HCR method: quadratic surface through density-filtered
+    per-tile min-z with a small safety offset."""
+    return roi_leading_edge_quadratic(hcr_xyz, z_offset_um=-3.0)
+
+
+def _cz_surface(s, cz_xyz):
+    img = load_cz_image(s)
+    surf = cz_image_with_roi_ceiling(
+        cz_xyz, img, s.cz_z_um, s.cz_xy_um,
+        margin=0.02, safety_offset_um=3.0,
+    )
+    return surf
+
+
+def _y_positions(xyz, n):
+    """n evenly-spaced y positions between the 5–95 % percentiles of
+    ROI y — avoids edges where the slab would sit outside cortex."""
+    lo, hi = np.percentile(xyz[:, 1], [5, 95])
+    return np.linspace(lo, hi, n)
+
+
+def _plot_hcr(subjects, n_rows=N_Y_ROWS):
+    cols = len(subjects)
+    fig, axes = plt.subplots(
+        n_rows, cols,
+        figsize=(2.6 * cols, 1.8 * n_rows),
+        squeeze=False,
+    )
+
+    for j, sid in enumerate(subjects):
+        s = load_subject(sid)
+        hcr_um = hcr_px_to_um(
+            s.hcr_centroids[["z_px", "y_px", "x_px"]].values, s)
+        hcr_xyz = hcr_um[:, [2, 1, 0]]
+        surf = _hcr_surface(hcr_xyz)
+        ys = _y_positions(hcr_xyz, n_rows)
+        band = 20.0
+        for i, y in enumerate(ys):
+            ax = axes[i, j]
+            try:
+                mip, y_ret, z_um, xy_um = load_hcr_y_slab(
+                    s, channel="488", y_center_um=float(y),
+                    half_width_um=band, level=4)
+            except FileNotFoundError:
+                ax.axis("off"); continue
+            plot_pia_overlay(
+                ax, mip, z_um=z_um, x_um=xy_um, surface=surf,
+                y_slab_um=float(y),
+                title=f"{sid}  y={y:.0f} um" if i == 0 else f"y={y:.0f}",
+            )
+            in_slab = np.abs(hcr_xyz[:, 1] - y) <= band
+            ax.scatter(hcr_xyz[in_slab, 0], hcr_xyz[in_slab, 2],
+                       s=0.7, c="cyan", alpha=0.4)
+            ax.get_legend().remove() if ax.get_legend() else None
+            ax.tick_params(labelsize=6)
+            ax.set_xlabel(""); ax.set_ylabel("")
+            ax.set_title(ax.get_title(), fontsize=7)
+        # Column header (subject) already embedded in top-row title.
+    fig.suptitle(
+        "HCR estimated surface (N5 quadratic, offset=-3 um) — "
+        "rows = y-slabs, columns = subjects",
+        fontsize=10, y=1.0,
+    )
+    fig.tight_layout(rect=(0, 0, 1, 0.99))
+    out = FIG / "hcr_surface_overlays.png"
+    fig.savefig(out, dpi=110)
+    plt.close(fig)
+    print(f"Saved {out}")
+
+
+def _plot_cz(subjects, n_rows=N_Y_ROWS):
+    cols = len(subjects)
+    fig, axes = plt.subplots(
+        n_rows, cols,
+        figsize=(2.6 * cols, 1.8 * n_rows),
+        squeeze=False,
+    )
+    for j, sid in enumerate(subjects):
+        s = load_subject(sid)
+        cz_um = cz_px_to_um(
+            s.cz_centroids[["z_px", "y_px", "x_px"]].values, s)
+        cz_xyz = cz_um[:, [2, 1, 0]]
+        surf = _cz_surface(s, cz_xyz)
+        ys = _y_positions(cz_xyz, n_rows)
+        band_um = 15 * s.cz_xy_um
+        for i, y in enumerate(ys):
+            ax = axes[i, j]
+            y_px = int(round(float(y) / s.cz_xy_um))
+            try:
+                mip, y_px, z_um, xy_um = load_cz_y_slab(
+                    s, y_center_px=y_px, half_width_px=15)
+            except FileNotFoundError:
+                ax.axis("off"); continue
+            y_slab_um = y_px * xy_um
+            plot_pia_overlay(
+                ax, mip, z_um=z_um, x_um=xy_um, surface=surf,
+                y_slab_um=y_slab_um,
+                title=f"{sid}  y={y_slab_um:.0f} um" if i == 0
+                else f"y={y_slab_um:.0f}",
+            )
+            in_slab = np.abs(cz_xyz[:, 1] - y_slab_um) <= band_um
+            ax.scatter(cz_xyz[in_slab, 0], cz_xyz[in_slab, 2],
+                       s=0.7, c="cyan", alpha=0.4)
+            ax.get_legend().remove() if ax.get_legend() else None
+            ax.tick_params(labelsize=6)
+            ax.set_xlabel(""); ax.set_ylabel("")
+            ax.set_title(ax.get_title(), fontsize=7)
+    fig.suptitle(
+        "CZ estimated surface (cz_ceiling_2pct) — "
+        "rows = y-slabs, columns = subjects",
+        fontsize=10, y=1.0,
+    )
+    fig.tight_layout(rect=(0, 0, 1, 0.99))
+    out = FIG / "cz_surface_overlays.png"
+    fig.savefig(out, dpi=110)
+    plt.close(fig)
+    print(f"Saved {out}")
+
+
+if __name__ == "__main__":
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--scope", choices=("hcr", "cz", "all"), default="all")
+    ap.add_argument("--subjects", nargs="*", default=None)
+    args = ap.parse_args()
+    subjects = args.subjects or BENCHMARK_SUBJECTS
+    if args.scope in ("hcr", "all"):
+        _plot_hcr(subjects)
+    if args.scope in ("cz", "all"):
+        _plot_cz(subjects)

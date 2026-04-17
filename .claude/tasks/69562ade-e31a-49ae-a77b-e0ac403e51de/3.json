@@ -1,0 +1,9 @@
+{
+  "id": "3",
+  "subject": "Validate new surface using ROI depth-density profiles",
+  "description": "Run validation metrics (above_frac, onset_depth, per-x-bin / per-y-bin spread), render depth profiles and surface overlays, and confirm improvement over N6 quadratic baseline.",
+  "activeForm": "Validating surface via ROI depth-density profiles",
+  "status": "in_progress",
+  "blocks": [],
+  "blockedBy": []
+}

@@ -1,0 +1,9 @@
+{
+  "id": "3",
+  "subject": "Design R1 (Plan subagent)",
+  "description": "Draft coarse-affine algorithm: prior anisotropic rescale + 180° rotation, 1-D depth-profile cross-correlation for z-shift, 2-D Gaussian density map grid search for XY, return (R, S, t). Include failure modes and diagnostics.",
+  "activeForm": "Designing R1",
+  "status": "completed",
+  "blocks": [],
+  "blockedBy": []
+}

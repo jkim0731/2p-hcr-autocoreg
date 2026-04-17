@@ -1,0 +1,9 @@
+{
+  "id": "5",
+  "subject": "Validate R1 on benchmark",
+  "description": "Compute manual-landmark-derived affine (anisotropic_similarity_fit) as ground truth. Measure origin error (µm), rotation error (°), and depth-profile residual across subjects 755252, 767018, 767022, 782149, 788406, 790322. Success: origin ≤100 µm, rot ±10°.",
+  "activeForm": "Validating R1",
+  "status": "pending",
+  "blocks": [],
+  "blockedBy": []
+}

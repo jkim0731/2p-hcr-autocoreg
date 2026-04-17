@@ -1,0 +1,562 @@
+"""Session 03 v2 — re-iterate surface estimation with the corrected criterion.
+
+Corrected criterion (from user):
+  - ROI density at AND above the surface should be close to 0 (not exactly 0).
+  - In `depth = z_cell - z_surface` coordinates that means density at
+    depth <= 0 should be close to 0 (out-of-tissue ROIs should fall at
+    positive depth after the shift, not negative).
+  - Previous v1 M4 pushed the surface the WRONG direction (into tissue),
+    leaving the junk spike at negative depth.
+  - Surface is not always flat; we must fit tilts.
+  - Use multiple channels where helpful.
+  - A separate protocol is needed for CZ (no out-of-tissue junk, but still
+    has a thin low-density buffer layer above cortex).
+
+Outputs are written under /tmp/03_surface_v2 and copied to
+/root/capsule/scratch/03_surface_v2 when that path is writable.
+"""
+from __future__ import annotations
+
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+
+sys.path.insert(0, str(Path(__file__).parent))
+from benchmark_data_loader import BENCHMARK_SUBJECTS, load_subject
+from benchmark_analysis import (
+    _robust_plane_fit,
+    cz_px_to_um,
+    depth_from_surface,
+    depth_profile,
+    estimate_pia_surface_from_image,
+    filter_in_tissue,
+    hcr_px_to_um,
+    list_hcr_channels,
+    load_hcr_combined,
+    load_hcr_volume,
+)
+
+# ---------------------------------------------------------------
+# Output locations
+# ---------------------------------------------------------------
+OUT = Path("/root/capsule/code/sessions/03_surface_estimation_v2")
+FIG = OUT / "figures"
+OUT.mkdir(parents=True, exist_ok=True)
+FIG.mkdir(exist_ok=True)
+
+
+# ---------------------------------------------------------------
+# Quality metrics — corrected criterion
+# ---------------------------------------------------------------
+def quality_metrics(pts_um: np.ndarray, surface: dict) -> dict:
+    """Return quality metrics under the corrected criterion.
+
+    - `above_frac` — share of cells with depth < 0. **Primary metric**:
+      target close to 0 (the user accepts "close to 0 but not exactly 0").
+    - `above_frac_5` — share with depth < -5 um (same as v1 frac_above_pia
+      for backward comparison).
+    - `cum_above_ratio` — mean density over [-200, 0] / mean density over
+      [50, 200]. Expresses cumulative above-pia density relative to bulk.
+      Target: << 1.
+    - `onset_depth_um` — depth (>=0) where smoothed density first reaches
+      50% of bulk. Larger onset_depth = surface sits further above tissue.
+    - `above_peak_pos` — position (um) of the maximum density in the
+      window [-200, 0]. If a spike still sits above the surface it will
+      show here as a negative number.
+    """
+    if surface is None or len(pts_um) == 0:
+        return {k: float("nan") for k in (
+            "above_frac", "above_frac_5", "cum_above_ratio",
+            "onset_depth_um", "above_peak_pos")}
+    d = depth_from_surface(pts_um, surface)
+    n_total = len(d)
+    above_frac = float((d < 0).sum()) / n_total
+    above_frac_5 = float((d < -5).sum()) / n_total
+    bin_um = 5.0
+    edges = np.arange(-200.0, 800.0 + bin_um, bin_um)
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    h, _ = np.histogram(d, bins=edges)
+    dens = h.astype(float) / bin_um
+    bulk_mask = (centers >= 50) & (centers <= 200)
+    above_mask = (centers >= -200) & (centers < 0)
+    bulk = dens[bulk_mask].mean() if bulk_mask.any() else 0.0
+    above_mean = dens[above_mask].mean() if above_mask.any() else 0.0
+    cum_above_ratio = float(above_mean / bulk) if bulk > 0 else float("nan")
+    # Onset depth: smoothed density crosses 0.5 * bulk going positive
+    ksz = 6  # 30 um boxcar
+    smooth = np.convolve(dens, np.ones(ksz) / ksz, mode="same")
+    pos_mask = centers >= 0
+    over = pos_mask & (smooth >= 0.5 * bulk)
+    onset_depth = float(centers[over][0]) if (bulk > 0 and over.any()) else float("nan")
+    # Peak position above surface (most "troublesome" above-pia depth)
+    if above_mask.any():
+        i = int(np.argmax(dens[above_mask]))
+        above_peak_pos = float(centers[above_mask][i])
+    else:
+        above_peak_pos = float("nan")
+    return {
+        "above_frac": above_frac,
+        "above_frac_5": above_frac_5,
+        "cum_above_ratio": cum_above_ratio,
+        "onset_depth_um": onset_depth,
+        "above_peak_pos": above_peak_pos,
+    }
+
+
+# ---------------------------------------------------------------
+# HCR methods (shallower direction)
+# ---------------------------------------------------------------
+def image_low_margin(vol, z_um, xy_um, margin: float, min_signal_abs: float):
+    """Image-based fit with a very low `relative_margin` — catches the
+    outermost signal edge. Smaller margin = surface placed shallower."""
+    return estimate_pia_surface_from_image(
+        vol, z_um, xy_um,
+        min_signal_abs=min_signal_abs,
+        relative_margin=margin,
+    )
+
+
+def per_channel_shallowest(s, level: int, margin: float, min_signal_abs: float = 100.0):
+    """Fit a plane from each HCR channel independently, then return the plane
+    whose intercept `c` is the shallowest (smallest z) at the volume centre.
+
+    Rationale: different channels highlight different structures; the pia is
+    whichever channel detects the topmost (smallest z) tissue boundary."""
+    planes = []
+    for ch in list_hcr_channels(s):
+        try:
+            vol, xy_um, z_um = load_hcr_volume(s, channel=ch, level=level)
+        except FileNotFoundError:
+            continue
+        fit = estimate_pia_surface_from_image(
+            vol, z_um, xy_um,
+            min_signal_abs=min_signal_abs,
+            relative_margin=margin,
+        )
+        if fit is not None:
+            fit["channel"] = ch
+            planes.append(fit)
+    if not planes:
+        return None
+    # Pick the plane with the smallest z at the mean (x,y) footprint of cells
+    # (smallest z = shallowest = most toward buffer).
+    key = [(p["c"], p) for p in planes]
+    key.sort(key=lambda t: t[0])
+    winner = dict(key[0][1])
+    winner["method"] = "per_channel_shallowest"
+    winner["n_channels_considered"] = len(planes)
+    return winner
+
+
+def roi_leading_edge_plane(
+    hcr_xyz_um: np.ndarray,
+    *,
+    xy_tile_um: float = 120.0,
+    q_frac: float = 0.02,
+    density_filter_radius: float = 30.0,
+    density_min_neighbors: int = 3,
+    z_offset_um: float = -15.0,
+):
+    """Fit a tilted plane to the per-tile **shallowest** ROI centroid, then
+    translate by `z_offset_um` (negative = toward buffer) so the plane sits
+    slightly above the topmost ROIs.
+
+    Density filter (≥`density_min_neighbors` neighbours in `radius`) removes
+    truly-isolated ROIs (often segmentation singletons) before taking the
+    minimum per tile, otherwise one outlier in the buffer would pull the
+    plane too high. The segmentation *clusters* in the buffer (session 01
+    Stage A) are preserved by the filter — those are the ROIs the pia must
+    sit above."""
+    pts = np.asarray(hcr_xyz_um, dtype=float)
+    if len(pts) < 50:
+        return None
+    keep = filter_in_tissue(
+        pts, radius_um=density_filter_radius,
+        min_neighbors=density_min_neighbors,
+    )
+    pts = pts[keep]
+    if len(pts) < 50:
+        return None
+    xs, ys, zs = pts[:, 0], pts[:, 1], pts[:, 2]
+    x_bin = (xs // xy_tile_um).astype(int)
+    y_bin = (ys // xy_tile_um).astype(int)
+    key = y_bin * 100000 + x_bin
+    df = pd.DataFrame({"key": key, "x": xs, "y": ys, "z": zs})
+    g = df.groupby("key")
+    # Take the q_frac quantile of z per tile (q=0 → absolute min).
+    agg = g.agg(x=("x", "median"), y=("y", "median"),
+                z=("z", lambda v: float(np.quantile(v, q_frac))),
+                n=("z", "size"))
+    agg = agg[agg["n"] >= 5]
+    if len(agg) < 10:
+        return None
+    fit = _robust_plane_fit(agg["x"].values, agg["y"].values, agg["z"].values)
+    fit["c"] = float(fit["c"] + z_offset_um)
+    fit["method"] = "roi_leading_edge"
+    fit["n_tiles"] = int(len(agg))
+    fit["z_offset_um"] = float(z_offset_um)
+    return fit
+
+
+def image_with_roi_ceiling(
+    hcr_xyz_um: np.ndarray,
+    vol: np.ndarray,
+    z_um: float,
+    xy_um: float,
+    *,
+    margin: float = 0.01,
+    min_signal_abs: float = 0.05,
+    safety_offset_um: float = 5.0,
+    roi_xy_tile_um: float = 120.0,
+    roi_q_frac: float = 0.02,
+):
+    """Low-margin image fit, then **clamp** the plane so no tile has ROIs
+    above it. Tile by tile: if the tile's q_frac quantile of ROI z is
+    above the image plane at that tile centre, lift the entire plane by
+    the deficit (conservative global lift keeps it a plane — required).
+
+    This approach adds robustness against tiles where the image threshold
+    misses a cell-bearing region."""
+    base = estimate_pia_surface_from_image(
+        vol, z_um, xy_um,
+        min_signal_abs=min_signal_abs,
+        relative_margin=margin,
+    )
+    if base is None:
+        return None
+    pts = np.asarray(hcr_xyz_um, dtype=float)
+    keep = filter_in_tissue(pts, radius_um=30.0, min_neighbors=3)
+    pts = pts[keep]
+    if len(pts) < 50:
+        return base
+    xs, ys, zs = pts[:, 0], pts[:, 1], pts[:, 2]
+    x_bin = (xs // roi_xy_tile_um).astype(int)
+    y_bin = (ys // roi_xy_tile_um).astype(int)
+    key = y_bin * 100000 + x_bin
+    df = pd.DataFrame({"key": key, "x": xs, "y": ys, "z": zs})
+    g = df.groupby("key")
+    agg = g.agg(x=("x", "median"), y=("y", "median"),
+                z=("z", lambda v: float(np.quantile(v, roi_q_frac))),
+                n=("z", "size"))
+    agg = agg[agg["n"] >= 5]
+    if len(agg) < 5:
+        return base
+    # Plane value at each tile centre
+    plane_z = base["a"] * agg["x"].values + base["b"] * agg["y"].values + base["c"]
+    deficit = plane_z - agg["z"].values  # if >0, plane sits below some ROI
+    lift = float(max(0.0, deficit.max()))
+    fit = dict(base)
+    fit["c"] = float(fit["c"] - lift - safety_offset_um)
+    fit["method"] = "image_with_roi_ceiling"
+    fit["lift_um"] = lift
+    fit["safety_offset_um"] = safety_offset_um
+    fit["n_ceiling_tiles"] = int(len(agg))
+    return fit
+
+
+# ---------------------------------------------------------------
+# CZ methods
+# ---------------------------------------------------------------
+def cz_image_surface(cz_img: np.ndarray, z_um: float, xy_um: float, margin: float):
+    return estimate_pia_surface_from_image(
+        cz_img, z_um, xy_um,
+        min_signal_abs=50.0,
+        relative_margin=margin,
+    )
+
+
+def cz_image_with_roi_ceiling(
+    cz_xyz_um: np.ndarray,
+    cz_img: np.ndarray,
+    z_um: float,
+    xy_um: float,
+    *,
+    margin: float = 0.02,
+    safety_offset_um: float = 3.0,
+    roi_xy_tile_um: float = 80.0,
+    roi_q_frac: float = 0.0,
+):
+    base = cz_image_surface(cz_img, z_um, xy_um, margin=margin)
+    if base is None:
+        return None
+    pts = np.asarray(cz_xyz_um, dtype=float)
+    xs, ys, zs = pts[:, 0], pts[:, 1], pts[:, 2]
+    x_bin = (xs // roi_xy_tile_um).astype(int)
+    y_bin = (ys // roi_xy_tile_um).astype(int)
+    key = y_bin * 100000 + x_bin
+    df = pd.DataFrame({"key": key, "x": xs, "y": ys, "z": zs})
+    g = df.groupby("key")
+    agg = g.agg(x=("x", "median"), y=("y", "median"),
+                z=("z", lambda v: float(np.quantile(v, roi_q_frac))),
+                n=("z", "size"))
+    agg = agg[agg["n"] >= 3]
+    if len(agg) < 5:
+        return base
+    plane_z = base["a"] * agg["x"].values + base["b"] * agg["y"].values + base["c"]
+    deficit = plane_z - agg["z"].values
+    lift = float(max(0.0, deficit.max()))
+    fit = dict(base)
+    fit["c"] = float(fit["c"] - lift - safety_offset_um)
+    fit["method"] = "cz_image_with_roi_ceiling"
+    fit["lift_um"] = lift
+    return fit
+
+
+# ---------------------------------------------------------------
+# Loading helpers
+# ---------------------------------------------------------------
+def load_cz_image(s):
+    import tifffile
+    candidates = list(s.coreg_dir.glob("*reg-dim-swapped.ome.tif"))
+    if not candidates:
+        candidates = list(s.coreg_dir.glob("*zstack.tif"))
+    if not candidates:
+        return None
+    img = tifffile.imread(str(candidates[0]))
+    while img.ndim > 3 and img.shape[0] == 1:
+        img = img[0]
+    return img
+
+
+# ---------------------------------------------------------------
+# Method registry
+# ---------------------------------------------------------------
+@dataclass
+class Method:
+    name: str
+    scope: str  # "hcr" or "cz"
+    needs_image: bool
+    fn: Callable
+
+
+def hcr_methods() -> list[Method]:
+    return [
+        Method("baseline_image_5pct", "hcr", True,
+               lambda xyz, vol, z_um, xy_um:
+                   image_low_margin(vol, z_um, xy_um, 0.05, 0.1)),
+        Method("N1_margin_1pct", "hcr", True,
+               lambda xyz, vol, z_um, xy_um:
+                   image_low_margin(vol, z_um, xy_um, 0.01, 0.05)),
+        Method("N1_margin_0p5pct", "hcr", True,
+               lambda xyz, vol, z_um, xy_um:
+                   image_low_margin(vol, z_um, xy_um, 0.005, 0.05)),
+        Method("N1_margin_0p1pct", "hcr", True,
+               lambda xyz, vol, z_um, xy_um:
+                   image_low_margin(vol, z_um, xy_um, 0.001, 0.05)),
+        Method("N2_per_channel_shallowest_1pct", "hcr_subject", True,
+               lambda s: per_channel_shallowest(s, level=4, margin=0.01)),
+        Method("N2_per_channel_shallowest_0p5pct", "hcr_subject", True,
+               lambda s: per_channel_shallowest(s, level=4, margin=0.005)),
+        Method("N3_roi_leading_edge_q0_off-15", "hcr", False,
+               lambda xyz: roi_leading_edge_plane(
+                   xyz, q_frac=0.0, z_offset_um=-15.0)),
+        Method("N3_roi_leading_edge_q0_off-30", "hcr", False,
+               lambda xyz: roi_leading_edge_plane(
+                   xyz, q_frac=0.0, z_offset_um=-30.0)),
+        Method("N3_roi_leading_edge_q2_off-5", "hcr", False,
+               lambda xyz: roi_leading_edge_plane(
+                   xyz, q_frac=0.02, z_offset_um=-5.0)),
+        Method("N4_image_ceiling_1pct_off5", "hcr", True,
+               lambda xyz, vol, z_um, xy_um:
+                   image_with_roi_ceiling(xyz, vol, z_um, xy_um,
+                                          margin=0.01, safety_offset_um=5.0)),
+        Method("N4_image_ceiling_0p5pct_off5", "hcr", True,
+               lambda xyz, vol, z_um, xy_um:
+                   image_with_roi_ceiling(xyz, vol, z_um, xy_um,
+                                          margin=0.005, safety_offset_um=5.0)),
+        Method("N4_image_ceiling_0p1pct_off10", "hcr", True,
+               lambda xyz, vol, z_um, xy_um:
+                   image_with_roi_ceiling(xyz, vol, z_um, xy_um,
+                                          margin=0.001, safety_offset_um=10.0)),
+    ]
+
+
+def cz_methods() -> list[Method]:
+    return [
+        Method("cz_baseline_5pct", "cz", True,
+               lambda xyz, vol, z_um, xy_um:
+                   cz_image_surface(vol, z_um, xy_um, 0.05)),
+        Method("cz_image_2pct", "cz", True,
+               lambda xyz, vol, z_um, xy_um:
+                   cz_image_surface(vol, z_um, xy_um, 0.02)),
+        Method("cz_image_1pct", "cz", True,
+               lambda xyz, vol, z_um, xy_um:
+                   cz_image_surface(vol, z_um, xy_um, 0.01)),
+        Method("cz_ceiling_2pct", "cz", True,
+               lambda xyz, vol, z_um, xy_um:
+                   cz_image_with_roi_ceiling(xyz, vol, z_um, xy_um,
+                                             margin=0.02, safety_offset_um=3.0)),
+        Method("cz_ceiling_1pct", "cz", True,
+               lambda xyz, vol, z_um, xy_um:
+                   cz_image_with_roi_ceiling(xyz, vol, z_um, xy_um,
+                                             margin=0.01, safety_offset_um=3.0)),
+    ]
+
+
+# ---------------------------------------------------------------
+# Evaluation
+# ---------------------------------------------------------------
+def run_hcr(methods: list[Method], subjects) -> tuple[pd.DataFrame, dict]:
+    rows = []
+    fits: dict[str, dict] = {}
+    for sid in subjects:
+        print(f"\n=== HCR {sid} ===")
+        s = load_subject(sid)
+        hcr_um = hcr_px_to_um(s.hcr_centroids[["z_px", "y_px", "x_px"]].values, s)
+        hcr_xyz = hcr_um[:, [2, 1, 0]]
+        vol = xy_um = z_um = None
+        fits[sid] = {"_xyz": hcr_xyz}
+        for m in methods:
+            try:
+                if m.scope == "hcr_subject":
+                    surf = m.fn(s)
+                elif m.needs_image:
+                    if vol is None:
+                        vol, xy_um, z_um, _ = load_hcr_combined(s, level=4)
+                    surf = m.fn(hcr_xyz, vol, z_um, xy_um)
+                else:
+                    surf = m.fn(hcr_xyz)
+            except Exception as e:
+                print(f"  {m.name}: FAILED ({e})")
+                rows.append({"subject": sid, "method": m.name,
+                             "error": str(e)[:200]})
+                continue
+            if surf is None:
+                print(f"  {m.name}: returned None")
+                rows.append({"subject": sid, "method": m.name, "error": "None"})
+                continue
+            q = quality_metrics(hcr_xyz, surf)
+            print(f"  {m.name}: c={surf.get('c'):.1f}  tilt={surf.get('tilt_deg',0):.2f}  "
+                  f"above%={q['above_frac']*100:.2f}  cum_above={q['cum_above_ratio']:.3f}  "
+                  f"onset={q['onset_depth_um']}  peak_above={q['above_peak_pos']}")
+            rows.append({"subject": sid, "method": m.name,
+                         "c_um": surf.get("c"),
+                         "tilt_deg": surf.get("tilt_deg"),
+                         "rough_um": surf.get("residual_std_um"),
+                         **q})
+            fits[sid][m.name] = surf
+    df = pd.DataFrame(rows)
+    df.to_csv(OUT / "hcr_results.csv", index=False)
+    print(f"\nWrote {OUT / 'hcr_results.csv'}")
+    return df, fits
+
+
+def run_cz(methods: list[Method], subjects) -> tuple[pd.DataFrame, dict]:
+    rows = []
+    fits: dict[str, dict] = {}
+    for sid in subjects:
+        print(f"\n=== CZ {sid} ===")
+        s = load_subject(sid)
+        cz_um = cz_px_to_um(s.cz_centroids[["z_px", "y_px", "x_px"]].values, s)
+        cz_xyz = cz_um[:, [2, 1, 0]]
+        fits[sid] = {"_xyz": cz_xyz}
+        img = load_cz_image(s)
+        if img is None:
+            print("  no CZ image")
+            continue
+        for m in methods:
+            try:
+                surf = m.fn(cz_xyz, img, s.cz_z_um, s.cz_xy_um)
+            except Exception as e:
+                print(f"  {m.name}: FAILED ({e})")
+                rows.append({"subject": sid, "method": m.name,
+                             "error": str(e)[:200]})
+                continue
+            if surf is None:
+                print(f"  {m.name}: returned None")
+                rows.append({"subject": sid, "method": m.name, "error": "None"})
+                continue
+            q = quality_metrics(cz_xyz, surf)
+            print(f"  {m.name}: c={surf.get('c'):.1f}  tilt={surf.get('tilt_deg',0):.2f}  "
+                  f"above%={q['above_frac']*100:.2f}  cum_above={q['cum_above_ratio']:.3f}  "
+                  f"onset={q['onset_depth_um']}")
+            rows.append({"subject": sid, "method": m.name,
+                         "c_um": surf.get("c"),
+                         "tilt_deg": surf.get("tilt_deg"),
+                         "rough_um": surf.get("residual_std_um"),
+                         **q})
+            fits[sid][m.name] = surf
+    df = pd.DataFrame(rows)
+    df.to_csv(OUT / "cz_results.csv", index=False)
+    print(f"\nWrote {OUT / 'cz_results.csv'}")
+    return df, fits
+
+
+# ---------------------------------------------------------------
+# Plot helpers
+# ---------------------------------------------------------------
+def plot_profiles(fits: dict, methods: list[str], out_path: Path,
+                  *, depth_range=(-200, 1500), title_prefix=""):
+    n = len(fits)
+    cols = 3
+    rows = max(1, int(np.ceil(n / cols)))
+    fig, axes = plt.subplots(rows, cols, figsize=(15, 4 * rows), sharex=True)
+    axes = np.atleast_1d(axes).ravel()
+    colors = plt.get_cmap("tab10").colors
+    for ax, (sid, d) in zip(axes, fits.items()):
+        xyz = d["_xyz"]
+        for j, m in enumerate(methods):
+            surf = d.get(m)
+            if surf is None:
+                continue
+            c, dd = depth_profile(xyz, surf, bin_um=20, depth_range=depth_range)
+            if dd.max() > 0:
+                ax.plot(c, dd / dd.max(), color=colors[j % len(colors)],
+                        lw=1.2, label=m)
+        ax.axvline(0, color="k", lw=0.5)
+        ax.set_title(f"{title_prefix}{sid}")
+        ax.set_xlabel("depth from pia (um)")
+        ax.set_ylabel("normalized density")
+        ax.set_xlim(depth_range)
+        ax.legend(fontsize=6, loc="upper right")
+    for ax in axes[len(fits):]:
+        ax.axis("off")
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=120)
+    plt.close(fig)
+    print(f"Saved {out_path}")
+
+
+# ---------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------
+if __name__ == "__main__":
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--scope", choices=("hcr", "cz", "all"), default="all")
+    ap.add_argument("--subjects", nargs="*", default=None)
+    args = ap.parse_args()
+    subjects = args.subjects or BENCHMARK_SUBJECTS
+
+    if args.scope in ("hcr", "all"):
+        hdf, hfits = run_hcr(hcr_methods(), subjects)
+        for name in list(hfits.values())[0]:
+            pass
+        plot_profiles(
+            hfits,
+            ["baseline_image_5pct",
+             "N1_margin_1pct", "N1_margin_0p5pct", "N1_margin_0p1pct",
+             "N2_per_channel_shallowest_1pct",
+             "N3_roi_leading_edge_q0_off-15",
+             "N4_image_ceiling_1pct_off5",
+             "N4_image_ceiling_0p1pct_off10"],
+            FIG / "hcr_depth_profiles.png",
+            title_prefix="HCR ",
+        )
+
+    if args.scope in ("cz", "all"):
+        cdf, cfits = run_cz(cz_methods(), subjects)
+        plot_profiles(
+            cfits,
+            ["cz_baseline_5pct", "cz_image_2pct", "cz_image_1pct",
+             "cz_ceiling_2pct", "cz_ceiling_1pct"],
+            FIG / "cz_depth_profiles.png",
+            title_prefix="CZ ",
+        )

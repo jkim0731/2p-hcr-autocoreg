@@ -1,0 +1,162 @@
+# Session 03 v2 — HCR/CZ pia surface under corrected criterion
+
+## Correction from v1
+
+The v1 ("M4 trough") protocol was wrong because I misread the criterion.
+
+**Corrected criterion (from user).** ROI density should be close to 0 **at
+AND above** the surface — i.e., the cumulative share of ROIs at depth < 0
+(and the density around depth = 0) should be small. The out-of-tissue
+spike of segmentation false positives is still a collection of ROIs; the
+pia plane should sit **above** that spike, not below it.
+
+v1 M4 shifted the plane DEEPER (trough between spike and bulk), leaving
+the spike at negative depth. In v2 we shift the plane SHALLOWER so that
+the spike falls at depth > 0 (below pia).
+
+Other constraints the user called out:
+- Surface is not always flat — must fit tilts.
+- Multiple channels should be considered for the image signal.
+- A separate protocol is needed for CZ.
+- Outputs must live under `/root/capsule/scratch/...`, not under
+  `/root/capsule/code/...`.
+
+## Metrics (new)
+
+- `above_frac` — share of cells with depth < 0. Primary. Target: ≪ 1 %.
+- `above_frac_5` — share with depth < −5 um (matches v1 `frac_above_pia`).
+- `cum_above_ratio` — mean density in [−200, 0] / mean density in
+  [50, 200]. Expresses the *total* above-pia density relative to bulk.
+  Target: ≪ 1.
+- `onset_depth_um` — depth ≥ 0 where smoothed density first reaches 50 %
+  of bulk. Indicates how quickly cortex density rises after the plane.
+- `above_peak_pos` — argmax of density in [−200, 0]. Stays at −200 (empty
+  or negligible) when no spike remains above pia.
+
+## HCR methods tried
+
+All methods were evaluated on the same 6 benchmark subjects with
+density-filtered ROI centroids in physical um; image volumes loaded at
+pyramid level 4 (~4 um voxels). Results in
+`/root/capsule/scratch/03_surface_v2/hcr_results.csv` (see `/tmp/...`
+until `/scratch` is writable for this user).
+
+### Baselines
+- **`baseline_image_5pct`** — current image-based fit (relative_margin 5 %).
+  Has `above_frac` 2.7–10.7 %, `cum_above_ratio` 0.30–0.94. The spike
+  of out-of-tissue ROIs shows as `above_peak_pos` at depth −2 to −113.
+
+### N1 — low image margin
+Decrease `relative_margin` to 1 %, 0.5 %, 0.1 %. Each step makes the
+image crossing shallower (catches the outermost intensity edge), so the
+plane moves toward the buffer. Helps but is not enough by itself:
+`above_frac` falls to 0.9–5.9 %. The problem is that the image fit can
+*miss* columns where autofluorescence is weak, and those columns keep
+the plane below the ROI cluster there.
+
+### N2 — per-channel shallowest
+For each HCR channel (405/488/561 or 514/594 — whichever exist), run
+`estimate_pia_surface_from_image` at low margin and keep the channel
+that produces the smallest `c`. Result: for 4/6 subjects the fit
+degenerates (channel with near-zero edge padding → tilt ≈ 0, c ≈ 0),
+which puts the plane at the very top of the volume and the cortex
+onset depth at 140–170 um (too deep). Dropped — per-channel fits are
+too easily dominated by a single noisy channel.
+
+### N3 — ROI leading-edge plane with offset
+Density-filter ROIs (≥ 3 neighbours in 30 um to keep clusters, drop
+singletons), take the per-tile min-z, fit a plane, shift by a fixed
+offset (−15 or −30 um toward buffer). With a 30 um offset it is
+competitive (`above_frac` 0.08–2.75 %, `cum_above_ratio` 0.018–0.313)
+but still fails 755252 (the subject with the highest-z ROI cluster in a
+cortex-edge tile). The fixed offset is a hyper-parameter that doesn't
+generalize.
+
+### N4 — image + per-tile ROI ceiling (winner)
+Low-margin image fit gives the tilted plane; density-filtered ROIs give
+a per-tile minimum-z set; the plane is then **lifted** by the maximum
+tile-deficit (where plane z was below some tile's min-z ROI) plus a
+fixed 5 um safety offset. The plane's *tilt* comes from the image, but
+its *intercept* is clamped to stay above every ROI-bearing tile.
+
+Results for `N4_image_ceiling_0p5pct_off5`:
+
+| subject | c (um) | tilt (°) | lift (um) | above_frac | cum_above_ratio | onset (um) |
+|---------|-------:|---------:|----------:|-----------:|----------------:|-----------:|
+| 755252  |   97.7 |   9.48   |   ~60     |    0.00 %  |       0.000     |    57.5    |
+| 767018  |   97.6 |   6.69   |   ~35     |    0.01 %  |       0.001     |    12.5    |
+| 767022  |  191.0 |   3.46   |   ~45     |    0.00 %  |       0.000     |    12.5    |
+| 782149  |  −55.8 |  11.64   |   ~70     |    0.00 %  |       0.000     |    32.5    |
+| 788406  |  −39.2 |   2.97   |  ~110     |    0.00 %  |       0.000     |    32.5    |
+| 790322  |  −50.7 |   3.29   |  ~155     |    0.00 %  |       0.000     |    82.5    |
+
+All subjects satisfy the criterion. The tilts match the image-fit tilts
+(up to 11.6° for 782149). The large lift for 788406/790322 shows these
+subjects have substantial ROI clusters well above the autofluorescence
+boundary — N4 correctly places the plane above those clusters.
+
+Aggressive (0.1 % margin, 10 um safety) gives identical above_frac ≈ 0
+with deeper image starts and therefore larger lifts; the 0.5 %+5 um
+variant is the smallest-change version that still clears the criterion
+and is chosen as the default.
+
+## CZ methods tried
+
+CZ has no out-of-tissue spike (segmentation is cleaner) but a few
+subjects (notably 782149, 5.8 %) still have ROIs above the 5 %-margin
+surface. Results in `/root/capsule/scratch/03_surface_v2/cz_results.csv`.
+
+### CZ baseline
+`cz_baseline_5pct` (relative_margin 0.05, min_signal_abs 50): above_frac
+0.0–5.8 %, cum_above_ratio 0.0–0.115.
+
+### CZ low margin (1–2 %)
+Small improvement; 782149 still shows 5.6 %.
+
+### CZ image_ceiling (winner)
+Same structure as HCR N4: low image margin (2 %) + per-tile ROI
+minimum-z ceiling with a 3 um safety offset and 80 um tiles. Achieves
+`above_frac = 0.00 %`, `cum_above_ratio = 0.000`, `onset_depth`
+7–42 um on every subject while preserving tilt (CZ tilts are smaller,
+≤ 3°).
+
+## Promoted protocol
+
+### HCR (benchmark_analysis.estimate_pia_surface_image_ceiling)
+1. Load combined-channel HCR at pyramid level 4.
+2. Image fit with `relative_margin=0.005`, `min_signal_abs=0.05`.
+3. Density-filter HCR ROI centroids (≥ 3 in 30 um).
+4. Tile (120 um) the filtered ROIs; take min-z per tile.
+5. Lift the image plane to clear every tile's min-z by +5 um.
+
+### CZ (same function, CZ-tuned parameters)
+1. CZ registered z-stack.
+2. Image fit with `relative_margin=0.02`, `min_signal_abs=50`.
+3. Tile (80 um) all CZ ROI centroids (no density filter needed — CZ is
+   already clean); take min-z per tile.
+4. Lift by +3 um safety.
+
+Both paths are wired into `analyze_subject()`:
+- `hcr_surface_method="image_ceiling"` (default)
+- `cz_surface_method="image_ceiling"`  (default)
+
+## Outputs
+
+Under `/tmp/03_surface_v2/` (mirrored to `/root/capsule/scratch/03_surface_v2/`
+when `/scratch` becomes writable for this user):
+- `hcr_results.csv` — per-subject, per-method metrics for all HCR methods.
+- `cz_results.csv` — per-subject, per-method metrics for CZ methods.
+- `figures/hcr_depth_profiles.png` — normalised depth profiles for all
+  HCR methods across all 6 subjects.
+- `figures/cz_depth_profiles.png` — same for CZ.
+- `log.md` — this file.
+
+## Why v2 works where v1 did not
+
+v1 treated the spike as "junk to be hidden below the plane" and moved
+the plane deeper; the user's criterion is the opposite — the spike
+(whatever its biology) represents real ROIs and those ROIs must end up
+BELOW pia. The only direction that satisfies the criterion is
+shallower, and the only reliable way to keep the plane shallower than
+every ROI cluster is to *clamp* the image plane against a per-tile
+minimum-z envelope of the density-filtered ROIs. That is what N4 does.

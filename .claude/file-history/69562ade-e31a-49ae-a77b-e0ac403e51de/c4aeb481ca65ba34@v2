@@ -1,0 +1,167 @@
+"""Sweep clamp parameters to find settings that don't eat the N21 gain
+on 790322 while keeping other subjects clean."""
+import sys, numpy as np, pandas as pd, math
+sys.path.insert(0, "/root/capsule/code/dev_code")
+import importlib.util as _iu
+_s = _iu.spec_from_file_location("explore_790322",
+    "/root/capsule/code/dev_code/03_surface_790322_explore.py")
+_m = _iu.module_from_spec(_s); sys.modules["explore_790322"] = _m
+_s.loader.exec_module(_m)
+from benchmark_data_loader import hcr_px_to_um, load_subject
+from benchmark_analysis import load_hcr_combined, filter_in_tissue
+
+quality_metrics = _m.quality_metrics
+_surf_z = _m._surf_z
+_load_multichannel = _m._load_multichannel
+_per_column_top_in_band = _m._per_column_top_in_band
+image_with_roi_ceiling = _m.image_with_roi_ceiling
+
+
+def clamp_v2(fit, hcr_xyz, safety_offset_um=3.0,
+             radius_um=30.0, min_neighbors=3,
+             min_tile_n=5, within_tile_q=0.02, lift_q=1.0):
+    """Parameterized clamp.
+    - within_tile_q: quantile inside each tile used for "tile min z"
+      (higher = ignore more shallow outlier cells per tile)
+    - lift_q: quantile across tiles used for the lift
+      (lower than 1.0 = tolerate a few tiles poking above surface)
+    """
+    keep = filter_in_tissue(hcr_xyz, radius_um=radius_um,
+                            min_neighbors=min_neighbors)
+    pts = hcr_xyz[keep]
+    if len(pts) < 50:
+        return fit, 0.0
+    pxs, pys, pzs = pts[:, 0], pts[:, 1], pts[:, 2]
+    xb = (pxs // 120.0).astype(int); yb = (pys // 120.0).astype(int)
+    key = yb * 100000 + xb
+    df = pd.DataFrame({"k": key, "x": pxs, "y": pys, "z": pzs})
+    agg = df.groupby("k").agg(
+        x=("x", "median"), y=("y", "median"),
+        z=("z", lambda v: float(np.quantile(v, within_tile_q))),
+        n=("z", "size"))
+    agg = agg[agg["n"] >= min_tile_n]
+    if len(agg) == 0:
+        return fit, 0.0
+    tx, ty, tz = agg["x"].values, agg["y"].values, agg["z"].values
+    plane_z = (fit["a"] * tx + fit["b"] * ty + fit["c"]
+               + fit.get("p", 0) * tx * tx + fit.get("q", 0) * tx * ty
+               + fit.get("r", 0) * ty * ty)
+    deficit = plane_z - tz
+    pos = deficit[deficit > 0]
+    if len(pos) == 0:
+        lift = 0.0
+    elif lift_q >= 1.0:
+        lift = float(pos.max())
+    else:
+        lift = float(np.quantile(pos, lift_q))
+    out = dict(fit)
+    out["c"] = float(out["c"] - lift - safety_offset_um)
+    return out, lift
+
+
+def n21_with_custom_clamp(s, hcr_xyz, vol, xy_um, z_um_vol,
+                          target_quantile, clamp_kw):
+    """Re-implement N21 with a custom clamp pluggable."""
+    anchor = image_with_roi_ceiling(
+        hcr_xyz, vol, z_um_vol, xy_um,
+        margin=0.005, safety_offset_um=0.0)
+    vols_sub, xx, yy, xy_um_sub, z_um, channels = _load_multichannel(s)
+    anchor_zz = _surf_z(anchor, xx, yy)
+    band_um = 150.0
+    z_low = anchor_zz - band_um; z_high = anchor_zz + band_um
+    top_z = _per_column_top_in_band(
+        vols_sub, xy_um_sub, z_um, xx, yy, z_low, z_high,
+        0.25, 0.20, 10.0)
+    mask = np.isfinite(top_z)
+    xs_fit = xx[mask].ravel(); ys_fit = yy[mask].ravel()
+    zs_fit = top_z[mask].ravel()
+    x0 = xs_fit.mean(); y0 = ys_fit.mean()
+    u = xs_fit - x0; v = ys_fit - y0
+    X = np.column_stack([u, v, u * u, u * v, v * v, np.ones_like(u)])
+    beta = np.linalg.lstsq(X, zs_fit, rcond=None)[0]
+    q = float(target_quantile)
+    for _ in range(30):
+        r = zs_fit - X @ beta
+        abs_r = np.abs(r)
+        eps = max(0.01 * float(np.median(abs_r) + 1e-6), 0.5)
+        w = np.where(r >= 0, q, 1.0 - q) / np.clip(abs_r, eps, None)
+        sw = np.sqrt(w)
+        beta_new = np.linalg.lstsq(sw[:, None] * X, sw * zs_fit, rcond=None)[0]
+        if np.linalg.norm(beta_new - beta) < 1e-6:
+            beta = beta_new; break
+        beta = beta_new
+    a, b_, p, q_c, r_c, c_c = beta
+    A = a - 2 * p * x0 - q_c * y0
+    B = b_ - 2 * r_c * y0 - q_c * x0
+    C = (c_c - a * x0 - b_ * y0
+         + p * x0 * x0 + q_c * x0 * y0 + r_c * y0 * y0)
+    fit = {"a": float(A), "b": float(B), "c": float(C),
+           "p": float(p), "q": float(q_c), "r": float(r_c),
+           "tilt_deg": float(math.degrees(math.atan(math.hypot(A, B)))),
+           "method": f"N22_q{int(q*100)}"}
+    fit, lift = clamp_v2(fit, hcr_xyz, **clamp_kw)
+    fit["clamp_lift_um"] = lift
+    return fit
+
+
+SUBJECTS = ["790322", "782149", "788406", "755252", "767018"]
+
+# Clamp parameter combinations to try
+CLAMP_CONFIGS = [
+    # (label, kwargs)
+    ("baseline",            dict(within_tile_q=0.02, lift_q=1.0,
+                                 min_neighbors=3, min_tile_n=5)),
+    ("wtq_10",              dict(within_tile_q=0.10, lift_q=1.0,
+                                 min_neighbors=3, min_tile_n=5)),
+    ("wtq_15",              dict(within_tile_q=0.15, lift_q=1.0,
+                                 min_neighbors=3, min_tile_n=5)),
+    ("lq_95",               dict(within_tile_q=0.02, lift_q=0.95,
+                                 min_neighbors=3, min_tile_n=5)),
+    ("lq_98",               dict(within_tile_q=0.02, lift_q=0.98,
+                                 min_neighbors=3, min_tile_n=5)),
+    ("wtq10_lq95",          dict(within_tile_q=0.10, lift_q=0.95,
+                                 min_neighbors=3, min_tile_n=5)),
+    ("nb8_wtq10",           dict(within_tile_q=0.10, lift_q=1.0,
+                                 min_neighbors=8, min_tile_n=5)),
+    ("nb8_wtq10_lq98",      dict(within_tile_q=0.10, lift_q=0.98,
+                                 min_neighbors=8, min_tile_n=5)),
+    ("mtn20_wtq10",         dict(within_tile_q=0.10, lift_q=1.0,
+                                 min_neighbors=3, min_tile_n=20)),
+]
+
+QUANTILES = [0.55, 0.70, 0.80]
+
+rows = []
+for sid in SUBJECTS:
+    print(f"\n=== {sid} ===", flush=True)
+    s = load_subject(sid)
+    hcr_um = hcr_px_to_um(s.hcr_centroids[["z_px","y_px","x_px"]].values, s)
+    hcr_xyz = hcr_um[:, [2,1,0]]
+    vol, xy_um, z_um, _ = load_hcr_combined(s, level=4)
+    for cfg_label, cfg_kw in CLAMP_CONFIGS:
+        for tq in QUANTILES:
+            surf = n21_with_custom_clamp(s, hcr_xyz, vol, xy_um, z_um,
+                                          target_quantile=tq, clamp_kw=cfg_kw)
+            q = quality_metrics(hcr_xyz, surf)
+            rows.append((sid, cfg_label, tq, surf["clamp_lift_um"],
+                         q["onset_depth_um"], q["onset_x_spread"],
+                         q["above_frac"]))
+            print(f"  {cfg_label:<20s} q={tq} lift={surf['clamp_lift_um']:6.1f}  "
+                  f"onset={q['onset_depth_um']}  "
+                  f"xspread={q['onset_x_spread']}  "
+                  f"above%={q['above_frac']*100:.3f}", flush=True)
+
+print("\n\n=== SUMMARY TABLE (onset_depth_um, above%) ===")
+df = pd.DataFrame(rows, columns=["sid","cfg","tq","lift","onset","xspread","above"])
+for tq in QUANTILES:
+    print(f"\n--- target_quantile={tq} ---")
+    sub = df[df.tq == tq]
+    piv_onset = sub.pivot(index="cfg", columns="sid", values="onset")
+    piv_abv = sub.pivot(index="cfg", columns="sid", values="above")
+    piv_abv = (piv_abv * 100).round(3)
+    # keep cfg order
+    order = [c[0] for c in CLAMP_CONFIGS]
+    piv_onset = piv_onset.reindex(order)
+    piv_abv = piv_abv.reindex(order)
+    print("ONSET (µm):"); print(piv_onset)
+    print("ABOVE (%):"); print(piv_abv)

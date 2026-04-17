@@ -43,7 +43,21 @@
       "Bash(xargs -I{} basename {})",
       "Bash(cat echo:*)",
       "Bash(jupyter nbconvert:*)",
-      "Bash(find /root/capsule/data -maxdepth 1 -type d -name 755252_*_ctl-czstack-hcr-coreg_* -o -name 767018_*_ctl-czstack-hcr-coreg_* -o -name 767022_*_ctl-czstack-hcr-coreg_* -o -name 782149_*_ctl-czstack-hcr-coreg_* -o -name 788406_*_ctl-czstack-hcr-coreg_* -o -name 790322_*_ctl-czstack-hcr-coreg_*)"
+      "Bash(find /root/capsule/data -maxdepth 1 -type d -name 755252_*_ctl-czstack-hcr-coreg_* -o -name 767018_*_ctl-czstack-hcr-coreg_* -o -name 767022_*_ctl-czstack-hcr-coreg_* -o -name 782149_*_ctl-czstack-hcr-coreg_* -o -name 788406_*_ctl-czstack-hcr-coreg_* -o -name 790322_*_ctl-czstack-hcr-coreg_*)",
+      "Bash(grep -r \"roi\\\\|mask\\\\|polygon\\\\|contour\\\\|boundary\" /root/capsule/code/*.py --include=\"*.py\")",
+      "Bash(find /root/capsule -name *.md -type f)",
+      "Bash(find /root/capsule -maxdepth 3 -name *transform* -o -name *template*)",
+      "Bash(wait biush3bvs:*)",
+      "Bash(wait bl0bg3q9k:*)",
+      "Bash(grep -r seg.mask /root/capsule/code/ --include=*.py)",
+      "Bash(for f:*)",
+      "Bash(do)",
+      "Bash(if grep:*)",
+      "Bash(then)",
+      "Bash(echo \"=== $f ===\")",
+      "Bash(xargs -I {} basename {})",
+      "Bash(grep -i \"thin\\\\|thinn\\\\|782149\\\\|sectio\" /root/capsule/code/md_for_claude/*.md)",
+      "Bash(grep:*)"
     ]
   },
   "hooks": {
@@ -58,5 +72,6 @@
         ]
       }
     ]
-  }
+  },
+  "outputStyle": "default"
 }

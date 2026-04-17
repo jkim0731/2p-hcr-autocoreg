@@ -1,0 +1,199 @@
+"""Build the benchmark analysis notebook from the pre-computed results."""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import nbformat as nbf
+
+
+OUT_DIR = Path("/root/capsule/code/sessions/01_analyze_benchmark_data")
+NB_PATH = Path("/root/capsule/code/notebooks/01_benchmark_data_analysis.ipynb")
+
+
+def _md(cell):
+    return nbf.v4.new_markdown_cell(cell)
+
+
+def _code(cell):
+    return nbf.v4.new_code_cell(cell)
+
+
+def build():
+    nb = nbf.v4.new_notebook()
+    cells = []
+
+    cells.append(_md(
+        "# Benchmark data analysis (coregistration features)\n\n"
+        "Goal: characterize the 6 benchmark subjects so that an automatic coregistration\n"
+        "pipeline can be designed with correct assumptions about resolution, anisotropy,\n"
+        "expansion, surface geometry, and cell distributions.\n\n"
+        "**Per dev protocol, benchmark landmarks/coreg are used ONLY for characterization**,\n"
+        "not for algorithm development.\n\n"
+        "This notebook is a summary of the outputs computed by\n"
+        "`code/dev_code/01_analyze_benchmark.py`. All tables and figures are loaded from\n"
+        "`code/sessions/01_analyze_benchmark_data/`."
+    ))
+
+    cells.append(_code(
+        "import sys, json\n"
+        "from pathlib import Path\n"
+        "sys.path.insert(0, '/root/capsule/code/dev_code')\n"
+        "import pandas as pd\n"
+        "from IPython.display import Image, display\n\n"
+        "OUT = Path('/root/capsule/code/sessions/01_analyze_benchmark_data')\n"
+        "FIG = OUT / 'figures'"
+    ))
+
+    cells.append(_md(
+        "## 1. Per-subject summary\n"
+        "Cell counts, volume extents (in microns), GFP+ fraction, coregistration match\n"
+        "rate, and landmark counts."
+    ))
+    cells.append(_code(
+        "summary = pd.read_csv(OUT / 'summary_table.csv')\n"
+        "summary"
+    ))
+
+    cells.append(_md(
+        "## 2. Anisotropic expansion from landmarks\n\n"
+        "Each subject's active landmarks are converted to physical microns using the\n"
+        "per-modality resolutions (CZ: 0.78 um/px XY, 1 um/px Z; HCR level-2: \n"
+        "~0.988 um/px XY, 1 um/px Z — from `step_2_automatic_mapping_for_qc.ipynb`'s \n"
+        "`*4e6` XY / `*1e6` Z convention).\n\n"
+        "We fit a rigid-rotation-plus-per-axis-scale mapping CZ(um) -> HCR(um).\n"
+        "The resulting scale factors measure the ex-vivo HCR expansion relative to\n"
+        "in-vivo 2p. **XY and Z expand differently** (anisotropic)."
+    ))
+    cells.append(_code(
+        "expansion = pd.read_csv(OUT / 'expansion_table.csv')\n"
+        "expansion"
+    ))
+    cells.append(_code(
+        "display(Image(str(FIG / 'expansion_factors.png')))"
+    ))
+
+    cells.append(_md(
+        "### Residual after anisotropic similarity fit\n\n"
+        "The per-landmark residual norm after the rotation + per-axis scale fit. This\n"
+        "quantifies how much nonrigid deformation the algorithm must correct after\n"
+        "affine alignment."
+    ))
+    cells.append(_code(
+        "display(Image(str(FIG / 'residual_magnitude.png')))"
+    ))
+
+    cells.append(_md(
+        "## 3. Pia surface estimation and depth-from-surface\n\n"
+        "We fit the pia plane `z = a*x + b*y + c` (um) by two methods and compare:\n\n"
+        "- **image-based (primary)**: for each (y, x) column of the 3D image, find the\n"
+        "  first z where intensity exceeds a per-column relative threshold\n"
+        "  (`col_bg + 0.25 * (col_top - col_bg)`). Reject columns whose dynamic\n"
+        "  range is too small and require `>=15 um` contiguous above-threshold.\n"
+        "  IRLS-Huber plane fit + tile-median outlier removal. For HCR we use the\n"
+        "  dense **405 nm Rn28S** channel at zarr level 4 (~4 um / voxel). The 488\n"
+        "  (sparse GFP+) channel is too sparse for column-wise boundary detection.\n"
+        "- **centroid-based (fallback)**: tile-top quantile of ROI centroids,\n"
+        "  IRLS-Huber plane fit.\n\n"
+        "The image-based surface systematically places the pia ~50–200 um shallower\n"
+        "than the centroid-based surface (the centroid surface underestimates depth\n"
+        "because the topmost ROIs already sit below the true tissue boundary)."
+    ))
+    cells.append(_code(
+        "surface = pd.read_csv(OUT / 'surface_table.csv')\n"
+        "surface"
+    ))
+
+    cells.append(_md(
+        "### Example pia overlays on the raw image data\n\n"
+        "Each figure shows a Y-slab maximum-intensity projection in the (x, z)\n"
+        "plane. Red solid = image-based fit (primary), yellow dashed = centroid-based\n"
+        "(fallback). Two representative subjects:\n\n"
+        "- `788406`: near-flat HCR pia. The image-based fit sits right at the\n"
+        "  image's tissue boundary; the centroid-based fit is clearly below.\n"
+        "- `782149`: strongly tilted HCR pia (~9° measured). The image-based fit\n"
+        "  tracks the visible slope."
+    ))
+    cells.append(_code(
+        "for sid in ('788406', '782149'):\n"
+        "    p = FIG / f'pia_overlay_{sid}.png'\n"
+        "    if p.exists():\n"
+        "        display(Image(str(p)))"
+    ))
+
+    cells.append(_md(
+        "### Pia-estimate verification: HCR density vs depth\n\n"
+        "For each subject we plot HCR cell density vs depth using both the\n"
+        "image-based pia (red) and the centroid-based pia (orange dashed).\n"
+        "The image-based curve rises sharply from 0 at depth ~0, confirming the fit\n"
+        "lies at the true tissue boundary. The centroid-based curve is shifted\n"
+        "50–200 um deeper. Small residual peaks at negative depths correspond to\n"
+        "out-of-tissue HCR segmentation false positives."
+    ))
+    cells.append(_code(
+        "display(Image(str(FIG / 'depth_profile_pia_verification.png')))"
+    ))
+
+    cells.append(_md(
+        "### HCR channel choice: 405 vs 488 for surface fitting\n\n"
+        "Rn28S (405) stains all cells densely; GCaMP+ (488) is sparse. Only 405\n"
+        "produces enough valid columns to support a stable surface fit."
+    ))
+    cells.append(_code(
+        "pd.read_csv(OUT / 'hcr_channel_comparison.csv')"
+    ))
+
+    cells.append(_md(
+        "### Depth profiles from estimated pia\n\n"
+        "Cells per 20-um depth bin for CZ (rescaled by Z expansion factor), HCR all,\n"
+        "and HCR GFP+. Surface is image-based (405 for HCR). The 1D depth profile is\n"
+        "a candidate feature for axial localization."
+    ))
+    cells.append(_code(
+        "display(Image(str(FIG / 'depth_profiles.png')))"
+    ))
+
+    cells.append(_md(
+        "## 4. Nearest-neighbor distance statistics\n\n"
+        "Mean 1-NN and 5-NN distances (in um) per modality. Characterizes cell-cell\n"
+        "spacing and packing density; informs kernel/neighborhood sizes for matching."
+    ))
+    cells.append(_code(
+        "nn = pd.read_csv(OUT / 'nn_distance_table.csv')\n"
+        "nn"
+    ))
+
+    cells.append(_md(
+        "## 5. Key takeaways for algorithm design\n\n"
+        "* **Anisotropic expansion** CZ→HCR is substantial: XY ~1.6–1.9×, Z ~2.1–3.6×.\n"
+        "  A single isotropic scale cannot align the modalities.\n"
+        "* **HCR volume size** at level-2 centroid space is ~1.2–2.3 mm per side — much\n"
+        "  larger than the old doc's ~1×1×0.5 mm claim.\n"
+        "* **Rotation ~180°** around z is reproducible across subjects; can be hardcoded\n"
+        "  as the initial guess.\n"
+        "* **Residuals after affine** are 15–43 um RMS with max ≤ 114 um. Nonrigid\n"
+        "  correction must handle this scale; kernels around 50–200 um are appropriate.\n"
+        "* **Pia tilt** in HCR is up to ~12° (782149) and varies across (x, y). Surface\n"
+        "  fitting is essential for depth-from-surface coordinates.\n"
+        "* **HCR buffer thickness** above pia varies widely (30–410 um surface offset),\n"
+        "  confirming the data description's remark that buffer depth is unknown.\n"
+        "* **Depth-from-surface density profile** is a natural, 1D axial localization\n"
+        "  feature that absorbs the buffer variability.\n"
+        "* **Mean cell spacing** is ~20–25 um 1-NN across all subjects and both\n"
+        "  modalities — a useful length scale for k-NN matching.\n"
+        "* **Data quirks**: 767018 has no GFP+ data and an older processing pipeline;\n"
+        "  755252/767022 use intensity-based GFP proxy (not spot counts) — most HCR\n"
+        "  cells would be labeled 'GFP+' without further thresholding; 782149 has a\n"
+        "  thin HCR section with stronger pia tilt and only ~34% match rate.\n"
+    ))
+
+    nb["cells"] = cells
+
+    NB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(NB_PATH, "w") as f:
+        nbf.write(nb, f)
+    print("Wrote", NB_PATH)
+
+
+if __name__ == "__main__":
+    build()

@@ -1,0 +1,9 @@
+{
+  "id": "5",
+  "subject": "Promote N22 to analyze_subject",
+  "description": "Port v_n22_n4_quantile_loose_clamp into benchmark_analysis.py as estimate_pia_surface_quantile_ceiling, wire it into analyze_subject with a new \"quantile_ceiling\" routing case, and change the default method from image_ceiling → quantile_ceiling. Then regenerate hcr_results.csv to confirm no downstream regressions.",
+  "activeForm": "Promoting N22 into analyze_subject",
+  "status": "completed",
+  "blocks": [],
+  "blockedBy": []
+}

@@ -1,0 +1,153 @@
+"""Build the session 03 v2 notebook from outputs under /tmp/03_surface_v2.
+
+The notebook is written to /root/capsule/code/notebooks/ so it is
+version-controlled with the rest of the code, but every figure and
+table it references lives under /root/capsule/scratch/03_surface_v2/
+(or /tmp/03_surface_v2/ while /scratch is not writable).
+"""
+from __future__ import annotations
+from pathlib import Path
+import nbformat as nbf
+
+NB = Path("/root/capsule/code/notebooks/03_surface_estimation_iteration_v2.ipynb")
+
+
+def md(s): return nbf.v4.new_markdown_cell(s)
+def code(s): return nbf.v4.new_code_cell(s)
+
+
+def build():
+    nb = nbf.v4.new_notebook()
+    cells = []
+    cells.append(md(
+        "# Session 03 v2 — HCR/CZ pia surface under corrected criterion\n\n"
+        "**Correction.** The previous v1 protocol (M4 trough) was wrong —\n"
+        "it shifted the plane *deeper*, leaving a large spike of ROIs\n"
+        "above pia. The correct criterion (user):\n\n"
+        "> ROI density at and above the surface should be close to 0 (but not\n"
+        "> exactly 0). The spike that showed in v1 at depth < 0 should be\n"
+        "> moved to depth > 0 by placing the plane shallower.\n\n"
+        "Other constraints: fit tilts explicitly; consider multiple channels;\n"
+        "a separate CZ protocol is needed; outputs live under\n"
+        "`/root/capsule/scratch/...` (mirrored from `/tmp/03_surface_v2/`\n"
+        "while `/scratch` is not writable)."
+    ))
+
+    cells.append(code(
+        "from pathlib import Path\n"
+        "import pandas as pd\n"
+        "from IPython.display import Image, display\n"
+        "\n"
+        "# Mirror: prefer /scratch, fall back to /tmp\n"
+        "SCRATCH = Path('/root/capsule/scratch/03_surface_v2')\n"
+        "TMP = Path('/tmp/03_surface_v2')\n"
+        "OUT = SCRATCH if (SCRATCH / 'hcr_results.csv').exists() else TMP\n"
+        "FIG = OUT / 'figures'\n"
+        "print('Reading from', OUT)"
+    ))
+
+    cells.append(md(
+        "## Metrics used\n\n"
+        "- **`above_frac`** — fraction of ROIs at depth < 0 (above the plane).\n"
+        "  Primary metric. Target close to 0.\n"
+        "- `above_frac_5` — fraction with depth < −5 um (matches v1).\n"
+        "- **`cum_above_ratio`** — mean density over [−200, 0] / bulk density\n"
+        "  ([50, 200]). Integrated version of the criterion.\n"
+        "- `onset_depth_um` — where smoothed density first reaches 50 % of\n"
+        "  bulk on the positive-depth side.\n"
+        "- `above_peak_pos` — depth of the largest density peak above 0.\n"
+    ))
+
+    cells.append(md(
+        "## HCR results\n\n"
+        "Summary table — all methods on all 6 subjects. N4 `image_ceiling`\n"
+        "at a 0.5 % image margin plus 5 um safety offset is the winner: it\n"
+        "drives `above_frac` and `cum_above_ratio` to ≈ 0 on every subject\n"
+        "while preserving the image-fit tilt."
+    ))
+    cells.append(code(
+        "hcr = pd.read_csv(OUT / 'hcr_results.csv')\n"
+        "hcr_cols = ['subject','method','c_um','tilt_deg',\n"
+        "            'above_frac','above_frac_5','cum_above_ratio',\n"
+        "            'onset_depth_um','above_peak_pos']\n"
+        "hcr[[c for c in hcr_cols if c in hcr.columns]]"
+    ))
+    cells.append(code(
+        "display(Image(str(FIG / 'hcr_depth_profiles.png')))"
+    ))
+
+    cells.append(md(
+        "### Round-by-round, failures included\n\n"
+        "- **Baseline (image 5 %)**: `above_frac` 2.7–10.7 %; spike at\n"
+        "  depth ≈ −2 to −113. Fails criterion.\n"
+        "- **N1 — low margin (1 %, 0.5 %, 0.1 %)**: image plane moves toward\n"
+        "  buffer. Helps but doesn't fully clear; columns with weak\n"
+        "  autofluorescence still leave some ROI tiles above the plane.\n"
+        "- **N2 — per-channel shallowest**: picks the channel with the\n"
+        "  shallowest fit; for 4/6 subjects this degenerates (a channel with\n"
+        "  zero-padded edges gives `tilt=0, c≈0`, pushing the surface to the\n"
+        "  very top of the volume → cortex onset 140–170 um, too deep).\n"
+        "  **Dropped**.\n"
+        "- **N3 — ROI leading edge + fixed offset**: density-filter ROIs,\n"
+        "  per-tile min-z, plane fit, shift −15/−30 um. Close but still\n"
+        "  fails on 755252. The fixed offset doesn't generalize across the\n"
+        "  varying buffer thicknesses (30–410 um). Dropped as default.\n"
+        "- **N4 — image + per-tile ROI ceiling (winner)**: low-margin image\n"
+        "  fit gives tilt; density-filtered ROIs give a per-tile min-z\n"
+        "  envelope; plane is lifted so every tile's min-z is ≥ plane + 5 um.\n"
+        "  Tilt preserved, intercept clamped. `above_frac` ≈ 0 on every\n"
+        "  subject."
+    ))
+
+    cells.append(md(
+        "## CZ results\n\n"
+        "CZ has no out-of-tissue spike, but 782149 (thin section, 11° HCR\n"
+        "tilt, ~2° CZ tilt) still has 5.8 % of ROIs above the 5 %-margin\n"
+        "image plane. The same image_ceiling structure drives it to 0 with\n"
+        "a smaller tile (80 um, to match CZ's smaller feature sizes) and\n"
+        "3 um safety offset."
+    ))
+    cells.append(code(
+        "cz = pd.read_csv(OUT / 'cz_results.csv')\n"
+        "cz[[c for c in hcr_cols if c in cz.columns]]"
+    ))
+    cells.append(code(
+        "display(Image(str(FIG / 'cz_depth_profiles.png')))"
+    ))
+
+    cells.append(md(
+        "## Promoted protocol (now the default in `analyze_subject`)\n\n"
+        "**HCR** — `estimate_pia_surface_image_ceiling`:\n"
+        "1. Load combined-channel HCR at pyramid level 4.\n"
+        "2. Image fit, `relative_margin=0.005`, `min_signal_abs=0.05`.\n"
+        "3. Density-filter ROI centroids (≥ 3 in 30 um).\n"
+        "4. Tile ROIs (120 um) and take min-z per tile.\n"
+        "5. Lift the plane so every tile's min-z is ≥ plane, +5 um safety.\n\n"
+        "**CZ** — same function, CZ-tuned parameters:\n"
+        "- `relative_margin=0.02`, `min_signal_abs=50`, 80 um tiles,\n"
+        "  3 um safety offset, no density filter (CZ is already clean).\n\n"
+        "Entry points:\n"
+        "- `analyze_subject(..., hcr_surface_method='image_ceiling',\n"
+        "   cz_surface_method='image_ceiling')` (both defaults).\n"
+    ))
+
+    cells.append(md(
+        "## Why v1 was wrong\n\n"
+        "v1 M4 shifted the plane *deeper* to place the spike in a 'clean\n"
+        "trough'. Under the corrected criterion that is the worst possible\n"
+        "direction — the spike consists of real ROIs that must sit BELOW\n"
+        "pia. The only shift that satisfies the criterion is *shallower*,\n"
+        "and the only reliable way to keep the plane shallower than every\n"
+        "ROI cluster under varying buffer thicknesses is to clamp the image\n"
+        "plane against a per-tile min-z envelope of density-filtered ROIs."
+    ))
+
+    nb["cells"] = cells
+    NB.parent.mkdir(parents=True, exist_ok=True)
+    with open(NB, "w") as f:
+        nbf.write(nb, f)
+    print("Wrote", NB)
+
+
+if __name__ == "__main__":
+    build()

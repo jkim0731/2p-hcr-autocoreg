@@ -1,0 +1,189 @@
+# Plan: Analyze Benchmark Data & Describe Data/Coregistration Features
+
+## Context
+
+The project aims to automate coregistration between 2-photon (2p) GCaMP cortical z-stack volumes and HCR light-sheet volumes. Currently this is done manually using BigWarp with iterative landmark matching. Before developing automatic registration, we need to thoroughly characterize the benchmark data to understand the problem's constraints, variability, and features that an algorithm must handle.
+
+The existing `01 Data Description.md` contains approximate values. This plan produces a concrete, quantitative characterization from all 6 benchmark subjects.
+
+**Constraint**: Per dev protocol, benchmark data is used ONLY for understanding the problem — not for algorithm development.
+
+---
+
+## Deliverables
+
+1. **Analysis script**: `/root/capsule/code/dev_code/01_analyze_benchmark.py`
+2. **Summary notebook**: `/root/capsule/code/notebooks/01_benchmark_data_analysis.ipynb`
+3. **Updated doc**: `/root/capsule/code/docs/01 Data Description.md`
+4. **Session log**: `/root/capsule/code/sessions/01_analyze_benchmark_data/log.md`
+
+---
+
+## Step 1: Create directories and data loader
+
+Create `/root/capsule/code/dev_code/` and `/root/capsule/code/notebooks/`.
+
+Write `dev_code/benchmark_data_loader.py` with functions to load per-subject data:
+
+- **CZStack centroids**: `data/{subj}*coreg*/*czstack_cell_centroids.csv` — cols: `[czstack_cell_id, czstack_z, czstack_y, czstack_x]` (pixel coords)
+- **HCR centroids**: `data/HCR_{subj}*/cell_body_segmentation/cell_centroids.npy` — cols: `[z, y, x, id]` (pixel coords)
+- **HCR GFP+ data**: `data/{subj}*coreg*/*spot_488_counts.csv` for 782149/788406/790322 (cols: `[hcr_id, counts, volume, global_bbox, density]`); `data/cell_data_mean_{subj}_R1.csv` for 755252/767022 (intensity-based); 767018 TBD
+- **Landmarks**: All `*landmarks_matched_ext_iter*` CSV files. Format: `[ids, active, czstack_x, czstack_y, czstack_z, hcr_x, hcr_y, hcr_z]`. Manual landmarks start with `Pt-`, auto-matched start with `cz*-hcr*`.
+- **Coreg table**: `*coreg_table.csv` — cols: `[czstack_id, hcr_id]`
+- **Resolution metadata**: CZ from `session.json` (`fov_scale_factor`); HCR from `fused_ng.json` (`dimensions.x[0]` in meters)
+
+Handle format variations:
+- 767018: no date prefix in coreg dir, HCR centroids in CSV (not NPY in coreg dir), no `fused_ng.json`
+- 755252/767022: GFP+ via intensity instead of spot counts
+- Older subjects: `_reordered_qced` suffix on landmarks
+
+Convert all coordinates to physical (um) using per-subject resolutions.
+
+### Known data values to validate against:
+| Subject | CZ res (um/px) | HCR XY res (um/px) | HCR Z res | CZ image | 
+|---------|---------------|--------------------|-----------|---------| 
+| all     | 0.78          | 0.2451-0.2474      | 1.0       | 512x512 |
+
+---
+
+## Step 2: Per-subject summary table
+
+Compute and tabulate for all 6 subjects:
+
+| Metric | Source |
+|--------|--------|
+| CZ cell count | czstack centroids CSV (line count - 1) |
+| CZ volume extent (pixels & um) | centroid range * resolution |
+| HCR total cell count | cell_centroids.npy shape[0] |
+| HCR volume extent (pixels & um) | centroid range * resolution |
+| HCR GFP+ cell count | spot_488_counts or intensity threshold |
+| GFP+ fraction | GFP+ / HCR total |
+| Coreg match count & rate | coreg_table / CZ total |
+| Manual landmark count | grep `Pt-` in iter1 landmarks |
+| Total active landmarks (final iter) | count `active=True` in final landmarks |
+
+### Expected values (verified from data):
+| Subject | CZ cells | HCR total | HCR GFP+ | Matched | Rate   |
+|---------|----------|-----------|-----------|---------|--------|
+| 755252  | 835      | 84,233    | ~intensity| 639     | 76.5%  |
+| 767018  | 785      | 108,506   | TBD       | 273     | 34.7%  |
+| 767022  | 926      | 76,336    | ~intensity| 793     | 85.6%  |
+| 782149  | 894      | 39,291    | 29,557    | 303     | 33.8%  |
+| 788406  | 932      | 127,275   | 90,815    | 787     | 84.4%  |
+| 790322  | 1016     | 106,379   | 86,353    | 778     | 76.6%  |
+
+HCR physical volume sizes:
+- 755252: ~454 x 454 x 1247 um
+- 767022: ~455 x 455 x 1174 um
+- 782149: ~565 x 566 x 878 um (notably thin)
+- 788406: ~571 x 571 x 1329 um
+- 790322: ~566 x 565 x 1160 um
+
+---
+
+## Step 3: Cell density analysis
+
+For each subject (in physical um coordinates):
+
+a) **3D cell density** (cells/mm^3) for CZ and HCR  
+b) **Depth profiles** (z-axis): bin cells in ~20 um bins, plot density vs depth for CZ and HCR_GFP+ overlaid. This reveals cortical layer structure.  
+c) **XY density maps**: 2D histogram projections for both modalities  
+d) **GFP+ fraction by depth**: discriminative signal for matching  
+e) **Cell count ratio**: HCR_GFP+ / CZ_cells — characterizes search space size  
+
+Plots:
+- 6-panel depth profiles (one per subject, CZ vs HCR GFP+ overlaid)
+- GFP+ fraction bar chart across subjects
+- XY density comparison (CZ vs HCR, physical coords)
+
+---
+
+## Step 4: Coordinate system and scaling analysis
+
+Using active landmark pairs (from final QC'd iteration per subject):
+
+a) **Scaling factors from correspondences**: Convert both CZ and HCR landmarks to physical coords, compute per-axis effective scale by fitting `hcr_phys = scale * cz_phys + offset` (after rotation)  
+b) **Rotation verification**: Procrustes analysis via SVD on centered landmark pairs. Expected: ~180 deg rotation around Z axis. Verify correlation: `corr(cz_x, hcr_x) < -0.9`  
+c) **Anisotropy characterization**: Document XY resolution ratio (0.78/0.245 = ~3.17x), Z is 1:1  
+
+---
+
+## Step 5: Transform analysis from landmarks
+
+For each subject:
+
+a) **Fit 3D affine transform** to all active landmarks (physical coords) via least-squares/Procrustes (SVD). Decompose into rotation R, scale s, translation t.  
+b) **Residuals after affine**: compute residual vectors (predicted - actual) for each landmark. Report mean/median/max residual in um. This quantifies the nonrigid deformation magnitude.  
+c) **Spatial pattern of residuals**: quiver plots in XY and XZ projections. Look for systematic patterns (e.g., larger residuals at edges).  
+d) **Deformation smoothness**: pairwise landmark distance vs pairwise residual difference scatter plot. This informs kernel size for nonrigid registration.  
+e) **Iteration progression**: count active landmarks per iteration (1 through 4-6).  
+
+Key outputs for algorithm design:
+- Affine residual magnitude range → how much nonrigid correction needed
+- Smoothness scale → kernel size for deformation field
+- Rotation angle confirmation → can hardcode 180-deg or needs estimation
+
+---
+
+## Step 6: Matching statistics
+
+a) **Match rate vs subject characteristics**: correlate match rate with CZ cell count, HCR GFP+ count, GFP+ fraction, HCR volume, manual landmark count  
+b) **Distance distribution of matched pairs**: after affine transform, compute CZ→HCR distances for matched cells. Report distribution in um.  
+c) **Spatial distribution**: plot matched vs unmatched CZ cells in 3D. Check if unmatched cells cluster (near edges, deep layers, sparse regions).  
+d) **GFP+ counts for matched cells**: compare spot counts distribution of matched vs all GFP+ HCR cells (for subjects with spot data)  
+
+---
+
+## Step 7: Cross-subject variability summary
+
+- Compile all per-subject metrics into comparison table/plots
+- Compute coefficient of variation for: cell count, density, GFP+ fraction, match rate, affine residual
+- Identify outliers: 782149 (thin section, low match rate), 767018 (low match rate, older pipeline)
+- Summarize "problem difficulty" parameters per subject
+
+---
+
+## Step 8: Update `01 Data Description.md`
+
+Rewrite `/root/capsule/code/docs/01 Data Description.md` with:
+- Concrete numbers from all 6 subjects (tables instead of approximations)
+- Per-subject resolution values
+- Volume extents in both pixel and physical coordinates
+- Cell count statistics with GFP+ fractions
+- Transform characteristics (rotation, scale, nonrigid residual magnitudes)
+- Coordinate system conventions (column ordering for each data type)
+- Cross-subject variability ranges
+- Data format notes (767018 differences, intensity vs spot data)
+
+---
+
+## Step 9: Write session log
+
+Save session log at `/root/capsule/code/sessions/01_analyze_benchmark_data/log.md` documenting:
+- Goal, approach, key findings
+- Computed metrics tables
+- Insights for algorithm development
+- Next steps
+
+---
+
+## Critical files to read/modify
+
+| File | Action |
+|------|--------|
+| `code/docs/01 Data Description.md` | Update with concrete numbers |
+| `code/manual workflow/manual_coreg_utils.py` | Reference for landmark parsing, coordinate conventions |
+| `code/manual workflow/step_1_process_files.ipynb` | Reference for data loading patterns |
+| `code/dev_code/benchmark_data_loader.py` | Create new — data loading utilities |
+| `code/dev_code/01_analyze_benchmark.py` | Create new — analysis functions |
+| `code/notebooks/01_benchmark_data_analysis.ipynb` | Create new — main analysis notebook |
+| `code/sessions/01_analyze_benchmark_data/log.md` | Create new — session log |
+
+## Verification
+
+1. Run the analysis script end-to-end on all 6 subjects
+2. Verify computed cell counts match expected values (table in Step 2)
+3. Verify rotation angle is ~180 degrees for all subjects
+4. Verify XY scaling ratio is ~3.17 in pixel space
+5. Check that notebook renders with all plots
+6. Review updated data description for accuracy and completeness

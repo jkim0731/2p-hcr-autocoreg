@@ -1,0 +1,9 @@
+{
+  "id": "6",
+  "subject": "Log + summarise R1 session",
+  "description": "Create sessions/NN_R1_coarse_align/log.md with hypothesis/method/result/failure/next, update 07 Grand Plan status + ledger, write notebook summary.",
+  "activeForm": "Writing R1 log and summary",
+  "status": "pending",
+  "blocks": [],
+  "blockedBy": []
+}

@@ -1,0 +1,9 @@
+{
+  "id": "2",
+  "subject": "Implement band-constrained multi-channel image surface fit",
+  "description": "Build a method that combines channels (max-intensity or weighted) inside the ROI-quadratic target band, fits a quadratic through the image-derived per-column top-of-signal, and clamps against the ROI envelope.",
+  "activeForm": "Implementing band-constrained multi-channel surface fit",
+  "status": "completed",
+  "blocks": [],
+  "blockedBy": []
+}

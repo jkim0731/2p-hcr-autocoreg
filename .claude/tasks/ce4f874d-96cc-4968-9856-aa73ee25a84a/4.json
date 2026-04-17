@@ -1,0 +1,9 @@
+{
+  "id": "4",
+  "subject": "Implement R1 coarse affine module",
+  "description": "Create code/dev_code/r1_coarse_align.py (or similar) exposing coarse_align(subject) -> dict{R,S,t, diagnostics}. Use depth_from_surface + density maps. Log intermediate checks.",
+  "activeForm": "Implementing R1",
+  "status": "in_progress",
+  "blocks": [],
+  "blockedBy": []
+}

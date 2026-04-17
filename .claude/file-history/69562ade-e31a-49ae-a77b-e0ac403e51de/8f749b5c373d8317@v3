@@ -1,0 +1,161 @@
+"""Session 03 v2 — render estimated-surface overlays on CZ and HCR data.
+
+For each benchmark subject this script produces two figures:
+  - hcr_surface_overlays.png  (HCR Y-slab MIP with the winning N4 plane)
+  - cz_surface_overlays.png   (CZ Y-slab MIP with the winning CZ plane)
+
+The surfaces are re-fit here using the same methods that produced the
+winning rows of `hcr_results.csv` / `cz_results.csv`.
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+
+sys.path.insert(0, str(Path(__file__).parent))
+from benchmark_analysis import (
+    hcr_level_resolution,
+    load_cz_y_slab,
+    load_hcr_combined,
+    load_hcr_y_slab,
+    plot_pia_overlay,
+)
+from benchmark_data_loader import BENCHMARK_SUBJECTS, cz_px_to_um, hcr_px_to_um, load_subject
+
+# The sibling file's name starts with a digit, so import it via importlib.
+import importlib.util as _iu
+_spec = _iu.spec_from_file_location(
+    "surface_iteration_v2",
+    Path(__file__).parent / "03_surface_iteration_v2.py",
+)
+_mod = _iu.module_from_spec(_spec)
+sys.modules["surface_iteration_v2"] = _mod
+_spec.loader.exec_module(_mod)
+cz_image_with_roi_ceiling = _mod.cz_image_with_roi_ceiling
+image_with_roi_ceiling = _mod.image_with_roi_ceiling
+load_cz_image = _mod.load_cz_image
+
+OUT = Path("/root/capsule/code/sessions/03_surface_estimation_v2")
+FIG = OUT / "figures"
+FIG.mkdir(parents=True, exist_ok=True)
+
+
+def _hcr_surface(s, hcr_xyz):
+    vol, xy_um, z_um, _ = load_hcr_combined(s, level=4)
+    surf = image_with_roi_ceiling(
+        hcr_xyz, vol, z_um, xy_um,
+        margin=0.005, safety_offset_um=5.0,
+    )
+    return surf
+
+
+def _cz_surface(s, cz_xyz):
+    img = load_cz_image(s)
+    surf = cz_image_with_roi_ceiling(
+        cz_xyz, img, s.cz_z_um, s.cz_xy_um,
+        margin=0.02, safety_offset_um=3.0,
+    )
+    return surf, img
+
+
+def _plot_hcr(subjects):
+    n = len(subjects)
+    cols = 3
+    rows = int(np.ceil(n / cols))
+    fig, axes = plt.subplots(rows, cols, figsize=(16, 5 * rows))
+    axes = np.atleast_1d(axes).ravel()
+
+    for ax, sid in zip(axes, subjects):
+        s = load_subject(sid)
+        hcr_um = hcr_px_to_um(
+            s.hcr_centroids[["z_px", "y_px", "x_px"]].values, s)
+        hcr_xyz = hcr_um[:, [2, 1, 0]]
+        surf = _hcr_surface(s, hcr_xyz)
+
+        # Pick the Y-slab at the median ROI y so the slice passes through
+        # cell-rich tissue.
+        y_center_um = float(np.median(hcr_xyz[:, 1]))
+        mip, y_center_um, z_um, xy_um = load_hcr_y_slab(
+            s, channel="488", y_center_um=y_center_um,
+            half_width_um=30.0, level=4)
+
+        plot_pia_overlay(
+            ax, mip, z_um=z_um, x_um=xy_um, surface=surf,
+            y_slab_um=y_center_um,
+            title=f"HCR {sid} (N4, lift={surf.get('lift_um', 0):.0f} um)",
+        )
+
+        # Overlay ROIs within the slab as small dots
+        band = 30.0
+        in_slab = np.abs(hcr_xyz[:, 1] - y_center_um) <= band
+        ax.scatter(hcr_xyz[in_slab, 0], hcr_xyz[in_slab, 2],
+                   s=1, c="cyan", alpha=0.4, label="ROI (±30 um)")
+        ax.legend(loc="lower right", fontsize=7)
+
+    for ax in axes[n:]:
+        ax.axis("off")
+    fig.tight_layout()
+    out = FIG / "hcr_surface_overlays.png"
+    fig.savefig(out, dpi=120)
+    plt.close(fig)
+    print(f"Saved {out}")
+
+
+def _plot_cz(subjects):
+    n = len(subjects)
+    cols = 3
+    rows = int(np.ceil(n / cols))
+    fig, axes = plt.subplots(rows, cols, figsize=(16, 5 * rows))
+    axes = np.atleast_1d(axes).ravel()
+
+    for ax, sid in zip(axes, subjects):
+        s = load_subject(sid)
+        cz_um = cz_px_to_um(
+            s.cz_centroids[["z_px", "y_px", "x_px"]].values, s)
+        cz_xyz = cz_um[:, [2, 1, 0]]
+        surf, _ = _cz_surface(s, cz_xyz)
+
+        y_center_um = float(np.median(cz_xyz[:, 1]))
+        y_center_px = int(round(y_center_um / s.cz_xy_um))
+        mip, y_center_px, z_um, xy_um = load_cz_y_slab(
+            s, y_center_px=y_center_px, half_width_px=20)
+        y_slab_um = y_center_px * xy_um
+
+        plot_pia_overlay(
+            ax, mip, z_um=z_um, x_um=xy_um, surface=surf,
+            y_slab_um=y_slab_um,
+            title=f"CZ {sid} (ceiling, lift={surf.get('lift_um', 0):.0f} um)",
+        )
+
+        band_um = 20 * s.cz_xy_um
+        in_slab = np.abs(cz_xyz[:, 1] - y_slab_um) <= band_um
+        ax.scatter(cz_xyz[in_slab, 0], cz_xyz[in_slab, 2],
+                   s=1, c="cyan", alpha=0.4,
+                   label=f"ROI (±{band_um:.0f} um)")
+        ax.legend(loc="lower right", fontsize=7)
+
+    for ax in axes[n:]:
+        ax.axis("off")
+    fig.tight_layout()
+    out = FIG / "cz_surface_overlays.png"
+    fig.savefig(out, dpi=120)
+    plt.close(fig)
+    print(f"Saved {out}")
+
+
+if __name__ == "__main__":
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--scope", choices=("hcr", "cz", "all"), default="all")
+    ap.add_argument("--subjects", nargs="*", default=None)
+    args = ap.parse_args()
+    subjects = args.subjects or BENCHMARK_SUBJECTS
+    if args.scope in ("hcr", "all"):
+        _plot_hcr(subjects)
+    if args.scope in ("cz", "all"):
+        _plot_cz(subjects)

@@ -1,0 +1,9 @@
+{
+  "id": "1",
+  "subject": "Channel survey: find bright-autofluorescence channels per subject",
+  "description": "For each HCR subject, enumerate all channels, load level-4 volumes, compute per-column top-of-signal intensity inside a ±100 µm band around the ROI-quadratic anchor, and report which channels carry the strongest boundary signal.",
+  "activeForm": "Surveying HCR channels for autofluorescence",
+  "status": "completed",
+  "blocks": [],
+  "blockedBy": []
+}

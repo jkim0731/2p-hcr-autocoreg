@@ -1,0 +1,24 @@
+---
+name: Subgoal 04/R1/02 — intensity-subject GFP+ threshold is queued
+description: After subgoal 01 landed yen_log_joint (v2.1) for spot subjects, intensity subjects 755252/767022 still pass 100% of cells as GFP+. Plan file is ready but execution is queued for a new session.
+type: project
+originSessionId: f7382aeb-5235-4094-a1cd-69297f8e005e
+---
+Subgoal 04/R1/02 is planned but **not executed**. It targets the two
+intensity-only benchmark subjects (755252, 767022) that still receive no
+GFP+ threshold — they currently pass every HCR cell through as "GFP+".
+
+**Why:** Subgoal 01 (2026-04-17) replaced `counts >= 5` with
+`yen_log_joint` for spot subjects (788406, 790322, 767018, 782149) —
+Yen on `log(counts ≥ 1)` AND Yen on `log(density > 0)`, dominates
+counts-only Yen on 767018. The intensity fallback branch in
+`benchmark_data_loader._load_gfp()` was left untouched and is now the
+dominant source of non-uniformity in the benchmark.
+
+**How to apply:** When the next session opens subgoal 02, start from:
+- Plan: `code/sessions/04_R1_coarse_align/subgoal_02_intensity_threshold_plan.md`
+- Scouting result: Yen on raw `log(mean)` gives 0.80 / 0.91 coreg
+  coverage — below the 0.95 bar on both subjects. Investigate
+  `mean - background` (per-cell local background from the CSV) as the
+  primary feature before relaxing the bar.
+- Same generalisability rule applies: no fixed-percentile defaults.

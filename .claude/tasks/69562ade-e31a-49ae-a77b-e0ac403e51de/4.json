@@ -1,0 +1,9 @@
+{
+  "id": "4",
+  "subject": "Explore new HCR surface approaches on 790322",
+  "description": "Add N22 variant = N21 quantile fit + loosened clamp (within_tile_q=0.10). Compare against N11, N13, N21 in notebook.",
+  "activeForm": "Adding N22 and running comparison",
+  "status": "completed",
+  "blocks": [],
+  "blockedBy": []
+}

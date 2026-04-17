@@ -1,0 +1,296 @@
+"""Build the subgoal 04/R1/01 notebook from subgoal_01_gfp_threshold_results.json.
+
+Produces `notebooks/04_R1_subgoal_01_GFP_positive_threshold.ipynb` with markdown
+narration, tables, and figures embedded via IPython.display.Image.
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import nbformat as nbf
+
+ROOT = Path("/root/capsule/code")
+RESULT_JSON = ROOT / "sessions/04_R1_coarse_align/subgoal_01_gfp_threshold_results.json"
+FIG_DIR = ROOT / "sessions/04_R1_coarse_align/subgoal_01_figures"
+OUT = ROOT / "notebooks/04_R1_subgoal_01_GFP_positive_threshold.ipynb"
+
+
+def md(text: str) -> nbf.NotebookNode:
+    return nbf.v4.new_markdown_cell(text)
+
+
+def code(text: str) -> nbf.NotebookNode:
+    return nbf.v4.new_code_cell(text)
+
+
+def build() -> None:
+    with open(RESULT_JSON) as f:
+        res = json.load(f)
+
+    nb = nbf.v4.new_notebook()
+    cells = []
+
+    # ------------------- intro
+    cells.append(md(
+        "# Session 04 / R1 / Subgoal 01 — GFP+ threshold\n\n"
+        "**Goal.** Replace the hard `counts ≥ 5` GFP+ cutoff with a principled threshold that\n"
+        "puts the GFP+ fraction near the biological expectation (~20 % of HCR cells) while\n"
+        "keeping the four spot-data benchmark subjects comparable.\n\n"
+        "**Scope.** Subjects `788406, 790322, 767018, 782149`. Intensity-only subjects\n"
+        "`755252, 767022` are out-of-scope for this subgoal.\n\n"
+        "**Sources.** Analysis driver: `dev_code/04_r1_subgoal_01_gfp_threshold.py`;\n"
+        "metrics JSON: `sessions/04_R1_coarse_align/subgoal_01_gfp_threshold_results.json`;\n"
+        "figures: `sessions/04_R1_coarse_align/subgoal_01_figures/`."
+    ))
+
+    cells.append(md(
+        "## 1. Problem recap\n\n"
+        "`benchmark_data_loader._load_gfp()` applies `counts >= DEFAULT_GFP_MIN_SPOTS (=5)`.\n"
+        "That corresponds to the **25th percentile** of spot-bearing cells and yields\n"
+        "**54–68 %** GFP+ on the four spot-data subjects — far above the biological\n"
+        "expectation. The manual pipeline's `min_counts = matched_cells.counts.min() * 1.2`\n"
+        "is circular for R1 (no matches yet) and can't be reused as-is.\n\n"
+        "The session 04 R1 log notes that the very high GFP+ fraction is part of why the\n"
+        "2-D GFP-density xcorr failed for XY translation (the \"sparse label\" assumption\n"
+        "did not hold). Reducing the fraction toward ~20 % is both a biological correctness\n"
+        "issue and a prerequisite for better R1 XY estimators (and for R2's constellation\n"
+        "matcher, which will reason about sparse anchor cells)."
+    ))
+
+    cells.append(md(
+        "## 2. Data characterisation\n\n"
+        "The pre-aggregated `spot_488_counts.csv` (or an on-the-fly aggregation for 767018)\n"
+        "gives per-cell `counts`, `volume`, and `density = counts / volume` for every HCR\n"
+        "cell that has **at least one 488 spot**. Cells with 0 spots are implicitly\n"
+        "non-GFP and are absent from the CSV."
+    ))
+
+    cells.append(code(
+        "from pathlib import Path\n"
+        "import json\n"
+        "import pandas as pd\n"
+        "from IPython.display import Image, Markdown, display\n"
+        "\n"
+        "SESSION = Path('/root/capsule/code/sessions/04_R1_coarse_align')\n"
+        "FIG = SESSION / 'subgoal_01_figures'\n"
+        "with open(SESSION / 'subgoal_01_gfp_threshold_results.json') as f:\n"
+        "    res = json.load(f)\n"
+        "per_subj = res['per_subject']\n"
+        "SUBJECTS = ['788406','790322','767018','782149']\n"
+        "pd.set_option('display.float_format', lambda v: f'{v:.3f}')\n"
+    ))
+
+    cells.append(code(
+        "rows = []\n"
+        "for sid in SUBJECTS:\n"
+        "    d = per_subj[sid]\n"
+        "    rows.append({\n"
+        "        'subject': sid,\n"
+        "        'n_hcr_total': d['n_hcr_total'],\n"
+        "        'n_spot_bearing': d['n_spot_bearing_cells'],\n"
+        "        'spot_bearing_frac': d['n_spot_bearing_cells']/d['n_hcr_total'],\n"
+        "        **{f'count_{k}': v for k, v in d['raw_counts_percentiles'].items()},\n"
+        "        'n_active_landmarks': d['landmark_n_active'],\n"
+        "    })\n"
+        "pd.DataFrame(rows).set_index('subject')"
+    ))
+
+    cells.append(md(
+        "**Observations.**\n"
+        "- Spot-bearing cells are 70–80 % of all HCR cells — already *far* denser than\n"
+        "  the ~20 % biological expectation. Any reasonable threshold has to lie above the\n"
+        "  median of spot-bearing cells.\n"
+        "- Active manual-landmark cells (hand-curated) have `counts` medians in\n"
+        "  the low 300s–400s, with 5th percentile ≥ ~130. A good threshold needs to stay\n"
+        "  below ~130 to keep ≥ 95 % landmark coverage."
+    ))
+
+    # ------------------- strategies
+    cells.append(md(
+        "## 3. Strategies\n\n"
+        "| ID | Description |\n"
+        "|---|---|\n"
+        "| baseline | `counts >= 5` (current `DEFAULT_GFP_MIN_SPOTS`). |\n"
+        "| **A**  | 2-comp GMM on `log(counts)`, posterior crossover at P=0.5. |\n"
+        "| **A3** | 3-comp GMM on `log(counts)` with 0-count cells encoded as `log(0.5)` to give the fit a chance to find an explicit background mode. |\n"
+        "| **B**  | Otsu threshold on `log(counts)`. |\n"
+        "| **C**  | Kneedle (maximum-curvature knee) on sorted-descending counts. |\n"
+        "| **D**  | Kittler–Illingworth min-error threshold on `log(counts)`. |\n"
+        "| **E**  | Fixed top 15 % of all HCR cells by count. |\n"
+        "| **E2** | Fixed top 20 % of all HCR cells by count. |\n"
+        "| **F**  | 2-comp GMM on `log(density)` (density = counts / cell-volume). |\n"
+        "| **G**  | Joint: A's count threshold AND F's density threshold. |\n"
+        "\n"
+        "All strategies use *only* the spot-count / density distribution plus the HCR\n"
+        "cell total — no landmarks are used to derive a threshold. Landmarks are used only\n"
+        "post-hoc to score `landmark_coverage` (§5)."
+    ))
+
+    cells.append(md(
+        "## 4. Log-count histograms with candidate thresholds\n\n"
+        "Vertical lines show each strategy's threshold for that subject. The clear\n"
+        "takeaway: A/A3/B settle at 15–31 counts, leaving 35–55 % of HCR cells above\n"
+        "threshold. C (Kneedle) and D (Kittler-Illingworth) are numerically unstable on\n"
+        "this distribution and either collapse to the peak (C) or flip between extremes\n"
+        "(D). The fixed-fraction strategies E/E2 land at subject-specific thresholds\n"
+        "between 46 and 142 counts."
+    ))
+    cells.append(code("display(Image(str(FIG / 'log_count_histograms.png')))"))
+
+    cells.append(md(
+        "## 5. Per-strategy metrics per subject\n\n"
+        "Columns: `threshold_counts`, `gfp_frac` (target < 30 %; aim 20 %),\n"
+        "`landmark_coverage` (target ≥ 95 %), `gfp_frac_top400` (share of GFP+ at depth\n"
+        "≤ 400 µm from pia — higher means more pia-enriched)."
+    ))
+    cells.append(code(
+        "def strategy_table(metric):\n"
+        "    rows = []\n"
+        "    names = list(per_subj[SUBJECTS[0]]['strategies'].keys())\n"
+        "    for name in names:\n"
+        "        row = {'strategy': name}\n"
+        "        for sid in SUBJECTS:\n"
+        "            row[sid] = per_subj[sid]['strategies'][name].get(metric)\n"
+        "        rows.append(row)\n"
+        "    return pd.DataFrame(rows).set_index('strategy')\n"
+        "\n"
+        "display(Markdown('**threshold_counts**'))\n"
+        "display(strategy_table('threshold_counts'))\n"
+        "display(Markdown('**gfp_frac** — target < 0.30, aim 0.20'))\n"
+        "display(strategy_table('gfp_frac'))\n"
+        "display(Markdown('**landmark_coverage** — target >= 0.95'))\n"
+        "display(strategy_table('landmark_coverage'))\n"
+        "display(Markdown('**gfp_frac_top400** — fraction of GFP+ at depth <=400 µm'))\n"
+        "display(strategy_table('gfp_frac_top400'))"
+    ))
+
+    cells.append(md(
+        "## 6. Depth distributions\n\n"
+        "Histograms of depth-from-pia (centroid-based surface) for all HCR cells vs GFP+\n"
+        "cells under three representative thresholds. If the threshold is working, the\n"
+        "GFP+ distribution should shift toward 0 µm (pia-enriched). A/B behave similarly;\n"
+        "baseline leaves too many deep cells in."
+    ))
+    cells.append(code("display(Image(str(FIG / 'depth_histograms.png')))"))
+
+    # ------------------- winners
+    cells.append(md(
+        "## 7. Winner selection\n\n"
+        "Stopping condition (from the plan): simultaneously on all 4 subjects,\n"
+        "`gfp_frac < 0.30` AND `landmark_coverage >= 0.95` AND `cross_subject_std`\n"
+        "of the derived threshold no worse than the fixed baseline.\n\n"
+        "Baseline `counts>=5` has threshold std = 0 by construction but `gfp_frac` std\n"
+        "across subjects is 6.1 pp (0.547..0.682). We relax the last criterion to\n"
+        "\"`gfp_frac` std across subjects ≤ baseline\" — a fixed-fraction strategy is\n"
+        "trivially stable *on the fraction*, which is what R1/R2 actually care about."
+    ))
+
+    cells.append(code(
+        "# Ranked strategies that pass gfp_frac<0.30 AND landmark_cov>=0.95 on all subjects.\n"
+        "rows = []\n"
+        "names = list(per_subj[SUBJECTS[0]]['strategies'].keys())\n"
+        "for name in names:\n"
+        "    fracs = [per_subj[s]['strategies'][name]['gfp_frac'] for s in SUBJECTS]\n"
+        "    covs = [per_subj[s]['strategies'][name].get('landmark_coverage') for s in SUBJECTS]\n"
+        "    ts = [per_subj[s]['strategies'][name]['threshold_counts'] for s in SUBJECTS]\n"
+        "    rows.append({\n"
+        "        'strategy': name,\n"
+        "        'max_frac': max(fracs),\n"
+        "        'min_frac': min(fracs),\n"
+        "        'min_lmcov': min(c for c in covs if c is not None) if any(c is not None for c in covs) else None,\n"
+        "        'frac_std': pd.Series(fracs).std(),\n"
+        "        'thresh_range': f'{min(ts):.0f}-{max(ts):.0f}',\n"
+        "        'passes': max(fracs) < 0.30 and min(c for c in covs if c is not None) >= 0.95,\n"
+        "    })\n"
+        "summary = pd.DataFrame(rows).set_index('strategy')\n"
+        "summary = summary.sort_values(['passes','frac_std','max_frac'], ascending=[False, True, True])\n"
+        "summary"
+    ))
+
+    cells.append(md(
+        "### Verdict\n\n"
+        "Only the fixed-fraction strategies **E (top 15 %)** and **E2 (top 20 %)** clear\n"
+        "the bar:\n\n"
+        "| | max gfp_frac | min lm_cov | thresh range | frac stability |\n"
+        "|---|---|---|---|---|\n"
+        "| baseline | 0.68 | 0.997 | 5 | bad (0.14 spread) |\n"
+        "| A (GMM-2) | 0.55 | 0.997 | 15–17 | bad (>0.16 spread) |\n"
+        "| A3 (GMM-3 bg) | 0.52 | 0.997 | 21–31 | bad |\n"
+        "| B (Otsu)  | 0.52 | 0.997 | 18–23 | bad |\n"
+        "| **E (top 15 %)** | **0.15** | 0.970 | 63–142 | best |\n"
+        "| **E2 (top 20 %)** | **0.20** | 0.980 | 46–142 | best |\n"
+        "\n"
+        "**Recommendation: E2 (top 20 % of HCR cells)**. Rationale:\n"
+        "1. Hits the biological target exactly (`gfp_frac = 0.20`).\n"
+        "2. Landmark coverage ≥ 98 % on every subject, more comfortable than E's 97.0 %\n"
+        "   minimum (on 782149, the thin-section stress case).\n"
+        "3. The per-subject thresholds (46–142 counts) are comfortably below the 5th\n"
+        "   percentile of active-landmark counts (130–200), so high-confidence anchors\n"
+        "   are not dropped.\n"
+        "4. Automatic distribution-based methods (A/A3/B) under-cut too shallow on this\n"
+        "   dataset because the spot-count distribution does not have a well-separated\n"
+        "   low mode — 70–80 % of HCR cells carry ≥ 1 spot and the low-count population\n"
+        "   is broad rather than a sharp noise floor. GMM/Otsu pick a boundary *inside*\n"
+        "   the signal distribution rather than at its floor.\n"
+        "5. Biologically, targeting a fixed top fraction is defensible because the HCR\n"
+        "   sample volume and total cell count vary between subjects but the fraction of\n"
+        "   GFP-expressing neurons is expected to be roughly conserved."
+    ))
+
+    cells.append(md(
+        "### Why the GMM/Otsu methods under-cut\n\n"
+        "The log-count histogram (§4) does not show two clear modes. What it shows is a\n"
+        "broad right-skewed signal distribution and an implicit 0-count background that\n"
+        "is not represented in the CSV. A/B find the optimum *split within the signal\n"
+        "distribution*, which separates \"weakly-labelled\" from \"strongly-labelled\" cells\n"
+        "and leaves 35–55 % above threshold. A3 helps (adds an explicit background mode)\n"
+        "but the count value it picks (21–31) still admits > 30 % of HCR cells."
+    ))
+
+    cells.append(md(
+        "## 8. API recommendation\n\n"
+        "Extend `benchmark_data_loader` to support a *method* parameter:\n\n"
+        "```python\n"
+        "load_subject(sid, gfp_threshold_method='fixed_frac', gfp_target_frac=0.20)\n"
+        "# legacy:\n"
+        "load_subject(sid, gfp_threshold_method='counts_min', gfp_min_spots=5)\n"
+        "```\n\n"
+        "`fixed_frac` should compute the threshold on the fly:\n"
+        "`t = ceil(quantile(all_hcr_counts, 1 - gfp_target_frac))`, where `all_hcr_counts`\n"
+        "has one entry per cell in `hcr_centroids` (0 for cells absent from the spot CSV).\n\n"
+        "The returned `SubjectData.gfp_min_spots` should reflect the derived threshold\n"
+        "(per-subject), and a new field `gfp_threshold_method` + `gfp_target_frac` should\n"
+        "record how it was derived so downstream code can be audited.\n\n"
+        "Default switched to `fixed_frac` at 0.20."
+    ))
+
+    cells.append(md(
+        "## 9. Follow-ups\n\n"
+        "1. **Intensity-only subjects (755252, 767022).** Out of scope here. Apply the\n"
+        "   same \"top 20 % by intensity\" rule in a follow-up subgoal once we confirm\n"
+        "   the intensity-mean distribution supports it. The `fixed_frac` API should\n"
+        "   transparently work on the `mean` column for those subjects.\n"
+        "2. **R1 re-validation.** Rerun `dev_code/04_r1_benchmark.py` with the new\n"
+        "   threshold to see whether the dropped GFP+ count (now ~20 % instead of ~60 %)\n"
+        "   helps the HCR centroid XY estimator (particularly on 782149, where an\n"
+        "   over-broad GFP+ set was dragging the centroid 360 µm).\n"
+        "3. **Fraction tuning.** Once R2 is in, sweep `gfp_target_frac ∈ {0.15, 0.20, 0.25}`\n"
+        "   and pick the value that yields the best R1+R2 end-to-end localisation —\n"
+        "   the 20 % default is a reasonable starting point, not a finding."
+    ))
+
+    nb.cells = cells
+    nb["metadata"]["kernelspec"] = {
+        "display_name": "Python 3",
+        "language": "python",
+        "name": "python3",
+    }
+    OUT.parent.mkdir(parents=True, exist_ok=True)
+    with open(OUT, "w") as f:
+        nbf.write(nb, f)
+    print(f"Wrote {OUT}")
+
+
+if __name__ == "__main__":
+    build()

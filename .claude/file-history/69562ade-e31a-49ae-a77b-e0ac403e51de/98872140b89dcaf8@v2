@@ -1,0 +1,1 @@
+- [HCR surface fitter default](surface_fitter_choice.md) — `analyze_subject` now defaults to `quantile_ceiling` (N22); treat the returned surface as a feature, not a diagnostic.

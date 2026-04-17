@@ -1,0 +1,39 @@
+# Data Description
+
+## Modalities
+
+### 1) 2p GCaMP (Source Sub-volume)
+- Size: ~400 x 400 x 450 um (x x y x z)
+- Resolution:
+  - XY: ~0.78 um/pixel
+  - Z: ~1 um/pixel (low axial resolution)
+- Content:
+  - GCaMP+ inhibitory neurons (~900 cells)  
+  - 3D ROI segmentation data available
+  - From pia surface. top ~50 um is blank buffer
+- Nature:
+  - Sub-volume embedded within HCR
+
+### 2) HCR Light-sheet (Target Volume)
+- Size: ~1 x 1 x 0.5 mm (x x y x z)
+- Resolution:
+  - XY: ~0.24 um/pixel
+  - Z: ~1 um/pixel
+  - Zarr level 2 may have different xy resolution
+- Content:
+  - Ex vivo matched to the in vivo 2p volume, but larger
+  - Rn28S (405): all cells (~100k)
+  - GFP (488): GCaMP+ neurons
+  - 3D ROI segmentation from Rn28S
+  - GFP gene counts per ROI
+  - Top part contains blank buffer, thickness unknown and varies across samples and within the sample (slanted).
+
+## Key Relationship
+- 2p is localized inside HCR, roughly at the center, rotated 180 degress in xy plane (z axis fixed; this is not a flip)
+- They both are from the surface of cortex (top part is pia surface)
+- ROI segmentations have errors in both 2p and HCR data, so not 1-to-1 relation from 2p to HCR.
+
+## Transform
+- anisotropic scaling
+- nonrigid deformation
+- smooth deformation

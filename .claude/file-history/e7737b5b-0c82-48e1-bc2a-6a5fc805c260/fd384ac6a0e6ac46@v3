@@ -1,0 +1,451 @@
+"""Analysis functions for benchmark coregistration data.
+
+Implements:
+- per-subject summary statistics
+- anisotropic expansion factor (CZ in-vivo -> HCR ex-vivo) via Procrustes on landmarks
+- pia surface estimation from ROI centroids with out-of-tissue filtering
+- depth-from-surface density profiles
+- additional features (nearest-neighbor distances, affine residuals, etc.)
+
+Only landmark/coreg data is used for characterization. It is NOT used to develop
+the automatic registration algorithm (see dev protocol).
+"""
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+from scipy.spatial import cKDTree
+
+from benchmark_data_loader import (
+    SubjectData,
+    cz_px_to_um,
+    hcr_px_to_um,
+    landmark_pairs_um,
+)
+
+
+# ===========================================================
+# Summary table
+# ===========================================================
+def summary_row(s: SubjectData) -> dict:
+    cz = s.cz_centroids
+    hcr = s.hcr_centroids
+    lm = s.landmarks_qced
+
+    cz_um = cz_px_to_um(cz[["z_px", "y_px", "x_px"]].values, s)
+    hcr_um = hcr_px_to_um(hcr[["z_px", "y_px", "x_px"]].values, s)
+
+    def extent_um(a: np.ndarray) -> tuple[float, float, float]:
+        return tuple((a[:, i].max() - a[:, i].min()) for i in range(3))  # z, y, x
+
+    cz_ext = extent_um(cz_um) if len(cz_um) else (0, 0, 0)
+    hcr_ext = extent_um(hcr_um) if len(hcr_um) else (0, 0, 0)
+
+    n_manual = int(lm["ids"].astype(str).str.startswith("Pt-").sum()) if not lm.empty else 0
+    n_active = int(lm["active"].sum()) if not lm.empty else 0
+
+    n_gfp = len(s.hcr_gfp_df) if not s.hcr_gfp_df.empty else 0
+    n_hcr = len(hcr)
+
+    coreg_rate = len(s.coreg_table) / len(cz) if len(cz) else float("nan")
+
+    return {
+        "subject": s.subject_id,
+        "cz_cells": len(cz),
+        "hcr_total_cells": n_hcr,
+        "hcr_gfp_cells": n_gfp,
+        "gfp_feature": s.gfp_feature_name,
+        "gfp_fraction": n_gfp / n_hcr if n_hcr else float("nan"),
+        "cz_xy_um_per_px": s.cz_xy_um,
+        "hcr_xy_um_per_px": s.hcr_xy_um,
+        "cz_extent_um": tuple(round(v, 0) for v in cz_ext),   # (z, y, x)
+        "hcr_extent_um": tuple(round(v, 0) for v in hcr_ext),
+        "matched_cells": len(s.coreg_table),
+        "match_rate": coreg_rate,
+        "n_manual_landmarks": n_manual,
+        "n_active_landmarks": n_active,
+        "n_landmark_iters": sum(
+            1 for p in s.landmark_iter_files if "qced" in p.name and "iter" in p.name
+        ),
+    }
+
+
+# ===========================================================
+# Procrustes with anisotropic per-axis scaling
+# ===========================================================
+@dataclass
+class ProcrustesFit:
+    R: np.ndarray        # rotation (3x3)
+    scales: np.ndarray   # per-axis scale after rotation (3,)
+    translation: np.ndarray  # (3,)
+    rotation_angle_z_deg: float
+    residuals_um: np.ndarray  # (N, 3) hcr_predicted - hcr_actual
+    rms_um: float
+    mean_um: float
+    max_um: float
+
+
+def fit_anisotropic_similarity(src: np.ndarray, dst: np.ndarray) -> ProcrustesFit:
+    """Fit dst ≈ R @ (scales * (src - mean_src)) + mean_dst + t
+
+    Approach: (1) compute the rigid rotation via Procrustes without scaling,
+    (2) rotate src, then fit a per-axis diagonal scale + translation to dst.
+    This captures the ~180-degree xy rotation plus anisotropic expansion.
+
+    Arrays are shape (N, 3) with columns (x, y, z).
+    """
+    if len(src) < 4:
+        raise ValueError("Need at least 4 landmark pairs")
+
+    src = np.asarray(src, dtype=float)
+    dst = np.asarray(dst, dtype=float)
+
+    src_mean = src.mean(axis=0)
+    dst_mean = dst.mean(axis=0)
+    src_c = src - src_mean
+    dst_c = dst - dst_mean
+
+    # Unscaled rotation via Procrustes (Kabsch)
+    H = src_c.T @ dst_c  # 3x3
+    U, _, Vt = np.linalg.svd(H)
+    D = np.eye(3)
+    if np.linalg.det(U) * np.linalg.det(Vt) < 0:
+        D[2, 2] = -1
+    R = U @ D @ Vt  # src -> dst rotation
+
+    # After rotation, fit per-axis scale + translation to match dst
+    src_rot = src_c @ R  # (N, 3)
+    # Per-axis: dst_c[:,i] = s_i * src_rot[:,i]  =>  s_i = dot / sum_sq
+    scales = np.zeros(3)
+    for i in range(3):
+        denom = (src_rot[:, i] ** 2).sum()
+        scales[i] = (src_rot[:, i] * dst_c[:, i]).sum() / denom if denom > 0 else 0.0
+
+    pred = src_rot * scales + dst_mean
+    residuals = pred - dst
+
+    # rotation angle around z (from R entries)
+    # R should be approximately diag(cos, cos, 1) with sin entries around z
+    angle_z = math.degrees(math.atan2(R[1, 0], R[0, 0]))
+
+    rms = float(np.sqrt((residuals ** 2).sum(axis=1).mean()))
+    mean = float(np.linalg.norm(residuals, axis=1).mean())
+    mx = float(np.linalg.norm(residuals, axis=1).max())
+
+    return ProcrustesFit(
+        R=R,
+        scales=scales,
+        translation=dst_mean - R @ (src_mean * scales),
+        rotation_angle_z_deg=angle_z,
+        residuals_um=residuals,
+        rms_um=rms,
+        mean_um=mean,
+        max_um=mx,
+    )
+
+
+def expansion_from_landmarks(s: SubjectData) -> ProcrustesFit | None:
+    cz_um, hcr_um = landmark_pairs_um(s, active_only=True)
+    if len(cz_um) < 4:
+        return None
+    return fit_anisotropic_similarity(cz_um, hcr_um)
+
+
+# ===========================================================
+# Pia surface estimation
+# ===========================================================
+def filter_in_tissue(points_um: np.ndarray, radius_um: float, min_neighbors: int):
+    """Remove isolated points (likely out-of-tissue false positives).
+
+    For each point, count neighbors within radius. Keep points with >= min_neighbors.
+    Returns a boolean mask over points_um.
+    """
+    if len(points_um) == 0:
+        return np.zeros(0, dtype=bool)
+    tree = cKDTree(points_um)
+    counts = tree.query_ball_point(points_um, r=radius_um, return_length=True)
+    return np.asarray(counts) >= min_neighbors
+
+
+def estimate_pia_surface(
+    points_um: np.ndarray,
+    xy_tile_um: float = 100.0,
+    top_frac: float = 0.05,
+    density_radius_um: float | None = None,
+    density_min_neighbors: int = 5,
+):
+    """Fit a tilted-plane pia surface z = a*x + b*y + c in physical um.
+
+    points_um: (N, 3) array with columns (x, y, z). Positive z is deep (away from pia).
+    1. Filter out-of-tissue points by local density.
+    2. In each (x, y) tile, take the top-surface cell (smallest z).
+    3. Fit plane to the tile-tops via robust IRLS (Huber).
+    Returns a dict with a, b, c, tilt_angle_deg, residual_std_um, n_tile_tops.
+    """
+    pts = np.asarray(points_um, dtype=float)
+    if len(pts) < 50:
+        return None
+
+    # Auto-scale the density radius from the median 1-NN distance if not specified.
+    if density_radius_um is None:
+        tree_tmp = cKDTree(pts)
+        d, _ = tree_tmp.query(pts, k=2)
+        median_nn = float(np.median(d[:, 1]))
+        density_radius_um = max(3.0 * median_nn, 30.0)
+
+    mask = filter_in_tissue(pts, density_radius_um, density_min_neighbors)
+    pts = pts[mask]
+    if len(pts) < 50:
+        return None
+
+    x, y, z = pts[:, 0], pts[:, 1], pts[:, 2]
+    # Bin by (x, y) tile
+    x_edges = np.arange(x.min(), x.max() + xy_tile_um, xy_tile_um)
+    y_edges = np.arange(y.min(), y.max() + xy_tile_um, xy_tile_um)
+
+    tile_pts = []
+    for ix in range(len(x_edges) - 1):
+        for iy in range(len(y_edges) - 1):
+            m = (
+                (x >= x_edges[ix])
+                & (x < x_edges[ix + 1])
+                & (y >= y_edges[iy])
+                & (y < y_edges[iy + 1])
+            )
+            if m.sum() < 3:
+                continue
+            zs = z[m]
+            # Use small quantile to get top surface (pia side)
+            z_top = np.quantile(zs, top_frac)
+            tile_pts.append(((x_edges[ix] + x_edges[ix + 1]) / 2,
+                              (y_edges[iy] + y_edges[iy + 1]) / 2,
+                              z_top))
+
+    tile_pts = np.array(tile_pts)
+    if len(tile_pts) < 10:
+        return None
+
+    # IRLS Huber
+    X = np.column_stack([tile_pts[:, 0], tile_pts[:, 1], np.ones(len(tile_pts))])
+    z_obs = tile_pts[:, 2]
+    beta = np.linalg.lstsq(X, z_obs, rcond=None)[0]
+    for _ in range(5):
+        resid = z_obs - X @ beta
+        sigma = 1.4826 * np.median(np.abs(resid - np.median(resid)))
+        if sigma < 1e-6:
+            break
+        w = np.where(np.abs(resid) <= 1.345 * sigma, 1.0, 1.345 * sigma / np.abs(resid))
+        W = np.diag(w)
+        beta = np.linalg.lstsq(W @ X, W @ z_obs, rcond=None)[0]
+
+    a, b, c = beta
+    resid = z_obs - X @ beta
+    tilt = math.degrees(math.atan(math.hypot(a, b)))
+    return {
+        "a": float(a),
+        "b": float(b),
+        "c": float(c),
+        "tilt_deg": float(tilt),
+        "residual_std_um": float(np.std(resid)),
+        "n_tile_tops": int(len(tile_pts)),
+        "n_points_used": int(len(pts)),
+    }
+
+
+def depth_from_surface(points_um: np.ndarray, surface: dict) -> np.ndarray:
+    a, b, c = surface["a"], surface["b"], surface["c"]
+    z_surf = a * points_um[:, 0] + b * points_um[:, 1] + c
+    return points_um[:, 2] - z_surf
+
+
+# ===========================================================
+# Depth density profiles
+# ===========================================================
+def depth_profile(
+    points_um: np.ndarray,
+    surface: dict,
+    bin_um: float = 20.0,
+    depth_range: tuple[float, float] = (-100.0, 1500.0),
+):
+    """Cells per unit depth (in 20-um bins). Returns (bin_centers, density)."""
+    if surface is None or len(points_um) == 0:
+        return np.array([]), np.array([])
+    depths = depth_from_surface(points_um, surface)
+    edges = np.arange(depth_range[0], depth_range[1] + bin_um, bin_um)
+    hist, _ = np.histogram(depths, bins=edges)
+    centers = (edges[:-1] + edges[1:]) / 2
+    return centers, hist.astype(float) / bin_um  # cells/um depth-bin
+
+
+# ===========================================================
+# Nearest-neighbor distance
+# ===========================================================
+def knn_distance_stats(points_um: np.ndarray, k: int = 5):
+    if len(points_um) <= k:
+        return None
+    tree = cKDTree(points_um)
+    d, _ = tree.query(points_um, k=k + 1)  # 0-th is self
+    d = d[:, 1:]  # drop self
+    return {
+        "mean_1nn": float(d[:, 0].mean()),
+        "median_1nn": float(np.median(d[:, 0])),
+        "mean_knn": float(d.mean()),
+    }
+
+
+# ===========================================================
+# Image slabs for pia visualization
+# ===========================================================
+def load_cz_y_slab(s: SubjectData, y_center_px: int | None = None, half_width_px: int = 20):
+    """Load a Y-centered slab from the CZ OME-TIFF and return a (Z, X) MIP image.
+
+    Returns (mip, y_center_px, z_per_um, x_per_um).
+    """
+    import tifffile
+
+    files = list(s.coreg_dir.glob("*reg-dim-swapped.ome.tif"))
+    if not files:
+        files = list(s.coreg_dir.glob("*zstack.tif"))
+    if not files:
+        raise FileNotFoundError(f"No CZ OME-TIFF in {s.coreg_dir}")
+    path = files[0]
+
+    with tifffile.TiffFile(path) as tf:
+        arr = tf.asarray()
+    # Squeeze leading singleton axes (e.g. (1,1,Z,Y,X) -> (Z,Y,X))
+    while arr.ndim > 3 and arr.shape[0] == 1:
+        arr = arr[0]
+
+    if arr.ndim != 3:
+        raise ValueError(f"Unexpected CZ TIF shape: {arr.shape}")
+
+    Z, Y, X = arr.shape
+    if y_center_px is None:
+        y_center_px = Y // 2
+    y0 = max(0, y_center_px - half_width_px)
+    y1 = min(Y, y_center_px + half_width_px)
+    mip = arr[:, y0:y1, :].max(axis=1)  # (Z, X)
+    return mip, y_center_px, s.cz_z_um, s.cz_xy_um
+
+
+def load_hcr_y_slab(
+    s: SubjectData,
+    channel: str = "488",
+    y_center_um: float | None = None,
+    half_width_um: float = 20.0,
+    level: int = 2,
+):
+    """Load a Y-centered slab from the HCR zarr and return a (Z, X) MIP image.
+
+    Level defaults to 2 (the same resolution as the cell_centroids.npy).
+    Returns (mip, y_center_um, z_per_um, x_per_um).
+    """
+    import zarr
+
+    zarr_path = s.hcr_dir / "image_tile_fusing" / "fused" / f"channel_{channel}.zarr"
+    if not zarr_path.exists():
+        raise FileNotFoundError(f"No HCR fused zarr at {zarr_path}")
+    z = zarr.open(str(zarr_path), mode="r")
+    arr = z[str(level)]  # shape (1, 1, Z, Y, X)
+    _, _, Z, Y, X = arr.shape
+
+    # Resolution at the requested level: pyramid doubles the step at each level above 0.
+    # cell_centroids.npy is at level 2, where XY step in um = dim.x * 4e6 => s.hcr_xy_um.
+    # For a different level n, XY step = s.hcr_xy_um * 2**(n - 2).
+    xy_um = s.hcr_xy_um * (2 ** (level - 2))
+    z_um = s.hcr_z_um  # Z is not downsampled across the used levels
+
+    if y_center_um is None:
+        y_center_um = (Y * xy_um) / 2
+    y_center_px = int(round(y_center_um / xy_um))
+    half_px = max(1, int(round(half_width_um / xy_um)))
+    y0 = max(0, y_center_px - half_px)
+    y1 = min(Y, y_center_px + half_px)
+    slab = np.asarray(arr[0, 0, :, y0:y1, :])
+    mip = slab.max(axis=1)
+    return mip, y_center_um, z_um, xy_um
+
+
+def plot_pia_overlay(
+    ax,
+    mip: np.ndarray,
+    z_um: float,
+    x_um: float,
+    surface: dict,
+    y_slab_um: float,
+    title: str = "",
+    cmap: str = "gray",
+    vmax_pct: float = 99.5,
+):
+    """Render a (Z, X) MIP with the fitted pia plane overlaid as a line.
+
+    surface: {'a', 'b', 'c'} for z_surface = a*x + b*y + c in um.
+    """
+    Zn, Xn = mip.shape
+    extent = (0, Xn * x_um, Zn * z_um, 0)  # origin top-left (z increases downward)
+
+    vmin = np.percentile(mip, 1)
+    vmax = np.percentile(mip, vmax_pct)
+    ax.imshow(
+        mip,
+        extent=extent,
+        cmap=cmap,
+        vmin=vmin,
+        vmax=vmax,
+        aspect="auto",
+        interpolation="nearest",
+    )
+
+    # pia line in (x_um, z_um) space at the slab's y
+    xs = np.linspace(0, Xn * x_um, 200)
+    zs = surface["a"] * xs + surface["b"] * y_slab_um + surface["c"]
+    ax.plot(xs, zs, color="red", lw=1.5, label="fitted pia")
+
+    ax.set_xlabel("x (um)")
+    ax.set_ylabel("z (um)")
+    ax.set_title(title)
+    ax.legend(loc="lower right", fontsize=8)
+
+
+# ===========================================================
+# Full per-subject analysis
+# ===========================================================
+def analyze_subject(s: SubjectData) -> dict:
+    cz_um = cz_px_to_um(s.cz_centroids[["z_px", "y_px", "x_px"]].values, s)
+    hcr_um = hcr_px_to_um(s.hcr_centroids[["z_px", "y_px", "x_px"]].values, s)
+    # reorder to (x, y, z) for surface fitting (surface expects (x, y, z))
+    cz_xyz = cz_um[:, [2, 1, 0]]
+    hcr_xyz = hcr_um[:, [2, 1, 0]]
+
+    # HCR GFP+ subset in xyz physical coords
+    gfp_xyz = np.empty((0, 3))
+    if not s.hcr_gfp_df.empty and "hcr_id" in s.hcr_gfp_df.columns:
+        gfp_ids = set(s.hcr_gfp_df["hcr_id"].astype(int).tolist())
+        mask = s.hcr_centroids["hcr_id"].astype(int).isin(gfp_ids).values
+        gfp_xyz = hcr_xyz[mask]
+
+    cz_surface = estimate_pia_surface(cz_xyz)
+    hcr_surface = estimate_pia_surface(hcr_xyz)
+
+    procrustes = expansion_from_landmarks(s)
+
+    cz_nn = knn_distance_stats(cz_xyz)
+    hcr_nn = knn_distance_stats(hcr_xyz)
+    gfp_nn = knn_distance_stats(gfp_xyz) if len(gfp_xyz) > 10 else None
+
+    return {
+        "summary": summary_row(s),
+        "cz_surface": cz_surface,
+        "hcr_surface": hcr_surface,
+        "procrustes": procrustes,
+        "cz_nn": cz_nn,
+        "hcr_nn": hcr_nn,
+        "gfp_nn": gfp_nn,
+        "cz_xyz": cz_xyz,
+        "hcr_xyz": hcr_xyz,
+        "gfp_xyz": gfp_xyz,
+    }

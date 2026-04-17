@@ -1,0 +1,1014 @@
+"""Target-subject exploration for 790322.
+
+N11 (multi-channel image in ±150 um band around ROI-quadratic anchor)
+still leaves a gap at x~2000 um on 790322: the ROI quadratic anchor
+sits too high there and the ±150 um band cannot reach the real image
+boundary. Try several alternative initial surfaces / band geometries
+and compare them via:
+
+  1. y-slab overlay of every candidate surface on the multi-channel MIP
+  2. ROI depth-density profile per candidate
+  3. above_frac / onset_depth / axis spreads table
+
+Variants tested:
+  - existing: N6_quad, N11_band150
+  - new: N12 (asymmetric deep band), N13 (N4 image-plane anchor),
+         N14 (iterated band), N15 (image-first, wide search, ROI clamp)
+
+Run:
+  python 03_surface_790322_explore.py
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+
+sys.path.insert(0, str(Path(__file__).parent))
+from benchmark_analysis import (
+    depth_profile,
+    depth_from_surface,
+    estimate_pia_surface_from_image,
+    filter_in_tissue,
+    list_hcr_channels,
+    load_hcr_combined,
+    load_hcr_volume,
+    load_hcr_y_slab,
+)
+from benchmark_data_loader import hcr_px_to_um, load_subject
+
+import importlib.util as _iu
+_spec = _iu.spec_from_file_location(
+    "surface_iteration_v2",
+    Path(__file__).parent / "03_surface_iteration_v2.py",
+)
+_mod = _iu.module_from_spec(_spec)
+sys.modules["surface_iteration_v2"] = _mod
+_spec.loader.exec_module(_mod)
+_robust_quadratic_fit = _mod._robust_quadratic_fit
+roi_quadratic_ceiling = _mod.roi_quadratic_ceiling
+multi_channel_image_in_band = _mod.multi_channel_image_in_band
+image_with_roi_ceiling = _mod.image_with_roi_ceiling
+quality_metrics = _mod.quality_metrics
+
+OUT = Path("/root/capsule/code/sessions/03_surface_estimation_v2")
+FIG = OUT / "figures"
+FIG.mkdir(parents=True, exist_ok=True)
+
+SID = "790322"
+
+
+# ------------------------------------------------------------------
+# Core: per-column top-of-signal inside an arbitrary (low, high) band
+# ------------------------------------------------------------------
+def _per_column_top_in_band(
+    vols_sub, xy_um_sub, z_um, xx, yy,
+    z_low, z_high,
+    relative_margin, min_signal_abs_frac, min_thick_um,
+):
+    """Return per-column top-of-signal (Y, X) µm map, NaN where no signal.
+
+    `vols_sub` is a list of (Z, Ys, Xs) arrays (one per channel at the
+    same spatial downsampling). `z_low`, `z_high` are (Ys, Xs) arrays:
+    per-column search limits in µm.
+    """
+    Zs = vols_sub[0].shape[0]
+    z_axis = np.arange(Zs, dtype=np.float32) * z_um
+    band_mask = (z_axis[:, None, None] >= z_low[None]) & \
+                (z_axis[:, None, None] <= z_high[None])
+    evidence = vols_sub[0].copy()
+    for v in vols_sub[1:]:
+        np.maximum(evidence, v, out=evidence)
+    in_band_ev = np.where(band_mask, evidence, np.nan).astype(np.float32)
+    with np.errstate(all="ignore"):
+        col_bg = np.nanpercentile(in_band_ev, 10, axis=0)
+        col_max = np.nanpercentile(in_band_ev, 99, axis=0)
+    dyn = col_max - col_bg
+    global_dyn = float(np.nanpercentile(dyn, 95))
+    abs_floor = float(min_signal_abs_frac * global_dyn)
+    col_valid = np.isfinite(dyn) & (dyn >= abs_floor)
+    thr = col_bg + relative_margin * dyn
+    above = (evidence > thr[None, :, :]) & band_mask & col_valid[None, :, :]
+    k = max(1, int(round(min_thick_um / z_um)))
+    if Zs < k + 1:
+        return None
+    cum = np.cumsum(above.astype(np.int32), axis=0)
+    win = cum[k - 1:].copy()
+    win[1:] -= cum[:-k]
+    is_start = win == k
+    has_any = is_start.any(axis=0)
+    if not has_any.any():
+        return None
+    first_z_idx = np.argmax(is_start, axis=0)
+    top_z = np.full_like(col_bg, np.nan)
+    top_z[has_any] = (first_z_idx[has_any] + (k - 1) // 2) * z_um
+    return top_z
+
+
+def _load_multichannel(s, level=4, xy_stride_um=10.0):
+    """Return (vols_sub list, xx, yy, xy_um_sub, z_um)."""
+    channels = list_hcr_channels(s)
+    vols = []
+    xy_um = z_um = None
+    for ch in channels:
+        try:
+            v, xy_um, z_um = load_hcr_volume(s, channel=ch, level=level)
+        except FileNotFoundError:
+            continue
+        vols.append(v.astype(np.float32, copy=False))
+    sx = max(1, int(round(xy_stride_um / xy_um)))
+    sy = max(1, int(round(xy_stride_um / xy_um)))
+    vols_sub = [v[:, ::sy, ::sx] for v in vols]
+    _, Ys, Xs = vols_sub[0].shape
+    xs_um = np.arange(Xs) * sx * xy_um
+    ys_um = np.arange(Ys) * sy * xy_um
+    xx, yy = np.meshgrid(xs_um, ys_um)
+    return vols_sub, xx, yy, sx * xy_um, z_um, channels
+
+
+def _clamp_to_roi_envelope(fit, hcr_xyz, safety_offset_um=3.0):
+    """Lift surface so no density-filtered 120 µm tile min-z sits above
+    it; subtract a safety offset."""
+    keep = filter_in_tissue(hcr_xyz, radius_um=30.0, min_neighbors=3)
+    pts = hcr_xyz[keep]
+    if len(pts) < 50:
+        return fit, 0.0
+    pxs, pys, pzs = pts[:, 0], pts[:, 1], pts[:, 2]
+    xb = (pxs // 120.0).astype(int); yb = (pys // 120.0).astype(int)
+    key = yb * 100000 + xb
+    df = pd.DataFrame({"k": key, "x": pxs, "y": pys, "z": pzs})
+    agg = df.groupby("k").agg(x=("x", "median"), y=("y", "median"),
+                              z=("z", lambda v: float(np.quantile(v, 0.02))),
+                              n=("z", "size"))
+    agg = agg[agg["n"] >= 5]
+    tx, ty, tz = agg["x"].values, agg["y"].values, agg["z"].values
+    plane_z = (fit["a"] * tx + fit["b"] * ty + fit["c"]
+               + fit.get("p", 0) * tx * tx + fit.get("q", 0) * tx * ty
+               + fit.get("r", 0) * ty * ty)
+    deficit = plane_z - tz
+    pos = deficit[deficit > 0]
+    lift = float(pos.max()) if len(pos) else 0.0
+    fit = dict(fit)
+    fit["c"] = float(fit["c"] - lift - safety_offset_um)
+    return fit, lift
+
+
+def _surf_z(s, x, y):
+    if s.get("type") == "grid":
+        g = s["grid"]; xs = s["xs_um"]; ys = s["ys_um"]
+        xf = np.asarray(x, dtype=np.float32)
+        yf = np.asarray(y, dtype=np.float32)
+        ix = np.clip(np.searchsorted(xs, xf) - 1, 0, len(xs) - 2)
+        iy = np.clip(np.searchsorted(ys, yf) - 1, 0, len(ys) - 2)
+        fx = np.clip((xf - xs[ix]) / (xs[ix + 1] - xs[ix]), 0.0, 1.0)
+        fy = np.clip((yf - ys[iy]) / (ys[iy + 1] - ys[iy]), 0.0, 1.0)
+        return ((1 - fx) * (1 - fy) * g[iy, ix]
+                + fx * (1 - fy) * g[iy, ix + 1]
+                + (1 - fx) * fy * g[iy + 1, ix]
+                + fx * fy * g[iy + 1, ix + 1])
+    return (s["a"] * x + s["b"] * y + s["c"]
+            + s.get("p", 0) * x * x + s.get("q", 0) * x * y
+            + s.get("r", 0) * y * y
+            + s.get("cx3", 0) * x * x * x
+            + s.get("cy3", 0) * y * y * y
+            + s.get("cx2y", 0) * x * x * y
+            + s.get("cxy2", 0) * x * y * y)
+
+
+def _robust_cubic_fit(xs, ys, zs, max_iter: int = 8):
+    """IRLS-Huber bicubic fit:
+    z = a*x + b*y + c + p*x^2 + q*x*y + r*y^2
+        + cx3*x^3 + cy3*y^3 + cx2y*x^2*y + cxy2*x*y^2
+    Coordinate-centered for conditioning; coefficients returned in the
+    original (x, y) frame — plus centered residual std for diagnostics.
+    """
+    import math
+    xs = np.asarray(xs, dtype=float)
+    ys = np.asarray(ys, dtype=float)
+    zs = np.asarray(zs, dtype=float)
+    x0 = float(xs.mean()); y0 = float(ys.mean())
+    u = xs - x0; v = ys - y0
+    X = np.column_stack([
+        u, v, u * u, u * v, v * v,
+        u**3, v**3, (u**2) * v, u * (v**2),
+        np.ones_like(u),
+    ])
+    beta = np.linalg.lstsq(X, zs, rcond=None)[0]
+    for _ in range(max_iter):
+        resid = zs - X @ beta
+        sigma = 1.4826 * np.median(np.abs(resid - np.median(resid)))
+        if sigma < 1e-6:
+            break
+        w = np.where(np.abs(resid) <= 1.345 * sigma, 1.0,
+                     1.345 * sigma / np.abs(resid))
+        sw = np.sqrt(w)
+        beta = np.linalg.lstsq(sw[:, None] * X, sw * zs, rcond=None)[0]
+    au, bv, p, q, r, cx3, cy3, cx2y, cxy2, cuv = beta
+    # Convert centered coeffs to absolute coordinates
+    # z(x, y) = sum coeffs in (x-x0), (y-y0). Rather than derive
+    # analytically, we store (x0, y0) and evaluate centered.
+    return {
+        # keep centered representation for evaluation
+        "cent_x0": x0, "cent_y0": y0,
+        "cent_a": float(au), "cent_b": float(bv),
+        "cent_p": float(p), "cent_q": float(q), "cent_r": float(r),
+        "cent_cx3": float(cx3), "cent_cy3": float(cy3),
+        "cent_cx2y": float(cx2y), "cent_cxy2": float(cxy2),
+        "cent_c": float(cuv),
+        "tilt_deg": float(math.degrees(math.atan(math.hypot(au, bv)))),
+        "residual_std_um": float(np.std(zs - X @ beta)),
+        # the single linear "a, b, c" are the tilt+intercept at the centroid
+        # under the centered representation, so _surf_z() cannot use them.
+        # Callers should use _surf_z_cubic() instead.
+    }
+
+
+def _surf_z_cubic(s, x, y):
+    """Evaluate a cubic fit produced by `_robust_cubic_fit`."""
+    u = x - s["cent_x0"]; v = y - s["cent_y0"]
+    return (s["cent_a"] * u + s["cent_b"] * v + s["cent_c"]
+            + s["cent_p"] * u * u + s["cent_q"] * u * v
+            + s["cent_r"] * v * v
+            + s["cent_cx3"] * u ** 3 + s["cent_cy3"] * v ** 3
+            + s["cent_cx2y"] * (u ** 2) * v
+            + s["cent_cxy2"] * u * (v ** 2))
+
+
+# ------------------------------------------------------------------
+# Variants
+# ------------------------------------------------------------------
+def v_n6(s, hcr_xyz):
+    """ROI-quadratic ceiling (N6)."""
+    return roi_quadratic_ceiling(
+        hcr_xyz, safety_offset_um=3.0, max_residual_quantile=1.0)
+
+
+def v_n11(s, hcr_xyz):
+    """Existing N11: anchor = N6 quadratic, ±150 µm band."""
+    return multi_channel_image_in_band(
+        s, band_um=150.0, relative_margin=0.25)
+
+
+def v_n12_asym(s, hcr_xyz, below_um=300.0, above_um=50.0,
+               relative_margin=0.25, min_signal_abs_frac=0.20,
+               min_thick_um=10.0):
+    """N12: asymmetric deep band around N6 anchor.
+
+    Search from (anchor - below_um) to (anchor + above_um). Lets the
+    image find the real boundary when the anchor is too shallow.
+    """
+    anchor = roi_quadratic_ceiling(
+        hcr_xyz, safety_offset_um=3.0, max_residual_quantile=1.0)
+    if anchor is None:
+        return None
+    vols_sub, xx, yy, xy_um_sub, z_um, channels = _load_multichannel(s)
+    anchor_zz = _surf_z(anchor, xx, yy)
+    z_low = anchor_zz - below_um
+    z_high = anchor_zz + above_um
+    top_z = _per_column_top_in_band(
+        vols_sub, xy_um_sub, z_um, xx, yy, z_low, z_high,
+        relative_margin, min_signal_abs_frac, min_thick_um)
+    if top_z is None:
+        return None
+    mask = np.isfinite(top_z)
+    if mask.sum() < 50:
+        return None
+    fit = _robust_quadratic_fit(
+        xx[mask].ravel(), yy[mask].ravel(), top_z[mask].ravel())
+    fit, lift = _clamp_to_roi_envelope(fit, hcr_xyz)
+    fit["method"] = f"N12_asym_b{int(below_um)}_a{int(above_um)}"
+    fit["clamp_lift_um"] = lift
+    return fit
+
+
+def v_n13_n4_anchor(s, hcr_xyz, vol, xy_um, z_um,
+                    band_um=200.0, relative_margin=0.25,
+                    min_signal_abs_frac=0.20, min_thick_um=10.0):
+    """N13: N4 image-plane as anchor, wider band, multi-channel search.
+
+    The N4 flat image plane tracks the image boundary globally (no ROI
+    min-z dependence), so using it as the anchor lets the band reach
+    the real boundary even in the 790322 dip.
+    """
+    anchor = image_with_roi_ceiling(
+        hcr_xyz, vol, z_um, xy_um,
+        margin=0.005, safety_offset_um=0.0)
+    if anchor is None:
+        return None
+    vols_sub, xx, yy, xy_um_sub, z_um2, channels = _load_multichannel(s)
+    anchor_zz = _surf_z(anchor, xx, yy)
+    z_low = anchor_zz - band_um
+    z_high = anchor_zz + band_um
+    top_z = _per_column_top_in_band(
+        vols_sub, xy_um_sub, z_um2, xx, yy, z_low, z_high,
+        relative_margin, min_signal_abs_frac, min_thick_um)
+    if top_z is None:
+        return None
+    mask = np.isfinite(top_z)
+    if mask.sum() < 50:
+        return None
+    fit = _robust_quadratic_fit(
+        xx[mask].ravel(), yy[mask].ravel(), top_z[mask].ravel())
+    fit, lift = _clamp_to_roi_envelope(fit, hcr_xyz)
+    fit["method"] = f"N13_n4anchor_band{int(band_um)}"
+    fit["clamp_lift_um"] = lift
+    return fit
+
+
+def v_n14_iterative(s, hcr_xyz, band1=150.0, band2=80.0,
+                    relative_margin=0.25, min_signal_abs_frac=0.20,
+                    min_thick_um=10.0):
+    """N14: iterate N11 — first pass with ±band1 around N6 anchor, then
+    second pass with tighter ±band2 around the first fit. Final ROI
+    clamp."""
+    anchor = roi_quadratic_ceiling(
+        hcr_xyz, safety_offset_um=3.0, max_residual_quantile=1.0)
+    if anchor is None:
+        return None
+    vols_sub, xx, yy, xy_um_sub, z_um, channels = _load_multichannel(s)
+    # First pass
+    anchor_zz = _surf_z(anchor, xx, yy)
+    z_low = anchor_zz - band1; z_high = anchor_zz + band1
+    top_z = _per_column_top_in_band(
+        vols_sub, xy_um_sub, z_um, xx, yy, z_low, z_high,
+        relative_margin, min_signal_abs_frac, min_thick_um)
+    if top_z is None:
+        return None
+    mask = np.isfinite(top_z)
+    fit1 = _robust_quadratic_fit(
+        xx[mask].ravel(), yy[mask].ravel(), top_z[mask].ravel())
+    # Second pass: re-anchor to fit1, tighter band
+    anchor_zz2 = _surf_z(fit1, xx, yy)
+    z_low2 = anchor_zz2 - band2; z_high2 = anchor_zz2 + band2
+    top_z2 = _per_column_top_in_band(
+        vols_sub, xy_um_sub, z_um, xx, yy, z_low2, z_high2,
+        relative_margin, min_signal_abs_frac, min_thick_um)
+    if top_z2 is None:
+        return fit1
+    mask2 = np.isfinite(top_z2)
+    fit2 = _robust_quadratic_fit(
+        xx[mask2].ravel(), yy[mask2].ravel(), top_z2[mask2].ravel())
+    fit2, lift = _clamp_to_roi_envelope(fit2, hcr_xyz)
+    fit2["method"] = f"N14_iter_b{int(band1)}_{int(band2)}"
+    fit2["clamp_lift_um"] = lift
+    return fit2
+
+
+def v_n14_n4_iter(s, hcr_xyz, vol, xy_um, z_um,
+                  band1=200.0, band2=80.0,
+                  relative_margin=0.25, min_signal_abs_frac=0.20,
+                  min_thick_um=10.0):
+    """N14 variant: first anchor is N4 image plane instead of N6 quad.
+
+    N4's flat image plane hugs the real image boundary globally (no ROI
+    tile dependence), so the first pass's search band centers close to
+    the real boundary even in the 790322 dip.
+    """
+    anchor = image_with_roi_ceiling(
+        hcr_xyz, vol, z_um, xy_um,
+        margin=0.005, safety_offset_um=0.0)
+    if anchor is None:
+        return None
+    vols_sub, xx, yy, xy_um_sub, z_um2, channels = _load_multichannel(s)
+    anchor_zz = _surf_z(anchor, xx, yy)
+    z_low = anchor_zz - band1; z_high = anchor_zz + band1
+    top_z = _per_column_top_in_band(
+        vols_sub, xy_um_sub, z_um2, xx, yy, z_low, z_high,
+        relative_margin, min_signal_abs_frac, min_thick_um)
+    if top_z is None:
+        return None
+    mask = np.isfinite(top_z)
+    fit1 = _robust_quadratic_fit(
+        xx[mask].ravel(), yy[mask].ravel(), top_z[mask].ravel())
+    anchor_zz2 = _surf_z(fit1, xx, yy)
+    z_low2 = anchor_zz2 - band2; z_high2 = anchor_zz2 + band2
+    top_z2 = _per_column_top_in_band(
+        vols_sub, xy_um_sub, z_um2, xx, yy, z_low2, z_high2,
+        relative_margin, min_signal_abs_frac, min_thick_um)
+    if top_z2 is None:
+        return fit1
+    mask2 = np.isfinite(top_z2)
+    fit2 = _robust_quadratic_fit(
+        xx[mask2].ravel(), yy[mask2].ravel(), top_z2[mask2].ravel())
+    fit2, lift = _clamp_to_roi_envelope(fit2, hcr_xyz)
+    fit2["method"] = f"N14_n4iter_b{int(band1)}_{int(band2)}"
+    fit2["clamp_lift_um"] = lift
+    return fit2
+
+
+def v_n16_n4_plus_imgfirst(s, hcr_xyz, vol, xy_um, z_um,
+                           relative_margin=0.25,
+                           min_signal_abs_frac=0.20,
+                           min_thick_um=10.0,
+                           max_z_above_anchor=50.0,
+                           max_z_below_anchor=500.0):
+    """N16: image-first, but z-search is limited to a generous window
+    around the N4 image plane to reject obvious out-of-tissue junk.
+
+    Search range per column: [N4_z - max_z_above_anchor, N4_z + max_z_below_anchor].
+    """
+    anchor = image_with_roi_ceiling(
+        hcr_xyz, vol, z_um, xy_um,
+        margin=0.005, safety_offset_um=0.0)
+    if anchor is None:
+        return None
+    vols_sub, xx, yy, xy_um_sub, z_um2, channels = _load_multichannel(s)
+    anchor_zz = _surf_z(anchor, xx, yy)
+    z_low = anchor_zz - max_z_above_anchor
+    z_high = anchor_zz + max_z_below_anchor
+    top_z = _per_column_top_in_band(
+        vols_sub, xy_um_sub, z_um2, xx, yy, z_low, z_high,
+        relative_margin, min_signal_abs_frac, min_thick_um)
+    if top_z is None:
+        return None
+    mask = np.isfinite(top_z)
+    if mask.sum() < 50:
+        return None
+    fit = _robust_quadratic_fit(
+        xx[mask].ravel(), yy[mask].ravel(), top_z[mask].ravel())
+    fit, lift = _clamp_to_roi_envelope(fit, hcr_xyz)
+    fit["method"] = "N16_n4_imgfirst_clamp"
+    fit["clamp_lift_um"] = lift
+    return fit
+
+
+def v_n18_quad_plus_grid_residual(
+    s, hcr_xyz, vol, xy_um, z_um_vol,
+    band_um=150.0,
+    residual_sigma_um=120.0,
+    relative_margin=0.25,
+    min_signal_abs_frac=0.20,
+    min_thick_um=10.0,
+    safety_offset_um=3.0,
+):
+    """N18: robust quadratic base fit + Gaussian-smoothed residual
+    correction, both computed from per-column image tops.
+
+    Handles global tilt/curvature via the quadratic (stable across all
+    subjects, including 782149's 12° tilt) AND localized deviations
+    via the smoothed residual (790322's x~2000 µm dip).
+    """
+    from scipy.ndimage import gaussian_filter
+    anchor = roi_quadratic_ceiling(
+        hcr_xyz, safety_offset_um=3.0, max_residual_quantile=1.0)
+    if anchor is None:
+        return None
+    vols_sub, xx, yy, xy_um_sub, z_um, channels = _load_multichannel(s)
+    anchor_zz = _surf_z(anchor, xx, yy)
+    z_low = anchor_zz - band_um; z_high = anchor_zz + band_um
+    top_z = _per_column_top_in_band(
+        vols_sub, xy_um_sub, z_um, xx, yy, z_low, z_high,
+        relative_margin, min_signal_abs_frac, min_thick_um)
+    if top_z is None:
+        return None
+    mask = np.isfinite(top_z)
+    if mask.sum() < 50:
+        return None
+    # Base quadratic fit through column tops
+    fit = _robust_quadratic_fit(
+        xx[mask].ravel(), yy[mask].ravel(), top_z[mask].ravel())
+    # Residual field
+    quad_zz = _surf_z(fit, xx, yy)
+    resid = top_z - quad_zz
+    # Weighted Gaussian smoothing, treating NaNs as zero-weight
+    w = mask.astype(np.float32)
+    r = np.where(mask, resid, 0.0).astype(np.float32)
+    sigma_pix = float(residual_sigma_um / xy_um_sub)
+    num = gaussian_filter(r * w, sigma=sigma_pix)
+    den = gaussian_filter(w, sigma=sigma_pix)
+    resid_smooth = np.where(den > 1e-6, num / np.clip(den, 1e-6, None), 0.0)
+    # Final surface grid
+    surf_grid = quad_zz + resid_smooth
+    # ROI-envelope clamp
+    keep = filter_in_tissue(hcr_xyz, radius_um=30.0, min_neighbors=3)
+    pts = hcr_xyz[keep]
+    clamp_lift = 0.0
+    if len(pts) >= 50:
+        pxs, pys, pzs = pts[:, 0], pts[:, 1], pts[:, 2]
+        xb = (pxs // 120.0).astype(int); yb = (pys // 120.0).astype(int)
+        key = yb * 100000 + xb
+        df = pd.DataFrame({"k": key, "x": pxs, "y": pys, "z": pzs})
+        agg = df.groupby("k").agg(x=("x", "median"), y=("y", "median"),
+                                  z=("z", lambda v: float(np.quantile(v, 0.02))),
+                                  n=("z", "size"))
+        agg = agg[agg["n"] >= 5]
+        tx, ty, tz_roi = agg["x"].values, agg["y"].values, agg["z"].values
+        xs_row = xx[0, :]; ys_col = yy[:, 0]
+        ix = np.clip(np.searchsorted(xs_row, tx) - 1, 0, len(xs_row) - 2)
+        iy = np.clip(np.searchsorted(ys_col, ty) - 1, 0, len(ys_col) - 2)
+        fx = (tx - xs_row[ix]) / (xs_row[ix + 1] - xs_row[ix])
+        fy = (ty - ys_col[iy]) / (ys_col[iy + 1] - ys_col[iy])
+        g = surf_grid
+        z_at_tile = (
+            (1 - fx) * (1 - fy) * g[iy, ix]
+            + fx * (1 - fy) * g[iy, ix + 1]
+            + (1 - fx) * fy * g[iy + 1, ix]
+            + fx * fy * g[iy + 1, ix + 1]
+        )
+        deficit = z_at_tile - tz_roi
+        pos = deficit[deficit > 0]
+        clamp_lift = float(pos.max()) if len(pos) else 0.0
+    surf_grid = surf_grid - clamp_lift - safety_offset_um
+    return {
+        "type": "grid",
+        "grid": surf_grid.astype(np.float32),
+        "xs_um": xx[0, :].astype(np.float32),
+        "ys_um": yy[:, 0].astype(np.float32),
+        "c": float(surf_grid.mean()),
+        "tilt_deg": float(fit["tilt_deg"]),
+        "method": f"N18_quad_plus_resid_sig{int(residual_sigma_um)}",
+        "clamp_lift_um": clamp_lift,
+        "safety_offset_um": safety_offset_um,
+        "quad_fit": fit,
+        "residual_rms_um": float(np.sqrt(np.mean(resid_smooth ** 2))),
+    }
+
+
+def v_n19_selective_residual(
+    s, hcr_xyz, vol, xy_um, z_um_vol,
+    band_below_um=250.0, band_above_um=100.0,
+    residual_sigma_um=120.0,
+    resid_mag_threshold_um=20.0,
+    resid_positive_only=True,
+    relative_margin=0.25,
+    min_signal_abs_frac=0.20,
+    min_thick_um=10.0,
+    safety_offset_um=3.0,
+    anchor_source="n6",
+):
+    """N19: quadratic base + SELECTIVE, confidence-weighted residual.
+
+    Design motivation:
+      - N11 (quadratic) misses 790322's x~2000 µm dip: the dip is a
+        localized ~80 µm deviation that a global quadratic can't fit.
+      - N17/N18 (always-on residual correction) fix 790322 but slightly
+        shift the surface inside the tissue on 782149 (and 788406)
+        because Gaussian smoothing averages in noisy-deep image tops.
+
+    N19's compromise:
+      1. Search a DEEP ASYMMETRIC band (-250, +100) around N6 anchor so
+         the 790322 dip actually reaches the real boundary (300 µm below
+         the global quad was the only setup that caught it in the
+         diagnostic).
+      2. Fit a robust quadratic to the column tops (base).
+      3. Compute residuals = top_z - quad_z.
+      4. Weight columns by dynamic range (confidence) before smoothing.
+      5. Suppress residuals with |magnitude| below `resid_mag_threshold`
+         so noise stays flat (→ falls back to the quadratic on
+         well-behaved subjects).
+      6. Optionally only accept POSITIVE residuals (i.e. surface
+         deeper than quadratic) — this captures dips without allowing
+         noise to lift the surface above the robust quadratic.
+      7. Final ROI-envelope clamp.
+    """
+    from scipy.ndimage import gaussian_filter
+    if anchor_source == "n4":
+        anchor = image_with_roi_ceiling(
+            hcr_xyz, vol, z_um_vol, xy_um,
+            margin=0.005, safety_offset_um=0.0)
+    else:
+        anchor = roi_quadratic_ceiling(
+            hcr_xyz, safety_offset_um=3.0, max_residual_quantile=1.0)
+    if anchor is None:
+        return None
+    vols_sub, xx, yy, xy_um_sub, z_um, channels = _load_multichannel(s)
+    anchor_zz = _surf_z(anchor, xx, yy)
+    z_low = anchor_zz - band_below_um
+    z_high = anchor_zz + band_above_um
+
+    # Recompute per-column tops AND dynamic-range confidence
+    Zs = vols_sub[0].shape[0]
+    z_axis = np.arange(Zs, dtype=np.float32) * z_um
+    band_mask = (z_axis[:, None, None] >= z_low[None]) & \
+                (z_axis[:, None, None] <= z_high[None])
+    evidence = vols_sub[0].copy()
+    for v in vols_sub[1:]:
+        np.maximum(evidence, v, out=evidence)
+    in_band_ev = np.where(band_mask, evidence, np.nan).astype(np.float32)
+    with np.errstate(all="ignore"):
+        col_bg = np.nanpercentile(in_band_ev, 10, axis=0)
+        col_max = np.nanpercentile(in_band_ev, 99, axis=0)
+    dyn = col_max - col_bg
+    global_dyn = float(np.nanpercentile(dyn, 95))
+    abs_floor = float(min_signal_abs_frac * global_dyn)
+    col_valid = np.isfinite(dyn) & (dyn >= abs_floor)
+    thr = col_bg + relative_margin * dyn
+    above = (evidence > thr[None, :, :]) & band_mask & col_valid[None, :, :]
+    k = max(1, int(round(min_thick_um / z_um)))
+    cum = np.cumsum(above.astype(np.int32), axis=0)
+    win = cum[k - 1:].copy()
+    win[1:] -= cum[:-k]
+    is_start = win == k
+    has_any = is_start.any(axis=0)
+    first_z_idx = np.argmax(is_start, axis=0)
+    top_z = np.full_like(col_bg, np.nan)
+    top_z[has_any] = (first_z_idx[has_any] + (k - 1) // 2) * z_um
+    mask = np.isfinite(top_z)
+    if mask.sum() < 50:
+        return None
+
+    # Robust quadratic base
+    fit = _robust_quadratic_fit(
+        xx[mask].ravel(), yy[mask].ravel(), top_z[mask].ravel())
+    quad_zz = _surf_z(fit, xx, yy)
+    resid = top_z - quad_zz
+
+    # Confidence weights: normalized dynamic range, clipped
+    conf = np.where(mask, np.clip(dyn / max(global_dyn, 1e-6), 0.0, 1.0), 0.0)
+    # Weighted smoothing of residuals (confidence-weighted)
+    r = np.where(mask, resid, 0.0).astype(np.float32)
+    w = conf.astype(np.float32)
+    sigma_pix = float(residual_sigma_um / xy_um_sub)
+    num = gaussian_filter(r * w, sigma=sigma_pix)
+    den = gaussian_filter(w, sigma=sigma_pix)
+    resid_smooth = np.where(den > 1e-3, num / np.clip(den, 1e-3, None), 0.0)
+
+    # Suppress small residuals (below threshold) — HARD gate: keep full
+    # residual where |r| > threshold, else zero. Soft thresholding shaved
+    # the true correction at the 790322 dip (peak ~80 µm became 65).
+    thr_um = float(resid_mag_threshold_um)
+    gate = np.abs(resid_smooth) > thr_um
+    resid_gated = np.where(gate, resid_smooth, 0.0)
+    if resid_positive_only:
+        resid_gated = np.maximum(resid_gated, 0.0)
+
+    surf_grid = quad_zz + resid_gated
+
+    # ROI-envelope clamp
+    keep = filter_in_tissue(hcr_xyz, radius_um=30.0, min_neighbors=3)
+    pts = hcr_xyz[keep]
+    clamp_lift = 0.0
+    if len(pts) >= 50:
+        pxs, pys, pzs = pts[:, 0], pts[:, 1], pts[:, 2]
+        xb = (pxs // 120.0).astype(int); yb = (pys // 120.0).astype(int)
+        key = yb * 100000 + xb
+        df = pd.DataFrame({"k": key, "x": pxs, "y": pys, "z": pzs})
+        agg = df.groupby("k").agg(x=("x", "median"), y=("y", "median"),
+                                  z=("z", lambda v: float(np.quantile(v, 0.02))),
+                                  n=("z", "size"))
+        agg = agg[agg["n"] >= 5]
+        tx, ty, tz_roi = agg["x"].values, agg["y"].values, agg["z"].values
+        xs_row = xx[0, :]; ys_col = yy[:, 0]
+        ix = np.clip(np.searchsorted(xs_row, tx) - 1, 0, len(xs_row) - 2)
+        iy = np.clip(np.searchsorted(ys_col, ty) - 1, 0, len(ys_col) - 2)
+        fx = (tx - xs_row[ix]) / (xs_row[ix + 1] - xs_row[ix])
+        fy = (ty - ys_col[iy]) / (ys_col[iy + 1] - ys_col[iy])
+        g = surf_grid
+        z_at_tile = (
+            (1 - fx) * (1 - fy) * g[iy, ix]
+            + fx * (1 - fy) * g[iy, ix + 1]
+            + (1 - fx) * fy * g[iy + 1, ix]
+            + fx * fy * g[iy + 1, ix + 1]
+        )
+        deficit = z_at_tile - tz_roi
+        pos = deficit[deficit > 0]
+        clamp_lift = float(pos.max()) if len(pos) else 0.0
+    surf_grid = surf_grid - clamp_lift - safety_offset_um
+
+    return {
+        "type": "grid",
+        "grid": surf_grid.astype(np.float32),
+        "xs_um": xx[0, :].astype(np.float32),
+        "ys_um": yy[:, 0].astype(np.float32),
+        "c": float(surf_grid.mean()),
+        "tilt_deg": float(fit["tilt_deg"]),
+        "method": (f"N19_sel_b{int(band_below_um)}_{int(band_above_um)}"
+                   f"_sig{int(residual_sigma_um)}"
+                   f"_thr{int(resid_mag_threshold_um)}"
+                   f"{'_pos' if resid_positive_only else ''}"),
+        "clamp_lift_um": clamp_lift,
+        "safety_offset_um": safety_offset_um,
+        "quad_fit": fit,
+        "resid_gated_max": float(np.nanmax(np.abs(resid_gated))),
+    }
+
+
+def v_n17_grid_smooth(s, hcr_xyz, vol, xy_um, z_um_vol,
+                      band1_below=150.0, band1_above=150.0,
+                      smooth_sigma_um=100.0,
+                      relative_margin=0.25,
+                      min_signal_abs_frac=0.20, min_thick_um=10.0,
+                      anchor_source="n4",
+                      safety_offset_um=3.0):
+    """N17: non-parametric surface — Gaussian-smoothed per-column
+    top-of-signal grid.
+
+    Pipeline:
+      1. Build anchor (N4 image plane or N6 quadratic — configurable).
+      2. Per-column search in (anchor - below, anchor + above) for
+         top-of-signal.
+      3. Fill NaN columns by the median of valid columns (very coarse —
+         only used where the image has truly no signal).
+      4. Gaussian-smooth the resulting (Y, X) µm surface grid with
+         `smooth_sigma_um`.
+      5. ROI-envelope ceiling clamp against 120-µm-tile ROI min-z.
+      6. Return a grid-based surface object: {type: "grid", grid, xs, ys}.
+    """
+    from scipy.ndimage import gaussian_filter
+    if anchor_source == "n4":
+        anchor = image_with_roi_ceiling(
+            hcr_xyz, vol, z_um_vol, xy_um,
+            margin=0.005, safety_offset_um=0.0)
+    else:
+        anchor = roi_quadratic_ceiling(
+            hcr_xyz, safety_offset_um=3.0, max_residual_quantile=1.0)
+    if anchor is None:
+        return None
+    vols_sub, xx, yy, xy_um_sub, z_um, channels = _load_multichannel(s)
+    anchor_zz = _surf_z(anchor, xx, yy)
+    z_low = anchor_zz - band1_below
+    z_high = anchor_zz + band1_above
+    top_z = _per_column_top_in_band(
+        vols_sub, xy_um_sub, z_um, xx, yy, z_low, z_high,
+        relative_margin, min_signal_abs_frac, min_thick_um)
+    if top_z is None:
+        return None
+    # Fill NaNs with the median of nearby valid columns via iterative
+    # local mean (cheap inpainting).
+    tz = top_z.copy()
+    valid = np.isfinite(tz)
+    if valid.sum() < 50:
+        return None
+    median_val = float(np.nanmedian(tz))
+    tz[~valid] = median_val
+    # Smooth
+    sigma_pix = float(smooth_sigma_um / xy_um_sub)
+    tz_smooth = gaussian_filter(tz.astype(np.float32), sigma=sigma_pix)
+    # Where we inpainted, also apply weighted smoothing against the
+    # valid mask to avoid introducing a constant-plateau bias.
+    w = valid.astype(np.float32)
+    num = gaussian_filter(tz * w, sigma=sigma_pix)
+    den = gaussian_filter(w, sigma=sigma_pix)
+    tz_smooth = np.where(den > 1e-6, num / np.clip(den, 1e-6, None),
+                         tz_smooth)
+
+    # ROI-envelope clamp on the grid
+    keep = filter_in_tissue(hcr_xyz, radius_um=30.0, min_neighbors=3)
+    pts = hcr_xyz[keep]
+    clamp_lift = 0.0
+    if len(pts) >= 50:
+        pxs, pys, pzs = pts[:, 0], pts[:, 1], pts[:, 2]
+        xb = (pxs // 120.0).astype(int); yb = (pys // 120.0).astype(int)
+        key = yb * 100000 + xb
+        df = pd.DataFrame({"k": key, "x": pxs, "y": pys, "z": pzs})
+        agg = df.groupby("k").agg(x=("x", "median"), y=("y", "median"),
+                                  z=("z", lambda v: float(np.quantile(v, 0.02))),
+                                  n=("z", "size"))
+        agg = agg[agg["n"] >= 5]
+        tx, ty, tz_roi = agg["x"].values, agg["y"].values, agg["z"].values
+        # Sample surface at tile centers (bilinear from grid)
+        xs_row = xx[0, :]; ys_col = yy[:, 0]
+        ix = np.clip(np.searchsorted(xs_row, tx) - 1, 0, len(xs_row) - 2)
+        iy = np.clip(np.searchsorted(ys_col, ty) - 1, 0, len(ys_col) - 2)
+        fx = (tx - xs_row[ix]) / (xs_row[ix + 1] - xs_row[ix])
+        fy = (ty - ys_col[iy]) / (ys_col[iy + 1] - ys_col[iy])
+        g = tz_smooth
+        z_at_tile = (
+            (1 - fx) * (1 - fy) * g[iy, ix]
+            + fx * (1 - fy) * g[iy, ix + 1]
+            + (1 - fx) * fy * g[iy + 1, ix]
+            + fx * fy * g[iy + 1, ix + 1]
+        )
+        deficit = z_at_tile - tz_roi
+        pos = deficit[deficit > 0]
+        clamp_lift = float(pos.max()) if len(pos) else 0.0
+    tz_smooth = tz_smooth - clamp_lift - safety_offset_um
+
+    surf = {
+        "type": "grid",
+        "grid": tz_smooth.astype(np.float32),
+        "xs_um": xx[0, :].astype(np.float32),
+        "ys_um": yy[:, 0].astype(np.float32),
+        "c": float(tz_smooth.mean()),
+        "tilt_deg": 0.0,
+        "method": f"N17_grid_sig{int(smooth_sigma_um)}_anc{anchor_source}",
+        "clamp_lift_um": clamp_lift,
+        "safety_offset_um": safety_offset_um,
+    }
+    return surf
+
+
+def _grid_surface_z(surf, x, y):
+    """Evaluate a grid surface at arbitrary (x, y) via bilinear interp."""
+    g = surf["grid"]; xs = surf["xs_um"]; ys = surf["ys_um"]
+    x = np.asarray(x, dtype=np.float32)
+    y = np.asarray(y, dtype=np.float32)
+    ix = np.clip(np.searchsorted(xs, x) - 1, 0, len(xs) - 2)
+    iy = np.clip(np.searchsorted(ys, y) - 1, 0, len(ys) - 2)
+    fx = np.clip((x - xs[ix]) / (xs[ix + 1] - xs[ix]), 0.0, 1.0)
+    fy = np.clip((y - ys[iy]) / (ys[iy + 1] - ys[iy]), 0.0, 1.0)
+    return ((1 - fx) * (1 - fy) * g[iy, ix]
+            + fx * (1 - fy) * g[iy, ix + 1]
+            + (1 - fx) * fy * g[iy + 1, ix]
+            + fx * fy * g[iy + 1, ix + 1])
+
+
+def v_n15_imgfirst(s, hcr_xyz, relative_margin=0.25,
+                   min_signal_abs_frac=0.20, min_thick_um=10.0,
+                   min_valid_z_um=0.0):
+    """N15: purely image-first — no ROI anchor, no band. Per-column
+    shallowest signal across the whole z range (clipped to column-wise
+    [min_valid_z_um, zmax]). Then robust quadratic, then ROI clamp.
+
+    Acts as a baseline: if multi-channel image evidence alone gives a
+    clean top-of-signal, we should not need the band trick at all.
+    """
+    vols_sub, xx, yy, xy_um_sub, z_um, channels = _load_multichannel(s)
+    Zs = vols_sub[0].shape[0]
+    z_low = np.full_like(xx, min_valid_z_um, dtype=np.float32)
+    z_high = np.full_like(xx, (Zs - 1) * z_um, dtype=np.float32)
+    top_z = _per_column_top_in_band(
+        vols_sub, xy_um_sub, z_um, xx, yy, z_low, z_high,
+        relative_margin, min_signal_abs_frac, min_thick_um)
+    if top_z is None:
+        return None
+    mask = np.isfinite(top_z)
+    if mask.sum() < 50:
+        return None
+    fit = _robust_quadratic_fit(
+        xx[mask].ravel(), yy[mask].ravel(), top_z[mask].ravel())
+    fit, lift = _clamp_to_roi_envelope(fit, hcr_xyz)
+    fit["method"] = "N15_imgfirst"
+    fit["clamp_lift_um"] = lift
+    return fit
+
+
+# ------------------------------------------------------------------
+# Driver
+# ------------------------------------------------------------------
+VARIANTS = [
+    ("N6_quad", v_n6),
+    ("N11_band150", v_n11),
+    ("N13_n4anchor_b150", lambda s, xyz, vol, xy, z:
+        v_n13_n4_anchor(s, xyz, vol, xy, z, band_um=150)),
+    ("N13_n4anchor_b200", lambda s, xyz, vol, xy, z:
+        v_n13_n4_anchor(s, xyz, vol, xy, z, band_um=200)),
+    ("N14_iter_150_80", lambda s, xyz, vol, xy, z:
+        v_n14_iterative(s, xyz, band1=150, band2=80)),
+    ("N14_iter_250_80", lambda s, xyz, vol, xy, z:
+        v_n14_iterative(s, xyz, band1=250, band2=80)),
+    ("N14_iter_n4_250_80", lambda s, xyz, vol, xy, z:
+        v_n14_n4_iter(s, xyz, vol, xy, z, band1=250, band2=80)),
+    ("N14_iter_n4_200_80", lambda s, xyz, vol, xy, z:
+        v_n14_n4_iter(s, xyz, vol, xy, z, band1=200, band2=80)),
+    ("N15_imgfirst", lambda s, xyz, vol, xy, z: v_n15_imgfirst(s, xyz)),
+    ("N15_imgfirst_m15", lambda s, xyz, vol, xy, z:
+        v_n15_imgfirst(s, xyz, relative_margin=0.15)),
+    ("N16_n4_imgfirst_clamp", lambda s, xyz, vol, xy, z:
+        v_n16_n4_plus_imgfirst(s, xyz, vol, xy, z)),
+    ("N17_grid_sig100_n4", lambda s, xyz, vol, xy, z:
+        v_n17_grid_smooth(s, xyz, vol, xy, z,
+                          smooth_sigma_um=100.0, anchor_source="n4")),
+    ("N17_grid_sig150_n4", lambda s, xyz, vol, xy, z:
+        v_n17_grid_smooth(s, xyz, vol, xy, z,
+                          smooth_sigma_um=150.0, anchor_source="n4")),
+    ("N17_grid_sig80_n4", lambda s, xyz, vol, xy, z:
+        v_n17_grid_smooth(s, xyz, vol, xy, z,
+                          smooth_sigma_um=80.0, anchor_source="n4")),
+    ("N17_grid_sig100_n6", lambda s, xyz, vol, xy, z:
+        v_n17_grid_smooth(s, xyz, vol, xy, z,
+                          smooth_sigma_um=100.0, anchor_source="n6")),
+]
+
+
+def main():
+    s = load_subject(SID)
+    hcr_um = hcr_px_to_um(
+        s.hcr_centroids[["z_px", "y_px", "x_px"]].values, s)
+    hcr_xyz = hcr_um[:, [2, 1, 0]]
+
+    # Load combined MIP/full-volume once for N13's N4-plane anchor
+    vol, xy_um, z_um, _ = load_hcr_combined(s, level=4)
+
+    results = {}
+    stats = []
+    for name, fn in VARIANTS:
+        print(f"\n--- {name} ---")
+        try:
+            if name in ("N6_quad",):
+                surf = v_n6(s, hcr_xyz)
+            elif name == "N11_band150":
+                surf = v_n11(s, hcr_xyz)
+            else:
+                surf = fn(s, hcr_xyz, vol, xy_um, z_um)
+        except Exception as e:
+            print(f"  FAILED: {e!r}")
+            surf = None
+        if surf is None:
+            print("  None")
+            continue
+        q = quality_metrics(hcr_xyz, surf)
+        print(f"  c={surf.get('c'):.1f}  tilt={surf.get('tilt_deg',0):.2f}  "
+              f"above%={q['above_frac']*100:.3f}  "
+              f"onset={q['onset_depth_um']}  "
+              f"x_spread={q['onset_x_spread']}  y_spread={q['onset_y_spread']}")
+        results[name] = surf
+        stats.append({
+            "method": name,
+            "c_um": surf.get("c"),
+            "tilt_deg": surf.get("tilt_deg"),
+            "clamp_lift_um": surf.get("clamp_lift_um"),
+            **q,
+        })
+
+    stats_df = pd.DataFrame(stats)
+    stats_df.to_csv(
+        OUT / f"explore_{SID}_stats.csv", index=False)
+    print(f"\nWrote {OUT / f'explore_{SID}_stats.csv'}")
+    print(stats_df[["method", "c_um", "tilt_deg", "above_frac",
+                    "onset_depth_um", "onset_x_spread",
+                    "onset_y_spread"]].to_string(index=False))
+
+    # -----------------------------
+    # Figure
+    # -----------------------------
+    y0 = float(np.median(hcr_xyz[:, 1]))
+    # Build multi-channel combined MIP at y0 slab
+    channels = list_hcr_channels(s)
+    half = 40.0
+    mips = []
+    xy_mip = z_mip = None
+    for ch in channels:
+        try:
+            mip, _, z_mip, xy_mip = load_hcr_y_slab(
+                s, channel=ch, y_center_um=y0, half_width_um=half, level=4)
+        except FileNotFoundError:
+            continue
+        m = mip.astype(np.float32)
+        lo, hi = np.percentile(m, [1, 99.5])
+        norm = np.clip((m - lo) / max(hi - lo, 1.0), 0.0, 1.0)
+        mips.append(norm)
+    max_mip = np.maximum.reduce(mips) if mips else None
+    extent = (0, max_mip.shape[1] * xy_mip, max_mip.shape[0] * z_mip, 0)
+
+    cmap = plt.get_cmap("tab10")
+    fig = plt.figure(figsize=(16, 11))
+    gs = fig.add_gridspec(3, 1, height_ratios=[3, 3, 2], hspace=0.3)
+
+    # Panel 1: y-slab MIP with all surfaces overlaid
+    ax1 = fig.add_subplot(gs[0])
+    ax1.imshow(max_mip, extent=extent, cmap="gray",
+               aspect="auto", interpolation="nearest")
+    xs_line = np.linspace(0, max_mip.shape[1] * xy_mip, 500)
+    ys_line = np.full_like(xs_line, y0)
+    for j, (name, _) in enumerate(VARIANTS):
+        surf = results.get(name)
+        if surf is None:
+            continue
+        z_line = _surf_z(surf, xs_line, ys_line)
+        ax1.plot(xs_line, z_line, lw=1.5, color=cmap(j % 10), label=name)
+    in_slab = np.abs(hcr_xyz[:, 1] - y0) <= half
+    ax1.scatter(hcr_xyz[in_slab, 0], hcr_xyz[in_slab, 2],
+                s=1.5, c="cyan", alpha=0.35)
+    ax1.set_title(f"{SID}  y={y0:.0f} µm slab  (multi-channel max MIP)")
+    ax1.set_xlabel("x (µm)"); ax1.set_ylabel("z (µm)")
+    ax1.legend(fontsize=7, ncol=3, loc="lower left")
+
+    # Panel 2: same MIP, surfaces only (so lines are visible without clutter)
+    ax2 = fig.add_subplot(gs[1])
+    ax2.imshow(max_mip, extent=extent, cmap="gray",
+               aspect="auto", interpolation="nearest", alpha=0.55)
+    for j, (name, _) in enumerate(VARIANTS):
+        surf = results.get(name)
+        if surf is None:
+            continue
+        z_line = _surf_z(surf, xs_line, ys_line)
+        ax2.plot(xs_line, z_line, lw=1.8, color=cmap(j % 10), label=name)
+    ax2.set_title("Surfaces only (same slab)")
+    ax2.set_xlabel("x (µm)"); ax2.set_ylabel("z (µm)")
+    ax2.legend(fontsize=7, ncol=3, loc="lower left")
+
+    # Panel 3: depth profiles
+    ax3 = fig.add_subplot(gs[2])
+    for j, (name, _) in enumerate(VARIANTS):
+        surf = results.get(name)
+        if surf is None:
+            continue
+        c, dens = depth_profile(
+            hcr_xyz, surf, bin_um=20, depth_range=(-200, 1200))
+        if dens.max() > 0:
+            ax3.plot(c, dens / dens.max(), lw=1.3,
+                     color=cmap(j % 10), label=name)
+    ax3.axvline(0, color="k", lw=0.6)
+    ax3.set_title("ROI density vs depth (normalized)")
+    ax3.set_xlabel("depth from pia (µm)")
+    ax3.set_ylabel("norm. density")
+    ax3.legend(fontsize=7, ncol=3, loc="upper right")
+
+    fig.suptitle(
+        f"Subject {SID} — surface-estimation variants (target: close gap at x~2000 µm)",
+        fontsize=12, y=0.995)
+    fig.tight_layout(rect=(0, 0, 1, 0.98))
+    out = FIG / f"explore_{SID}.png"
+    fig.savefig(out, dpi=120)
+    plt.close(fig)
+    print(f"Saved {out}")
+
+
+if __name__ == "__main__":
+    main()

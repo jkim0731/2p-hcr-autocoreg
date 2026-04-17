@@ -1,0 +1,287 @@
+# Data Description
+
+This document describes the two imaging modalities and the properties of the
+coregistration problem, with concrete numbers measured from the 6 benchmark
+subjects (755252, 767018, 767022, 782149, 788406, 790322). Numbers come from
+the analysis in `code/notebooks/01_benchmark_data_analysis.ipynb`
+and `code/sessions/01_analyze_benchmark_data/`.
+
+## Modalities
+
+### 1) 2p GCaMP (Source Sub-volume)
+- In-vivo 2-photon cortical z-stack (CZStack).
+- Image size: 512 × 512 × ~450 planes.
+- Field of view options (from `manual workflow/step_1_process_files.ipynb`):
+  400 um (XY resolution 0.78 um/pixel) or 700 um (1.37 um/pixel). All current
+  benchmark subjects use 400 um.
+- Z resolution: ~1 um/pixel.
+- Physical extent (measured from centroids, per subject): CZ cells span
+  ~392–398 um (x), ~392–396 um (y), ~404–424 um (z).
+- Content: ~785–1016 GCaMP+ inhibitory neurons, with 3D ROI segmentation masks.
+- From pia surface; the top ~50–110 um is blank buffer (no cells). Measured
+  pia-plane offsets per subject: 55–108 um.
+- Sub-volume embedded within the larger HCR volume.
+
+### 2) HCR Light-sheet (Target Volume)
+- Ex-vivo HCR light-sheet imaging, matched to the in-vivo 2p volume (but
+  larger).
+- Raw XY resolution ≈ 0.245 um/pixel; Z resolution ≈ 1 um/pixel.
+- **Cell centroids are stored at level-2 pyramid pixels** (`cell_centroids.npy`),
+  where XY has been downsampled 4× from raw. This is the coordinate system the
+  manual coregistration workflow operates in, using the conversion from
+  `manual workflow/step_2_automatic_mapping_for_qc.ipynb`:
+
+  ```
+  scale_x = dimensions.x[0] * 4e6   # ~0.98 um per level-2 pixel
+  scale_y = dimensions.y[0] * 4e6
+  scale_z = dimensions.z[0] * 1e6   # ~1 um per pixel
+  ```
+
+- Level-2 effective resolution: ~0.980–0.989 um/pixel XY, ~1 um/pixel Z
+  (slightly varies per subject; essentially isotropic in pixel space).
+- Physical extent (level-2 centroids): ~1.8–2.3 mm XY, 0.88–1.34 mm Z.
+  (The earlier "~1 × 1 × 0.5 mm" figure was based on raw-pixel volume, not the
+  centroid coordinate space. The coregistration works in the centroid space.)
+- Content per volume: ~39 k–127 k Rn28S-segmented cells (405 nm); 488-channel
+  GFP+ subset ≈ 25 k–78 k at a 5-spot-per-cell threshold (matching the 2p
+  GCaMP+ neurons).
+- 3D ROI segmentation from Rn28S; 488-channel GFP quantification comes from
+  one of three sources (same convention as
+  `manual workflow/step_2_automatic_mapping_for_qc.ipynb`):
+  1. pre-aggregated per-cell counts
+     `{coreg_dir}/*_spot_488_counts.csv` (782149, 788406, 790322).
+  2. raw per-spot CSV aggregated on the fly via `SEG_ID.value_counts()` and
+     joined with `cell_body_segmentation/metrics.pickle` for volume/density
+     (767018 and any subject that lacks the pre-aggregated file).
+  3. per-cell mean intensity `data/cell_data_mean_{subj}_R1.csv` channel 488
+     (755252, 767022). No spot count is available here, only a fluorescence
+     intensity.
+  A GFP+ cell is defined by `counts >= gfp_min_spots` (default 5) when a spot
+  count exists. The loader exposes `gfp_min_spots` as a parameter so the
+  threshold can be revised from later analyses. Intensity-only subjects use
+  the raw `mean` and must be thresholded by the caller.
+- Top part contains blank buffer. Thickness is unknown, varies across subjects
+  (measured pia offsets: 30–410 um), and is **slanted** (measured pia-plane
+  tilt: 1.2°–11.6°, with 782149 the most tilted).
+
+## Benchmark-subject statistics
+
+Measured per-subject values (all coordinates converted to physical microns).
+
+GFP+ counts below use the default 5-spot threshold where applicable.
+
+| subject | CZ cells | HCR total | HCR GFP+ (source, threshold)          | coreg matched | match rate |
+|---------|---------:|----------:|---------------------------------------|--------------:|-----------:|
+| 755252  | 835      | 84 233    | 77 785 (intensity_r1, no threshold)   | 639           | 76.5%      |
+| 767018  | 785      | 108 506   | 58 959 (aggregated_spots_csv, ≥5)     | 273           | 34.8%      |
+| 767022  | 926      | 76 336    | 72 213 (intensity_r1, no threshold)   | 793           | 85.6%      |
+| 782149  | 894      | 39 291    | 25 251 (spot_counts_csv, ≥5)          | 303           | 33.9%      |
+| 788406  | 932      | 127 275   | 69 680 (spot_counts_csv, ≥5)          | 787           | 84.4%      |
+| 790322  | 1016     | 106 379   | 72 532 (spot_counts_csv, ≥5)          | 778           | 76.6%      |
+
+Notes:
+- 767018 lacks the pre-aggregated `spot_488_counts.csv` but has the raw
+  `image_spot_detection/channel_488_spots/spots.csv` (4.86 M puncta). The
+  loader aggregates it per `SEG_ID` at load time. At a 5-spot threshold,
+  76 607 cells with ≥1 spot reduce to 58 959 GFP+.
+- For 755252/767022 the "GFP+" figure is every HCR cell with a non-zero 488
+  intensity measurement (no spot threshold available). A downstream intensity
+  threshold is required to obtain a comparable GFP+ count.
+
+## Key relationship between 2p and HCR
+
+- CZ sub-volume is localized inside HCR.
+- **XY rotation is ~180°** around the z-axis (measured: angles −177° to +180°,
+  always near 180° in absolute value; this is not a flip).
+- Both start from the cortex surface (pia at top, deep cortex at bottom).
+- ROI segmentations have errors in both modalities, so ROI-to-ROI is not 1:1.
+
+## Transform characterisation
+
+Measured from active landmarks (500–800 per subject, final QC'd iteration).
+An anisotropic similarity is fit (rotation + diagonal scale + translation).
+
+### Anisotropic expansion (CZ in-vivo → HCR ex-vivo, physical microns)
+
+| subject | XY expansion (mean) | Z expansion | XY:Z anisotropy |
+|---------|--------------------:|------------:|----------------:|
+| 755252  | 1.64×               | 2.13×       | 0.77            |
+| 767018  | 1.70×               | 3.58×       | 0.47            |
+| 767022  | 1.81×               | 2.49×       | 0.73            |
+| 782149  | 1.92×               | 2.93×       | 0.66            |
+| 788406  | 1.78×               | 2.82×       | 0.63            |
+| 790322  | 1.77×               | 3.04×       | 0.58            |
+
+Expansion is consistently anisotropic: XY expands ~1.6–1.9×, Z expands ~2.1–3.6×
+(Z is ~1.5× more expanded than XY). A single isotropic scale cannot align the
+modalities.
+
+### Residual deformation after anisotropic affine (landmark RMS, microns)
+
+| subject | residual RMS | residual max |
+|---------|-------------:|-------------:|
+| 755252  | 27           | 83           |
+| 767018  | 25           | 88           |
+| 767022  | 16           | 53           |
+| 782149  | 29           | 65           |
+| 788406  | 43           | 114          |
+| 790322  | 22           | 91           |
+
+After the affine fit, residual magnitudes reach ~25–45 um RMS, up to ~110 um
+max. This is the scale of the nonrigid deformation the algorithm must handle
+after affine alignment.
+
+### Anisotropy introduced by coordinate systems
+
+In addition to the physical expansion, the pixel coordinate systems themselves
+are slightly anisotropic: CZ is 0.78 um/px XY vs 1 um/px Z, and HCR is ~0.988
+um/px XY vs 1 um/px Z. When registering in pixel space, the RBF absorbs both
+the physical expansion and this pixel-space anisotropy.
+
+## Pia surface and depth-from-surface coordinate
+
+Two surface-fitting methods were evaluated:
+
+1. **Image-based (primary)**: for each (y, x) column of the 3D image, find
+   the first z at which intensity exceeds a per-column relative threshold
+   `col_bg + 0.05 × (col_top − col_bg)` (`col_bg = 10-pct`,
+   `col_top = 95-pct`). The low 5 % margin is essential — larger margins
+   (25 % initially tried) skip the sparse outer tissue layer and anchor the
+   plane in dense cortex. Require a ≥ 15 um contiguous above-threshold
+   segment and reject columns whose dynamic range is below a minimum.
+   IRLS-Huber plane fit with tile-median outlier rejection.
+
+   **For HCR** we use a **combined-channel volume**: load every available
+   channel (405, 488, 561 or 514, 594), normalise each by its own
+   background/percentile, and sum. Autofluorescence aligns across channels
+   exactly at the tissue–buffer transition, producing a crisper boundary
+   than any single channel. 488 alone is too sparse (~100–200 valid columns
+   vs ~30 000); 405 alone works but can overshoot into dense cortex.
+   Level 4 of the zarr pyramid (~4 um / voxel) is used.
+
+2. **Hybrid (default for HCR)**: Uses ROI segmentation data to constrain the
+   image-based search window. Steps:
+   (a) Density filter: keep only ROIs with ≥6 neighbors within 30 um (removes
+       isolated out-of-tissue false positives).
+   (b) Fit a plane to the minimum-z ROI per (x, y) tile (coarse prior
+       `z_prior(x, y)`).
+   (c) In the image-based search, restrict each column to z ∈
+       [z_prior − 100 um, z_prior + 100 um] before finding the first-crossing.
+   (d) Fit the final plane to the constrained first-crossing map.
+   This exploits the ROI-based coarse localization as a guard against the
+   image-based search getting confused by noise far from the tissue boundary.
+   **It is the current default in `analyze_subject()`.**
+
+3. **Centroid-based (fallback)**: tile-top quantile of ROI centroids + IRLS-
+   Huber plane fit. Kept for diagnostic comparison. It systematically
+   underestimates the pia by 50–200 um because the topmost segmented ROIs
+   already sit below the real tissue boundary.
+
+Fit quality is judged by the **fraction-above-pia**: share of cells whose
+centroid lies > 5 um above the estimated pia. It should be small (<~10 %);
+residual positives are out-of-tissue segmentation false positives or a thin
+layer of pial/meningeal cells.
+
+### Hybrid fits (current default for HCR)
+
+| subject | HCR c (um) | HCR tilt (°) | HCR rough (um) | HCR frac-above |
+|---------|-----------:|-------------:|---------------:|---------------:|
+| 755252  | 259        | 7.8          | 37             | 4.0 %          |
+| 767018  | 130        | 6.6          | 37             | 2.5 %          |
+| 767022  | 267        | 3.1          | 69             | 4.4 %          |
+| 782149  | 6          | 11.4         | 35             | 5.7 %          |
+| 788406  | 148        | 2.9          | 57             | 5.8 %          |
+| 790322  | 236        | 3.7          | 47             | 8.2 %          |
+
+Hybrid is better than image-only for 767018 (10.8% → 2.5%) and 782149
+(8.2% → 5.7%); slightly worse for 755252 and 790322 (< 2 pp regression).
+The constrained search eliminates the case where the image-based fitter
+wanders into a noise peak far above the tissue.
+
+### Image-based fits (for comparison)
+
+| subject | CZ c (um) | CZ tilt (°) | CZ rough (um) | CZ frac-above | HCR c (um) | HCR tilt (°) | HCR rough (um) | HCR frac-above |
+|---------|---------:|------------:|--------------:|--------------:|-----------:|-------------:|---------------:|---------------:|
+| 755252  | 57       | 3.1         | 12            | 1.0 %         | 202        | 9.3          | 39             | 2.1 %          |
+| 767018  | 46       | 1.9         | 4             | 0.0 %         | 238        | 6.5          | 106            | 10.8 %         |
+| 767022  | 52       | 0.7         | 7             | 0.3 %         | 290        | 3.9          | 87             | 4.6 %          |
+| 782149  | 51       | 2.0         | 10            | 3.8 %         | 18         | 11.1         | 45             | 8.2 %          |
+| 788406  | 57       | 2.9         | 4             | 0.0 %         | 135        | 2.8          | 93             | 5.2 %          |
+| 790322  | 50       | 1.0         | 3             | 0.0 %         | 169        | 3.2          | 89             | 6.6 %          |
+
+### Centroid-based fits (for comparison)
+
+| subject | HCR c (um) | HCR tilt (°) | HCR rough (um) | HCR frac-above |
+|---------|-----------:|-------------:|---------------:|---------------:|
+| 755252  | 390        | 6.9          | 96             | 9.0 %          |
+| 767018  | 315        | 5.0          | 124            | 11.2 %         |
+| 767022  | 409        | 3.0          | 84             | 8.4 %          |
+| 782149  | 30         | 11.6         | 94             | 15.7 %         |
+| 788406  | 248        | 1.2          | 98             | 7.6 %          |
+| 790322  | 256        | 4.0          | 85             | 8.5 %          |
+
+Observations:
+- CZ pia offset is tight (46–57 um), tilt ≤ 3°, roughness ≤ 12 um — a
+  plane fit on the 3D image is essentially perfect.
+- HCR pia offset varies widely (18–290 um, the "slanted" remark is
+  reflected in tilts up to ~11°). 782149 is the thinnest section — its
+  small offset (c=18) means the zarr starts essentially at the pia.
+- `fraction-above-pia` is 0–11 % for image-based fits, ~8–16 % for
+  centroid-based fits. The remaining positives are mostly out-of-tissue
+  segmentation false positives and a few meningeal cells just above the
+  cortex proper.
+- Depth-from-surface (`depth = z − z_surface(x, y)`) is a robust axial
+  coordinate that removes buffer-thickness and pia-tilt confounds.
+
+## Candidate features for automatic coregistration
+
+Measured on all 6 subjects:
+
+- **Cell nearest-neighbor distances** (mean 1-NN, um):
+  - CZ: 21.5–24.6; HCR all: 17.1–21.1; HCR GFP+: 18.6–25.0.
+  - Characterises packing density; informs k-NN radii for matching.
+- **Depth density profiles**: cells/20-um bin vs depth from pia, for CZ, HCR
+  total, and HCR GFP+. Cross-correlation (after Z-expansion rescaling) provides
+  a 1D axial localization cue. Peaks/troughs in density reflect cortical layer
+  structure and can be used as landmarks.
+- **Pia surface normal**: an initial-alignment cue independent of cell
+  positions; the CZ and HCR surface normals should be aligned after the ~180°
+  rotation.
+- **GFP+ local density peaks**: candidate constellations for the manual
+  workflow's "unique clustered pattern" step.
+- **ROI volumes / morphology** (from HCR `cell_body_segmentation/metrics.pickle`
+  and CZ segmentation masks): available for per-cell matching confidence.
+
+## Coordinate-system conventions (summary)
+
+| source | column order | units | notes |
+|--------|--------------|-------|-------|
+| CZ centroid CSV | `[czstack_cell_id, czstack_z, czstack_y, czstack_x]` | pixels (0.78 um XY, 1 um Z) | |
+| HCR centroid NPY | `[z, y, x, id]` | pixels (HCR level-2 ~0.988 um XY, 1 um Z) | |
+| Landmark CSV | `[ids, active, cz_x, cz_y, cz_z, hcr_x, hcr_y, hcr_z]` | pixels in each modality's native space | no header |
+| `spot_488_counts.csv` | `[hcr_id, counts, volume, global_bbox, density]` | 488 GFP feature | only for 782149/788406/790322 |
+| `cell_data_mean_*_R1.csv` | channel-indexed intensity means | raw intensity | GFP+ proxy for 755252/767022 |
+| Coreg table | `[czstack_id, hcr_id]` | — | final mapping |
+
+## Data-format variations across subjects
+
+- **767018**: uses an older processing pipeline. No `fused_ng.json` (use the
+  fallback resolution). HCR cell centroids are in
+  `767018_HCR_cell_centroids.csv` in addition to
+  `cell_body_segmentation/cell_centroids.npy`. GFP+ is derived by aggregating
+  the raw `image_spot_detection/channel_488_spots/spots.csv` on `SEG_ID` at
+  load time (no pre-aggregated `spot_488_counts.csv`).
+- **755252, 767022**: no `spot_488_counts.csv`. Use
+  `/root/capsule/data/cell_data_mean_{subject}_R1.csv` with channel 488 mean
+  intensity as GFP+ proxy. Thresholding is required to obtain a true GFP+ set.
+- **782149**: thinner HCR section (878 um Z vs 1160–1329 um for others);
+  strongest pia tilt (~12°); lowest match rate (~34%).
+- **Landmark file naming**: older subjects (755252, 767018, 767022) use a
+  `_reordered_qced` suffix; newer ones use `_qced`. Benchmark loaders must
+  handle both.
+
+## Testing priorities
+
+- Primary: **788406** and **790322** (highest-quality data, spot-based GFP+).
+- Secondary: **767018** (older pipeline) and **782149** (thin section, tilted
+  pia).

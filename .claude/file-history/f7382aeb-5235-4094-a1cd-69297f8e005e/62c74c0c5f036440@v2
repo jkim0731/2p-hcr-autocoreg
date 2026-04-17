@@ -1,0 +1,567 @@
+"""Subgoal 04/R1/01 — redefine the GFP+ threshold.
+
+For the four spot-data benchmark subjects (788406, 790322, 767018, 782149),
+load raw per-cell spot counts + density, run candidate thresholding
+strategies, and score each by the metrics in
+`sessions/04_R1_coarse_align/subgoal_01_gfp_threshold_plan.md`.
+
+Writes:
+    sessions/04_R1_coarse_align/subgoal_01_gfp_threshold_results.json
+    sessions/04_R1_coarse_align/subgoal_01_figures/*.png
+
+Per 06 Dev Protocol.md: ground-truth landmarks are used *only* to measure
+landmark_coverage post-hoc; no strategy uses them to derive a threshold.
+"""
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+from typing import Callable
+
+import numpy as np
+import pandas as pd
+
+_THIS_DIR = Path(__file__).resolve().parent
+if str(_THIS_DIR) not in sys.path:
+    sys.path.insert(0, str(_THIS_DIR))
+
+from benchmark_data_loader import (
+    _aggregate_spots_from_hcr,
+    _find_coreg_dir,
+    _find_hcr_dir,
+    hcr_px_to_um,
+    load_subject,
+)
+from benchmark_analysis import (
+    depth_from_surface,
+    estimate_pia_surface,
+)
+
+
+SPOT_SUBJECTS = ["788406", "790322", "767018", "782149"]
+OUT_DIR = _THIS_DIR.parent / "sessions" / "04_R1_coarse_align"
+FIG_DIR = OUT_DIR / "subgoal_01_figures"
+RESULT_JSON = OUT_DIR / "subgoal_01_gfp_threshold_results.json"
+
+
+# =====================================================================
+# Data loading
+# =====================================================================
+def load_raw_gfp_table(subject_id: str) -> pd.DataFrame:
+    """Load the un-thresholded spot-count table for a subject.
+
+    Returns a frame with [hcr_id, counts, volume, density] for every HCR
+    cell that has at least one 488 spot. Cells not present have counts == 0.
+    """
+    coreg = _find_coreg_dir(subject_id)
+    spot_csvs = list(coreg.glob("*spot_488_counts.csv"))
+    if spot_csvs:
+        df = pd.read_csv(spot_csvs[0])
+    else:
+        hcr = _find_hcr_dir(subject_id)
+        df = _aggregate_spots_from_hcr(hcr)
+        if df is None:
+            raise FileNotFoundError(f"no spot table for {subject_id}")
+    keep = ["hcr_id", "counts"]
+    if "volume" in df.columns:
+        keep.append("volume")
+    if "density" in df.columns:
+        keep.append("density")
+    return df[keep].copy()
+
+
+def parse_active_landmark_hcr_ids(s) -> list[int]:
+    lm = s.landmarks_qced
+    if lm.empty:
+        return []
+    lm = lm[lm["active"]]
+    ids = []
+    for v in lm["ids"]:
+        sv = str(v)
+        if "-hcr" in sv:
+            try:
+                ids.append(int(sv.split("-hcr")[1]))
+            except ValueError:
+                continue
+    return ids
+
+
+# =====================================================================
+# Threshold strategies
+# =====================================================================
+def strategy_gmm_log(counts: np.ndarray) -> float:
+    """Fit 2-component GMM to log(counts>=1) and return the crossover count.
+
+    Crossover = smallest integer count c where P(component_high | log c) >= 0.5.
+    """
+    from sklearn.mixture import GaussianMixture
+
+    x = np.log(counts[counts >= 1]).reshape(-1, 1)
+    gmm = GaussianMixture(n_components=2, random_state=0, n_init=5).fit(x)
+    # component with higher mean = signal
+    hi = int(np.argmax(gmm.means_.ravel()))
+    # sweep a fine log grid, find first c where P(hi|c) >= 0.5
+    grid = np.linspace(x.min(), x.max(), 4000).reshape(-1, 1)
+    p = gmm.predict_proba(grid)[:, hi]
+    idx = np.where(p >= 0.5)[0]
+    if len(idx) == 0:
+        return float("inf")
+    return float(np.ceil(np.exp(grid[idx[0], 0])))
+
+
+def strategy_otsu_log(counts: np.ndarray) -> float:
+    """Otsu threshold on log(counts>=1). Returns the crossover count."""
+    x = np.log(counts[counts >= 1])
+    # Bin the log range
+    n_bins = 256
+    hist, edges = np.histogram(x, bins=n_bins)
+    centers = (edges[:-1] + edges[1:]) / 2
+    p = hist.astype(float) / hist.sum()
+    # Otsu between-class variance
+    w_cum = np.cumsum(p)
+    mu_cum = np.cumsum(p * centers)
+    mu_tot = mu_cum[-1]
+    eps = 1e-12
+    sigma_b = (mu_tot * w_cum - mu_cum) ** 2 / np.maximum(w_cum * (1 - w_cum), eps)
+    t_idx = int(np.argmax(sigma_b))
+    return float(np.ceil(np.exp(centers[t_idx])))
+
+
+def strategy_kneedle(counts: np.ndarray) -> float:
+    """Knee of sorted descending counts (max curvature)."""
+    sc = np.sort(counts)[::-1].astype(float)
+    n = len(sc)
+    # Normalize x=index, y=count to [0,1]
+    xs = np.arange(n) / max(n - 1, 1)
+    ys = (sc - sc.min()) / max(sc.max() - sc.min(), 1e-12)
+    # Distance from line connecting first and last point
+    # Line: y = 1 - x  (since ys starts near 1 and ends at 0 after normalising)
+    d = ys - (1 - xs)
+    k_idx = int(np.argmax(d))
+    return float(np.ceil(sc[k_idx]))
+
+
+def strategy_kittler_illingworth(counts: np.ndarray) -> float:
+    """Kittler–Illingworth min-error threshold on log(counts>=1)."""
+    x = np.log(counts[counts >= 1])
+    n_bins = 256
+    hist, edges = np.histogram(x, bins=n_bins)
+    centers = (edges[:-1] + edges[1:]) / 2
+    p = hist.astype(float) / max(hist.sum(), 1)
+    eps = 1e-12
+
+    best_t, best_j = None, np.inf
+    for t in range(1, n_bins - 1):
+        p1 = p[: t + 1].sum()
+        p2 = 1 - p1
+        if p1 < eps or p2 < eps:
+            continue
+        m1 = (p[: t + 1] * centers[: t + 1]).sum() / p1
+        m2 = (p[t + 1 :] * centers[t + 1 :]).sum() / p2
+        s1 = (p[: t + 1] * (centers[: t + 1] - m1) ** 2).sum() / p1
+        s2 = (p[t + 1 :] * (centers[t + 1 :] - m2) ** 2).sum() / p2
+        if s1 < eps or s2 < eps:
+            continue
+        j = 1 + 2 * (p1 * np.log(np.sqrt(s1)) + p2 * np.log(np.sqrt(s2))) \
+            - 2 * (p1 * np.log(p1) + p2 * np.log(p2))
+        if j < best_j:
+            best_j = j
+            best_t = centers[t]
+    if best_t is None:
+        return float("inf")
+    return float(np.ceil(np.exp(best_t)))
+
+
+def strategy_fixed_fraction(counts_all: np.ndarray, frac: float = 0.15) -> float:
+    """Top-`frac` fraction of all HCR cells by count (including 0-spot cells)."""
+    q = 1 - frac
+    # counts_all includes 0-spot cells; handles "top 15% of HCR cells"
+    return float(np.ceil(np.quantile(counts_all, q)))
+
+
+def strategy_gmm_log_with_background(
+    counts_spot_bearing: np.ndarray,
+    n_zero_cells: int,
+    zero_floor: float = 0.5,
+    n_components: int = 3,
+) -> float:
+    """3-component GMM on log(counts), representing 0-count cells as log(0.5).
+
+    Gives the fit a chance to find an explicit 'background' mode, in contrast
+    to strategy_gmm_log which only sees spot-bearing cells. The threshold is
+    the smallest integer count at which the sum of the top component's
+    posteriors >= 0.5.
+    """
+    from sklearn.mixture import GaussianMixture
+
+    x_spot = np.log(counts_spot_bearing[counts_spot_bearing >= 1])
+    x_zero = np.full(n_zero_cells, np.log(zero_floor))
+    x = np.concatenate([x_zero, x_spot]).reshape(-1, 1)
+    gmm = GaussianMixture(n_components=n_components, random_state=0, n_init=5).fit(x)
+    hi = int(np.argmax(gmm.means_.ravel()))
+    grid = np.linspace(np.log(1.0), np.log(counts_spot_bearing.max()), 4000).reshape(-1, 1)
+    p_hi = gmm.predict_proba(grid)[:, hi]
+    idx = np.where(p_hi >= 0.5)[0]
+    if len(idx) == 0:
+        return float("inf")
+    return float(np.ceil(np.exp(grid[idx[0], 0])))
+
+
+def strategy_density_gmm(density: np.ndarray) -> float:
+    """GMM on log(density) for cells with density > 0. Returns density threshold (float)."""
+    from sklearn.mixture import GaussianMixture
+
+    d = density[density > 0]
+    if len(d) < 50:
+        return float("inf")
+    x = np.log(d).reshape(-1, 1)
+    gmm = GaussianMixture(n_components=2, random_state=0, n_init=5).fit(x)
+    hi = int(np.argmax(gmm.means_.ravel()))
+    grid = np.linspace(x.min(), x.max(), 4000).reshape(-1, 1)
+    p = gmm.predict_proba(grid)[:, hi]
+    idx = np.where(p >= 0.5)[0]
+    if len(idx) == 0:
+        return float("inf")
+    return float(np.exp(grid[idx[0], 0]))
+
+
+# =====================================================================
+# Score a threshold
+# =====================================================================
+def score_threshold(
+    raw: pd.DataFrame,
+    n_hcr_total: int,
+    threshold_counts: float,
+    depth_um: np.ndarray | None,
+    landmark_hcr_ids: list[int],
+    density_threshold: float | None = None,
+    count_column: str = "counts",
+) -> dict:
+    """Apply a threshold and compute validation metrics."""
+    keep_mask = raw[count_column].values >= threshold_counts
+    if density_threshold is not None and "density" in raw.columns:
+        keep_mask &= raw["density"].values >= density_threshold
+
+    n_gfp = int(keep_mask.sum())
+    gfp_frac = n_gfp / n_hcr_total if n_hcr_total else float("nan")
+
+    out = {
+        "threshold_counts": float(threshold_counts),
+        "threshold_density": float(density_threshold) if density_threshold is not None else None,
+        "n_gfp": n_gfp,
+        "n_hcr_total": n_hcr_total,
+        "gfp_frac": gfp_frac,
+    }
+
+    # Depth metrics — `depth_um` is indexed like `raw`, per cell that appears in raw.
+    if depth_um is not None and len(depth_um) == len(raw):
+        gfp_depths = depth_um[keep_mask]
+        out["median_depth_um"] = float(np.median(gfp_depths)) if len(gfp_depths) else None
+        # fraction of GFP+ that lie above 400 µm depth (top 400 µm of HCR tissue)
+        out["gfp_frac_top400"] = float((gfp_depths <= 400).mean()) if len(gfp_depths) else None
+        # for CDF comparison
+        out["depth_p25"] = float(np.quantile(gfp_depths, 0.25)) if len(gfp_depths) else None
+        out["depth_p50"] = float(np.quantile(gfp_depths, 0.50)) if len(gfp_depths) else None
+        out["depth_p75"] = float(np.quantile(gfp_depths, 0.75)) if len(gfp_depths) else None
+
+    # Landmark coverage
+    if landmark_hcr_ids:
+        gfp_ids = set(raw.loc[keep_mask, "hcr_id"].astype(int).tolist())
+        in_gfp = sum(1 for x in landmark_hcr_ids if x in gfp_ids)
+        out["landmark_coverage"] = in_gfp / len(landmark_hcr_ids)
+        out["n_landmarks"] = len(landmark_hcr_ids)
+
+    return out
+
+
+# =====================================================================
+# Per-subject runner
+# =====================================================================
+def analyze_one(subject_id: str) -> dict:
+    s = load_subject(subject_id)
+    raw = load_raw_gfp_table(subject_id)
+
+    n_hcr_total = len(s.hcr_centroids)
+
+    # Build per-cell depth (HCR µm) for cells that appear in `raw` — reindex
+    # against hcr_centroids by hcr_id.
+    hcr_centroids = s.hcr_centroids
+    hcr_um = hcr_px_to_um(hcr_centroids[["z_px", "y_px", "x_px"]].values, s)
+    hcr_xyz = hcr_um[:, [2, 1, 0]]
+    # Centroid-based pia surface (cheap; OK for ordering — we are comparing
+    # between strategies on the same surface, so absolute offsets cancel).
+    surface = estimate_pia_surface(hcr_xyz)
+    all_depths = depth_from_surface(hcr_xyz, surface)
+
+    depth_map = dict(zip(hcr_centroids["hcr_id"].astype(int).values, all_depths))
+    raw_depth = np.array(
+        [depth_map.get(int(hid), np.nan) for hid in raw["hcr_id"].values]
+    )
+    # Drop rows without a depth (shouldn't happen, but safe)
+    valid = ~np.isnan(raw_depth)
+    raw = raw.loc[valid].reset_index(drop=True)
+    raw_depth = raw_depth[valid]
+
+    landmark_hcr_ids = parse_active_landmark_hcr_ids(s)
+
+    # Counts arrays
+    counts_in_raw = raw["counts"].values.astype(float)
+    # counts including 0-spot cells (for fixed-fraction calibration)
+    all_hcr_counts = np.zeros(n_hcr_total, dtype=float)
+    ids_to_idx = {int(hid): i for i, hid in enumerate(hcr_centroids["hcr_id"].astype(int).values)}
+    for hid, c in zip(raw["hcr_id"].astype(int), raw["counts"].astype(float)):
+        if hid in ids_to_idx:
+            all_hcr_counts[ids_to_idx[hid]] = c
+
+    # --- derive thresholds for strategies A–G
+    strategies: dict[str, dict] = {}
+
+    # Legacy baseline for reference
+    strategies["baseline_counts>=5"] = {"threshold": 5.0, "source": "current DEFAULT_GFP_MIN_SPOTS"}
+
+    strategies["A_gmm_log_counts"] = {
+        "threshold": strategy_gmm_log(counts_in_raw),
+        "source": "2-comp GMM on log(counts>=1), crossover P=0.5",
+    }
+    strategies["A3_gmm_log_counts_3c_bg"] = {
+        "threshold": strategy_gmm_log_with_background(
+            counts_in_raw, n_zero_cells=n_hcr_total - len(raw), n_components=3
+        ),
+        "source": "3-comp GMM on log(counts) with 0-count cells as log(0.5)",
+    }
+    strategies["B_otsu_log_counts"] = {
+        "threshold": strategy_otsu_log(counts_in_raw),
+        "source": "Otsu on log(counts>=1)",
+    }
+    strategies["C_kneedle_counts"] = {
+        "threshold": strategy_kneedle(counts_in_raw),
+        "source": "Kneedle on sorted-descending counts",
+    }
+    strategies["D_kittler_illingworth_log"] = {
+        "threshold": strategy_kittler_illingworth(counts_in_raw),
+        "source": "Kittler–Illingworth min-error on log(counts>=1)",
+    }
+    strategies["E_fixed_top15pct_of_hcr"] = {
+        "threshold": strategy_fixed_fraction(all_hcr_counts, frac=0.15),
+        "source": "top 15% of all HCR cells by count",
+    }
+    strategies["E2_fixed_top20pct_of_hcr"] = {
+        "threshold": strategy_fixed_fraction(all_hcr_counts, frac=0.20),
+        "source": "top 20% of all HCR cells by count",
+    }
+
+    # Joint strategies (F/G)
+    density_thresh = None
+    if "density" in raw.columns:
+        density_thresh = strategy_density_gmm(raw["density"].values.astype(float))
+        strategies["F_gmm_log_density"] = {
+            "threshold": 1.0,  # keep any cell w/ >=1 spot; filter by density
+            "source": f"GMM on log(density), density>={density_thresh:.5g}",
+            "density_threshold": density_thresh,
+        }
+        strategies["G_joint_A_and_F"] = {
+            "threshold": strategies["A_gmm_log_counts"]["threshold"],
+            "source": (
+                f"counts>=A_thresh AND density>={density_thresh:.5g}"
+                if density_thresh is not None
+                else "counts>=A_thresh only"
+            ),
+            "density_threshold": density_thresh,
+        }
+
+    # --- score each strategy
+    out_strategies = {}
+    for name, cfg in strategies.items():
+        score = score_threshold(
+            raw,
+            n_hcr_total,
+            cfg["threshold"],
+            raw_depth,
+            landmark_hcr_ids,
+            density_threshold=cfg.get("density_threshold"),
+        )
+        out_strategies[name] = {**cfg, **score}
+
+    return {
+        "subject": subject_id,
+        "n_hcr_total": n_hcr_total,
+        "n_spot_bearing_cells": int(len(raw)),
+        "raw_counts_percentiles": {
+            "p25": float(np.quantile(counts_in_raw, 0.25)),
+            "p50": float(np.quantile(counts_in_raw, 0.50)),
+            "p75": float(np.quantile(counts_in_raw, 0.75)),
+            "p90": float(np.quantile(counts_in_raw, 0.90)),
+            "p95": float(np.quantile(counts_in_raw, 0.95)),
+            "max": float(counts_in_raw.max()),
+        },
+        "landmark_n_active": len(landmark_hcr_ids),
+        "strategies": out_strategies,
+    }
+
+
+# =====================================================================
+# Plotting
+# =====================================================================
+def _save_histograms(per_subject: dict):
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    FIG_DIR.mkdir(parents=True, exist_ok=True)
+
+    # log-count histograms with candidate thresholds (A/B/D + baseline)
+    fig, axes = plt.subplots(2, 2, figsize=(11, 8), sharex=True)
+    for ax, sid in zip(axes.flatten(), SPOT_SUBJECTS):
+        raw = load_raw_gfp_table(sid)
+        x = np.log10(raw["counts"].values.astype(float))
+        ax.hist(x, bins=80, color="0.7", edgecolor="k", linewidth=0.3)
+        strat = per_subject[sid]["strategies"]
+        color_map = {
+            "baseline_counts>=5": ("C0", "--"),
+            "A_gmm_log_counts": ("C3", "-"),
+            "B_otsu_log_counts": ("C2", "-"),
+            "D_kittler_illingworth_log": ("C1", "-"),
+            "E_fixed_top15pct_of_hcr": ("C4", ":"),
+        }
+        for name, (col, ls) in color_map.items():
+            t = strat[name]["threshold"]
+            if t and np.isfinite(t) and t > 0:
+                ax.axvline(np.log10(t), color=col, ls=ls, lw=1.5,
+                           label=f"{name.split('_')[0]}={int(t)}")
+        ax.set_title(f"{sid} (n={len(raw)})")
+        ax.set_xlabel("log10(counts)")
+        ax.set_ylabel("cells")
+        ax.legend(fontsize=7)
+    fig.tight_layout()
+    fig.savefig(FIG_DIR / "log_count_histograms.png", dpi=130)
+    plt.close(fig)
+
+
+def _save_depth_cdfs(per_subject: dict):
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, axes = plt.subplots(2, 2, figsize=(11, 8), sharex=True)
+    for ax, sid in zip(axes.flatten(), SPOT_SUBJECTS):
+        s = load_subject(sid)
+        raw = load_raw_gfp_table(sid)
+        hcr_um = hcr_px_to_um(s.hcr_centroids[["z_px", "y_px", "x_px"]].values, s)
+        hcr_xyz = hcr_um[:, [2, 1, 0]]
+        surface = estimate_pia_surface(hcr_xyz)
+        all_depths = depth_from_surface(hcr_xyz, surface)
+        id_depth = dict(zip(s.hcr_centroids["hcr_id"].astype(int), all_depths))
+        depths_spot = np.array(
+            [id_depth.get(int(h), np.nan) for h in raw["hcr_id"]]
+        )
+        valid = ~np.isnan(depths_spot)
+        depths_spot = depths_spot[valid]
+        raw2 = raw.loc[valid].reset_index(drop=True)
+
+        # All HCR
+        ax.hist(all_depths, bins=60, density=True, alpha=0.35,
+                color="0.6", label="all HCR")
+        # Baseline GFP+
+        m = raw2["counts"].values >= 5
+        ax.hist(depths_spot[m], bins=60, density=True, alpha=0.45,
+                color="C0", label=f"counts>=5 ({int(m.sum())})")
+        # A (GMM)
+        tA = per_subject[sid]["strategies"]["A_gmm_log_counts"]["threshold"]
+        m = raw2["counts"].values >= tA
+        ax.hist(depths_spot[m], bins=60, density=True, alpha=0.45,
+                color="C3", label=f"A counts>={int(tA)} ({int(m.sum())})")
+        # B (Otsu)
+        tB = per_subject[sid]["strategies"]["B_otsu_log_counts"]["threshold"]
+        m = raw2["counts"].values >= tB
+        ax.hist(depths_spot[m], bins=60, density=True, alpha=0.35,
+                color="C2", label=f"B counts>={int(tB)} ({int(m.sum())})")
+        ax.set_title(sid)
+        ax.set_xlabel("depth from pia (µm)")
+        ax.set_ylabel("density")
+        ax.legend(fontsize=7)
+    fig.tight_layout()
+    fig.savefig(FIG_DIR / "depth_histograms.png", dpi=130)
+    plt.close(fig)
+
+
+# =====================================================================
+# CLI
+# =====================================================================
+def run() -> dict:
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    per_subject = {}
+    for sid in SPOT_SUBJECTS:
+        print(f"\n=== {sid} ===", flush=True)
+        try:
+            per_subject[sid] = analyze_one(sid)
+        except Exception as exc:  # noqa: BLE001
+            per_subject[sid] = {"subject": sid, "status": f"error: {exc!r}"}
+            print(per_subject[sid])
+            continue
+        # concise print
+        print(f"n_hcr_total={per_subject[sid]['n_hcr_total']}, "
+              f"n_spot_bearing={per_subject[sid]['n_spot_bearing_cells']}, "
+              f"n_landmarks={per_subject[sid]['landmark_n_active']}")
+        for name, d in per_subject[sid]["strategies"].items():
+            print(f"  {name:32s} t={d['threshold']:7.1f}  "
+                  f"gfp_frac={d.get('gfp_frac', float('nan')):.3f}  "
+                  f"lmcov={d.get('landmark_coverage', float('nan')):.3f}  "
+                  f"top400={d.get('gfp_frac_top400', float('nan')):.3f}")
+
+    # Cross-subject summary
+    strategy_names = list(next(iter(per_subject.values()))["strategies"].keys())
+    summary = {}
+    for name in strategy_names:
+        thresholds = [per_subject[sid]["strategies"][name]["threshold"] for sid in SPOT_SUBJECTS]
+        fracs = [per_subject[sid]["strategies"][name]["gfp_frac"] for sid in SPOT_SUBJECTS]
+        covs = [per_subject[sid]["strategies"][name].get("landmark_coverage") for sid in SPOT_SUBJECTS]
+        summary[name] = {
+            "threshold_per_subject": {sid: t for sid, t in zip(SPOT_SUBJECTS, thresholds)},
+            "gfp_frac_per_subject": {sid: f for sid, f in zip(SPOT_SUBJECTS, fracs)},
+            "landmark_cov_per_subject": {sid: c for sid, c in zip(SPOT_SUBJECTS, covs)},
+            "threshold_mean": float(np.mean(thresholds)),
+            "threshold_std": float(np.std(thresholds)),
+            "gfp_frac_mean": float(np.mean(fracs)),
+            "landmark_cov_min": float(np.nanmin([c for c in covs if c is not None])) if any(c is not None for c in covs) else None,
+            "landmark_cov_mean": float(np.nanmean([c for c in covs if c is not None])) if any(c is not None for c in covs) else None,
+        }
+
+    # Winner logic: passes gfp_frac<0.3 AND landmark_cov>=0.95 on ALL subjects
+    winners = []
+    for name, row in summary.items():
+        fracs_list = list(row["gfp_frac_per_subject"].values())
+        covs_list = [c for c in row["landmark_cov_per_subject"].values() if c is not None]
+        if max(fracs_list) < 0.30 and min(covs_list) >= 0.95:
+            winners.append((name, row["threshold_std"], max(fracs_list)))
+    winners.sort(key=lambda x: (x[1], x[2]))  # lowest std, then lowest max-frac
+
+    out = {
+        "per_subject": per_subject,
+        "cross_subject_summary": summary,
+        "winners_ranked": [w[0] for w in winners],
+        "stopping_condition_note": (
+            "A strategy is a 'winner' if it attains gfp_frac<0.30 AND "
+            "landmark_coverage>=0.95 on all four subjects; tied winners are "
+            "ranked by threshold_std across subjects (lower is better)."
+        ),
+    }
+    with open(RESULT_JSON, "w") as f:
+        json.dump(out, f, indent=2, default=lambda v: v.tolist() if hasattr(v, "tolist") else str(v))
+    print(f"\nWrote {RESULT_JSON}")
+
+    # Plots
+    try:
+        _save_histograms(per_subject)
+        _save_depth_cdfs(per_subject)
+        print(f"Wrote figures to {FIG_DIR}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"plot skipped: {exc!r}")
+
+    return out
+
+
+if __name__ == "__main__":
+    run()

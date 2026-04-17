@@ -1,0 +1,9 @@
+{
+  "id": "2",
+  "subject": "Read dev protocol + benchmark spec",
+  "description": "Check 06_dev_protocol.md and 05_benchmark_dataset.md for the binding dev/validation split and subject roster.",
+  "activeForm": "Reading dev protocol",
+  "status": "completed",
+  "blocks": [],
+  "blockedBy": []
+}
