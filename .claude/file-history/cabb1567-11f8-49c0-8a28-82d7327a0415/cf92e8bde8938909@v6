@@ -1,0 +1,105 @@
+---
+name: 03 image-based surface (curved)
+description: Session 03 — image-only curved pia surface. v2.1 single-fit + v2.2 auto-select (session 03c) closes 755252 AF failure; 6/6 HCR subjects now match N22.
+type: project
+originSessionId: cabb1567-11f8-49c0-8a28-82d7327a0415
+---
+Session `03_image_based_surface_estimation` implements
+`estimate_surface_and_l2_image_based()` in
+`code/dev_code/03_image_based_surface.py`.  Five-stage pipeline:
+
+1. **Global baseline** from the top 1–2 z-planes (median + 1.4826·MAD;
+   skip planes ≥ 95 % zero; HCR pure-padding top → fallback
+   `σ = 0.02 · percentile(vol, 99)`).  Used as diagnostic only.
+2. **Stage-2 anchor** — per-column first-sustained-above-thr over the
+   whole z on a sparse grid (`column_stride_um = 10`), fit quadratic
+   IRLS-Huber to get a rough pia plane.
+3. **Stage-3 per-column tops in a ±150 µm band** around the anchor
+   (`column_margin = 0.25`, `min_signal_abs_frac = 0.20`,
+   `column_min_thick_um = 10`).
+4. **Stage-4 quadratic quantile-regression IRLS** at
+   `target_quantile = 0.85` on stage-3 tops (module default; CZ
+   driver opts down to 0.70 — see v2.1 below).
+5. **Stage-5 column-top clamp** (image-only analogue of N22's ROI
+   envelope clamp): 120-µm tiles, 10 % quantile of z per tile,
+   `lift = max(positive_deficits) − safety_offset`.
+
+Driver + figures in `03_image_based_surface_run.py` /
+`03_image_based_surface_figs.py`; results + log in
+`sessions/03_image_based_surface_estimation/`.
+
+**v2 fix (2026-04-18):** max-lift over-lifts on HCR 755252/767022
+because column tops are contaminated by shallow autofluorescence
+(e.g. 755252 has 63 % of tiles with z10 above the real pia).  Added
+two knobs to `_clamp_to_column_tops`:
+* `lift_q` (default 1.0) — use `quantile(pos_deficits, q)` instead
+  of max
+* `lift_iqr_k` (default 1.5) — cap lift at Tukey fence
+  `Q75 + k·IQR`, but only when `len(pos_deficits) ≥ 50`
+  (gates out CZ's ~25 tiles where IQR is too noisy)
+
+**v2.1 fix (2026-04-18):** raised the HCR `target_quantile` default
+from 0.70 → 0.85.  Closed the 790322 above_frac gap (1.13 % → 0.06 %)
+without regressing any other subject by more than a single onset bin.
+755252 onset improved 72.5 → 62.5 µm but remains AF-limited.
+CZ driver keeps `target_quantile = 0.70` (no AF issue; v2 CZ metrics
+are already clean).
+
+**How to apply:** Five of six HCR subjects now match N22 quality
+(above_frac ≤ 0.35 %, onset ≤ 12.5 µm).  Only remaining stubborn
+case: **755252 onset = 62.5 µm** — autofluorescence on 63 % of tiles
+is irreducible without centroid data or a soma-level image primitive
+(ruled out: 3-D peak detection / first_substantial / deeper anchor /
+narrower band / per-column thick filter — every parameter that helps
+755252 breaks ≥ 2 clean subjects).
+
+**Do NOT** expect image-only to ever fully match N22 on every subject
+— image-only cannot distinguish soma from autofluorescence the way
+centroid positions do.  Treat as a complementary image-driven
+cross-check for pia, not a replacement for N22.
+
+**Future-work lead: per-subject channel selection.** On 755252,
+`load_hcr_combined(channels=["488","514"])` followed by the normal
+v2.1 pipeline yields surface c=153.9, onset=2.5 µm, above 0.51 %
+— i.e. the pia IS recoverable when the AF-carrying channels (405,
+594) are dropped. But the "good subset" is subject-specific: the
+same `488+514` subset is catastrophic on 767018 (above 10 %),
+782149 (above 13 %), etc.  An auto-channel-selection rule using a
+confidence metric (e.g. below-vs-above-surface contrast ratio)
+could close 755252's gap without regressing the others.  Out of
+scope for v2.1 — genuine structural change.
+
+**v2.2 (session 03c, 2026-04-19):** implemented the above future-work
+lead.  Two new pure public functions in `03_image_based_surface.py`:
+- `score_surface_quality(surface, vol, z_um, xy_um, ...) -> dict`
+  with `Q = median(below_near)`, `Qabove = median(above_near)`,
+  `Qcon_n = median((b-a)/(b+a+ε))` in windows [10,50] µm below and
+  [-50,-10] µm above the candidate surface.
+- `auto_select_surface(candidates, ref_vol, z_um, xy_um, *,
+  qcon_n_threshold=0.9) -> (name, result, scores_df)`: argmax Q among
+  candidates with `Qcon_n ≥ 0.9`.  The contrast gate separates three
+  regimes — pia (Qcon_n ≈ 1), gap/AF-top (≈ 0), deep-in-tissue
+  (0.1–0.55) — and correctly rejects both failure modes.
+
+Convenience wrapper `estimate_pia_surface_image_autoselect(s, *,
+level=4, qcon_n_threshold=0.9)` in `benchmark_analysis.py` builds the
+per-subject channel-subset bank (`all_tq{0.70,0.85,0.95}`, `no405`,
+`mid488` with per-subject 514/561 pick, `only488`, `only594`) and
+returns `(surface, info, scores)`.
+
+**Result.**  On the 6-subject HCR benchmark, auto-select matches N22
+onset quality (`onset ≤ 2.5 µm`, `above_frac ≤ 1.13 %`) on **all**
+subjects including 755252 — the fix the "do NOT expect" paragraph
+above ruled out with v2.1 alone is now achievable via candidate-bank
+selection rather than a single parameter choice.  Per-subject picks:
+755252→`mid488_tq0.85`, 767018→`only594_tq0.85`, 767022→`all_tq0.70`,
+782149→`no405_tq0.85`, 788406→`no405_tq0.85`, 790322→`all_tq0.70`.
+
+Caveat: `argmax Q` is slightly deep-biased (deeper = brighter tissue),
+so selected `c` values are within ~30 µm of N22's but can overshoot
+(790322: +16 µm; above_frac 1.13 %).  All still within the onset/above
+gates.  If tighter control is needed later (e.g. GFP surfaces), add
+a shallow-bias term or weight Q by Qcon_n.
+
+Session artefacts: `code/sessions/03c_onset_features/` — iterations
+01–04 with logs, notebooks, figures, and CSV data.

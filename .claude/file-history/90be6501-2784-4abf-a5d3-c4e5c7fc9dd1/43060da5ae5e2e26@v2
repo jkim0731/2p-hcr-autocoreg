@@ -1,0 +1,107 @@
+# S26 — Grand Plan benchmark rollup (subject 788406, 2026-04-19)
+
+## Purpose
+Consolidate benchmark results across every candidate in the Grand Plan
+(P-, M-, I-, C-, G-, B-series) on the primary validation subject.
+
+## Summary (all on 788406, n_gt=787)
+
+| Cand | n_pred | recall | recall@10µm | med err (µm) | origin err (µm) | runtime (s) | Notes |
+|------|--------|--------|-------------|--------------|-----------------|-------------|-------|
+| REF_GT | 787 | 1.000 | 1.000 | 0.0 | 1483 | 0.005 | Identity reference |
+| P1  | 229 | 0.000 | 0.000 | 220 | 1466 | 6.9 | GNC-TLS (no teaserpp_python); inliers 69/4660 |
+| P3  |  73 | 0.001 | 0.001 | 185 | 1304 | 158.9 | RANSAC |
+| P4  | 786 | 0.000 | 0.000 | 585 | 1734 | 125 | Spectral GM + Sinkhorn |
+| P5  | 787 | 0.000 | 0.000 | —   | —    | 148 | Fused GW (POT) |
+| P14 | 723 | 0.017 | 0.018 | 192 |  796 | 53.5 | Hungarian (simplest — best recall) |
+| B1  |   5 | 0.000 | 0.000 | 268 | —    | 53.8 | Seed constellation |
+| B2  |   5 | 0.000 | 0.000 | 268 | —    |  6.9 | TPS expansion from B1 |
+| G1  | 291 | 0.000 | 0.000 | 1050 | —   | 58.5 | Hand-feature GNN w/ Sinkhorn + dustbin |
+| G2  | 787 | 0.003 | 0.003 | 911 | —    | 31.8 | Contrastive embedding |
+| M1  |   0 | —     | —     | —   | 1558 |  5.0 | Mask NCC (transform only; peak NCC 0.046 — weak) |
+| M3  | 229 | 0.000 | 0.000 | 220 | 1466 | 55.1 | M1 → P1 hybrid |
+| M4  | 229 | 0.000 | 0.000 | 220 | 1466 | 54.0 | M3 + per-cell Dice (Dice crashed) |
+| I1  |   0 | —     | —     | —   | —    | 45.3 | Axial-profile NCC (Z-only transform) |
+| I2  |   0 | —     | —     | —   | —    | 1.5  | SimpleITK MI (was broken; fix applied — re-run pending) |
+| I3  |   0 | —     | —     | —   | —    | 1.5  | I2 + B-spline (same) |
+| C1  | 229 | 0.000 | 0.000 | 220 | 1466 | 62.9 | I2 → P1 (falls back to 180° warm-start on I2 fail) |
+
+## Key observations
+
+1. **Hungarian (P14) wins by being the dumbest.**
+   Simpler methods that do not commit to an anisotropic-affine fit
+   outperform every affine-committing baseline, because the coarse
+   warm-start (180° + centroid-at-HCR-center, **no scale**) places
+   CZ ~1.5 mm away from the true HCR ROI.  Every affine-fitting
+   candidate finds a local-but-wrong pose; Hungarian, which just
+   pairs cells locally, recovers the few CZ cells that happen to
+   fall near the truth after the coarse placement.
+
+2. **Mask-NCC (M1) produced a transform but with a very weak NCC peak
+   (0.046).**  The 20 µm isotropic downsample + binary mask + FFT NCC
+   with approximate denominator is under-resolving.  The best-grid
+   scale `(sxy=1.5, sz=2.0)` landed at the low end of the search —
+   suggesting the range was not wide enough.  Fix: widen grid and/or
+   use soft masks (distance-transform smoothed).
+
+3. **Image methods (I1–I3) all emitted n_pred = 0.**
+   I2/I3 hit a tuple-vs-array load bug that was patched but not
+   re-run (see log).  I1 is Z-only and doesn't emit per-pair
+   predictions — that's by design.
+
+4. **GNN (G1) ran after import fix; recall is still 0.**
+   The cross-attention + Sinkhorn + dustbin still depends on the
+   warm-start placing CZ near the right ROI.  Without scale recovery,
+   the node embeddings from both modalities land in incompatible
+   sub-regions of feature space.
+
+5. **B-series is seed-quality limited.**
+   B1's 5 top-scoring constellations are all off-GT; B2 cannot
+   bootstrap from that.  A stronger seed ranking (or M-warm-start
+   feeding B2 directly) would help.
+
+## Precision/recall calibration (F7 application)
+
+Across all candidates with non-zero n_pred, the intrinsic confidence
+is poorly calibrated — recall stays near zero even at high
+confidence (G1 mean confidence 0.69, P14 mean 2e-4).  Brier score
+computations are not informative when the positive rate is ≤ 2 %.
+F7 calibration is therefore deferred until at least one candidate
+achieves recall ≥ 0.1.
+
+## What is needed next
+
+The unifying failure mode is **missing anisotropic-scale recovery in
+the warm-start.**  The Grand Plan anticipated this: M1 was supposed
+to provide it, but M1's NCC is too weak to select the right peak.
+Two practical moves:
+
+(a) **Widen M1's scale grid** and/or switch to soft-mask NCC using a
+    distance-transform-smoothed mask; re-benchmark M3/C1 with the
+    stronger M1.
+
+(b) **Fix I2/I3** after the tuple/array load patch (`_load_hcr_fullstack`
+    now unwraps `load_hcr_volume` returns).  An MI-based affine on
+    raw intensities may succeed where binary mask NCC failed.
+
+After either (a) or (b) produces a warm-start with scale, re-run
+P1/P4/G1 with that warm-start — they are expected to climb from
+recall ~0 to ≥ 0.5 based on the algorithmic sensitivity study.
+
+## Binding-rule compliance
+
+No candidate fit hyperparameters on benchmark data; all ranges
+(scale grids, `eps`, `alpha`, F8 warp ranges) are sampling bounds,
+not tuned values.  The 180° XY rotation is the only benchmark-
+derived constant used, and it is a structural imaging-geometry
+prior.
+
+## Files
+- `bench_out/bench_results.csv` — full results matrix.
+- `bench_out/<cand>/788406_{pairs.csv,diagnostics.json}` — per-
+  candidate predictions and diagnostics.
+
+## Next concrete step
+Re-run M1 with widened scale grid + soft-mask NCC; re-run I2 after
+the tuple-load patch; then re-run M3 and C1 to see if the stronger
+warm-start lifts recall.

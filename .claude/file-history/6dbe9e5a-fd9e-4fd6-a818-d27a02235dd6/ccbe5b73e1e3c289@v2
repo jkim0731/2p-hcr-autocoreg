@@ -1,0 +1,77 @@
+"""Test z-axis Gaussian smoothing before top detection.
+
+Hypothesis: autofluorescence bands above pia are thin (20-50µm); pia
+signal is thick (100+µm). Smoothing along z with sigma ~ 15-30µm
+should reduce peak of thin AF bands while preserving thick pia.
+
+We patch `_per_column_top_in_band` via a temporary wrapper that
+gaussian-smooths vol_sub before passing to the original function.
+"""
+from __future__ import annotations
+import sys, importlib.util, os
+from pathlib import Path
+import numpy as np
+from scipy.ndimage import gaussian_filter1d
+os.environ["PYTHONUNBUFFERED"] = "1"
+
+sys.path.insert(0, "/root/capsule/code/dev_code")
+_spec = importlib.util.spec_from_file_location(
+    "img_surface_l2",
+    str(Path("/root/capsule/code/dev_code") / "03_image_based_surface.py"))
+_mod = importlib.util.module_from_spec(_spec); sys.modules["img_surface_l2"] = _mod
+_spec.loader.exec_module(_mod)
+
+from benchmark_analysis import load_hcr_combined
+from benchmark_data_loader import hcr_px_to_um, load_subject
+
+
+def sz(s, x, y):
+    return (s["a"]*x + s["b"]*y + s["c"]
+            + s.get("p",0)*x*x + s.get("q",0)*x*y + s.get("r",0)*y*y)
+
+
+def eval_surf(s, pts):
+    if s is None: return np.nan, np.nan, np.nan
+    zs = sz(s, pts[:,0], pts[:,1])
+    depth = pts[:,2] - zs
+    n = len(depth)
+    above = (depth < 0).sum() / n
+    edges = np.arange(-200, 404, 5.0)
+    h, _ = np.histogram(depth, bins=edges)
+    density = h / (5.0 * max(n, 1))
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    bulk = density[(centers >= 50) & (centers <= 200)].mean()
+    onset = np.nan
+    if bulk > 0:
+        for c, d in zip(centers, density):
+            if c >= 0 and d >= 0.5 * bulk:
+                onset = float(c); break
+    return s["c"], above, onset
+
+
+HCR_SUBJECTS = ["755252", "767018", "767022", "782149", "788406", "790322"]
+
+# Monkey-patch estimate_surface_and_l2_image_based to pre-smooth vol
+_orig = _mod.estimate_surface_and_l2_image_based
+
+def run_with_zsmooth(vol, z_um, xy_um, sigma_um, **kw):
+    if sigma_um > 0:
+        sigma_slices = float(sigma_um) / float(z_um)
+        vol_s = gaussian_filter1d(vol.astype(np.float32), sigma=sigma_slices,
+                                  axis=0, mode="nearest")
+    else:
+        vol_s = vol
+    return _orig(vol_s, z_um, xy_um, **kw)
+
+
+SIGMAS = [0, 10, 15, 20, 30, 40]
+
+for sid in HCR_SUBJECTS:
+    print(f"=== {sid} ===", flush=True)
+    s = load_subject(sid)
+    vol, xy_um, z_um, channels = load_hcr_combined(s, level=4)
+    pts = hcr_px_to_um(s.hcr_centroids[["z_px","y_px","x_px"]].values, s)[:, [2,1,0]]
+    for sigma in SIGMAS:
+        res = run_with_zsmooth(vol, z_um, xy_um, sigma)
+        c, a, o = eval_surf(res.surface, pts)
+        print(f"  sigma={sigma:3d}: c={c:6.1f} lift={res.clamp_lift_um:5.1f} above={a:.4f} onset={o}", flush=True)

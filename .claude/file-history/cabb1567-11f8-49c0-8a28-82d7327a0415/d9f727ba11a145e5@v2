@@ -1,0 +1,93 @@
+"""Sweep clamp_within_tile_q on all 6 HCR + all 6 CZ subjects."""
+from __future__ import annotations
+import sys, importlib.util, os
+from pathlib import Path
+import numpy as np
+os.environ["PYTHONUNBUFFERED"] = "1"
+
+sys.path.insert(0, "/root/capsule/code/dev_code")
+_spec = importlib.util.spec_from_file_location(
+    "img_surface_l2",
+    str(Path("/root/capsule/code/dev_code") / "03_image_based_surface.py"))
+_mod = importlib.util.module_from_spec(_spec); sys.modules["img_surface_l2"] = _mod
+_spec.loader.exec_module(_mod)
+
+from benchmark_analysis import load_hcr_combined
+from benchmark_data_loader import hcr_px_to_um, cz_px_to_um, load_subject
+import tifffile
+
+
+def _load_cz_image(s):
+    cz_tifs = list(s.coreg_dir.glob("*reg-dim-swapped.ome.tif"))
+    if not cz_tifs:
+        cz_tifs = list(s.coreg_dir.glob("*zstack.tif"))
+    if not cz_tifs:
+        return None
+    img = tifffile.imread(str(cz_tifs[0]))
+    while img.ndim > 3 and img.shape[0] == 1:
+        img = img[0]
+    return img.astype(np.float32, copy=False)
+
+
+def sz(s, x, y):
+    return (s["a"]*x + s["b"]*y + s["c"]
+            + s.get("p",0)*x*x + s.get("q",0)*x*y + s.get("r",0)*y*y)
+
+
+def eval_surf(s, pts):
+    zs = sz(s, pts[:,0], pts[:,1])
+    depth = pts[:,2] - zs
+    n = len(depth)
+    above = (depth < 0).sum() / n
+    edges = np.arange(-200, 404, 5.0)
+    h, _ = np.histogram(depth, bins=edges)
+    density = h / (5.0 * max(n, 1))
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    bulk = density[(centers >= 50) & (centers <= 200)].mean()
+    onset = np.nan
+    if bulk > 0:
+        for c, d in zip(centers, density):
+            if c >= 0 and d >= 0.5 * bulk:
+                onset = float(c); break
+    return above, onset
+
+
+HCR_SUBJECTS = ["755252", "767018", "767022", "782149", "788406", "790322"]
+CZ_SUBJECTS = ["755252", "767018", "767022", "782149", "788406", "790322"]
+
+QS = [0.10, 0.30, 0.50, 0.70, 0.90]
+
+print("=== HCR ===")
+print(f"{'subject':<10} " + " ".join([f"q={q:.2f}: above/onset   " for q in QS]))
+for sid in HCR_SUBJECTS:
+    s = load_subject(sid)
+    vol, xy_um, z_um, channels = load_hcr_combined(s, level=4)
+    pts = hcr_px_to_um(s.hcr_centroids[["z_px","y_px","x_px"]].values, s)[:, [2,1,0]]
+    row = f"{sid:<10} "
+    for q in QS:
+        res = _mod.estimate_surface_and_l2_image_based(
+            vol, z_um, xy_um, clamp_within_tile_q=q)
+        a, o = eval_surf(res.surface, pts)
+        row += f"{a:.4f}/{o:>5.1f}  "
+    print(row, flush=True)
+
+print()
+print("=== CZ ===")
+print(f"{'subject':<10} " + " ".join([f"q={q:.2f}: above/onset   " for q in QS]))
+for sid in CZ_SUBJECTS:
+    try:
+        s = load_subject(sid)
+        vol = _load_cz_image(s)
+        if vol is None:
+            print(f"{sid}: no CZ image", flush=True); continue
+        xy_um, z_um = s.cz_xy_um, s.cz_z_um
+        pts = cz_px_to_um(s.cz_centroids[["z_px","y_px","x_px"]].values, s)[:, [2,1,0]]
+    except Exception as e:
+        print(f"{sid}: skipped ({e})", flush=True); continue
+    row = f"{sid:<10} "
+    for q in QS:
+        res = _mod.estimate_surface_and_l2_image_based(
+            vol, z_um, xy_um, clamp_within_tile_q=q)
+        a, o = eval_surf(res.surface, pts)
+        row += f"{a:.4f}/{o:>5.1f}  "
+    print(row, flush=True)

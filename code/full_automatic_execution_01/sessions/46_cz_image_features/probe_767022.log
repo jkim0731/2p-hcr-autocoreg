@@ -1,0 +1,43 @@
+
+=== 767022 ===
+  CZ bbox voxels (hz,hy,hx)=(2,4,4); n=926
+  CZ image features in 0.9s  nan rows=0/926
+  HCR bbox voxels (hz,hy,hx)=(2,3,3); n=14239 level=2 xy_um=0.987
+  HCR image features in 47.1s  nan rows=0/14239
+  P1 putatives in 38.1s  K=5  n_cz=926 n_hcr=14239
+  GT in top-5: 191/793
+subject       feature      auc
+ 767022       dist_um 0.448953
+ 767022           cos 0.493455
+ 767022       cz_mean 0.500000
+ 767022        cz_std 0.500000
+ 767022        cz_p90 0.500000
+ 767022        cz_lap 0.500000
+ 767022      hcr_mean 0.721204
+ 767022       hcr_std 0.735602
+ 767022       hcr_p90 0.726440
+ 767022       hcr_lap 0.733639
+ 767022 abs_diff_mean 0.284031
+ 767022  abs_diff_std 0.277487
+ 767022  abs_diff_p90 0.274869
+ 767022  abs_diff_lap 0.267670
+  baseline (z_dist+z_cos)                       AUC=0.565  n=955
+  full (baseline + image feats)                 AUC=0.758  n=955
+
+=== SUMMARY — within-CZ per-feature AUC ===
+subject          767022
+feature                
+abs_diff_lap   0.267670
+abs_diff_mean  0.284031
+abs_diff_p90   0.274869
+abs_diff_std   0.277487
+cos            0.493455
+cz_lap         0.500000
+cz_mean        0.500000
+cz_p90         0.500000
+cz_std         0.500000
+dist_um        0.448953
+hcr_lap        0.733639
+hcr_mean       0.721204
+hcr_p90        0.726440
+hcr_std        0.735602

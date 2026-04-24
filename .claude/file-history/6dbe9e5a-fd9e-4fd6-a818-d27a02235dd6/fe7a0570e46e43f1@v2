@@ -1,0 +1,167 @@
+"""Adaptive per-column thickness: use thick=10 unless it disagrees with thick=40.
+
+For each column:
+- compute top_thin (thick=10) and top_thick (thick=40)
+- if only one valid: use it
+- if both valid:
+    - if top_thick - top_thin > GAP (e.g., 40µm): thin picked a thin AF band,
+      use top_thick instead
+    - else: both agree, use top_thin (preserves clean-subject pia edge)
+"""
+from __future__ import annotations
+import sys, importlib.util, os
+from pathlib import Path
+import numpy as np
+os.environ["PYTHONUNBUFFERED"] = "1"
+
+sys.path.insert(0, "/root/capsule/code/dev_code")
+_spec = importlib.util.spec_from_file_location(
+    "img_surface_l2",
+    str(Path("/root/capsule/code/dev_code") / "03_image_based_surface.py"))
+_mod = importlib.util.module_from_spec(_spec); sys.modules["img_surface_l2"] = _mod
+_spec.loader.exec_module(_mod)
+
+from benchmark_analysis import load_hcr_combined
+from benchmark_data_loader import hcr_px_to_um, load_subject
+
+
+def sz(s, x, y):
+    return (s["a"]*x + s["b"]*y + s["c"]
+            + s.get("p",0)*x*x + s.get("q",0)*x*y + s.get("r",0)*y*y)
+
+
+def eval_surf(s, pts):
+    if s is None: return np.nan, np.nan, np.nan
+    zs = sz(s, pts[:,0], pts[:,1])
+    depth = pts[:,2] - zs
+    n = len(depth)
+    above = (depth < 0).sum() / n
+    edges = np.arange(-200, 404, 5.0)
+    h, _ = np.histogram(depth, bins=edges)
+    density = h / (5.0 * max(n, 1))
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    bulk = density[(centers >= 50) & (centers <= 200)].mean()
+    onset = np.nan
+    if bulk > 0:
+        for c, d in zip(centers, density):
+            if c >= 0 and d >= 0.5 * bulk:
+                onset = float(c); break
+    return s["c"], above, onset
+
+
+HCR_SUBJECTS = ["755252", "767018", "767022", "782149", "788406", "790322"]
+
+
+def run_adaptive(vol, z_um, xy_um, gap_um=40.0, thin=10.0, thick=40.0, tq=0.85):
+    """Manually reproduce the pipeline with adaptive per-column top."""
+    # Stage 1
+    bg_mean, bg_sigma, dyn_hint = _mod._global_top_baseline(
+        vol, n_top_planes=3, max_pad_frac=0.95)
+    thr_noise = bg_mean + 4.0 * bg_sigma
+    thr_rel = bg_mean + 0.20 * dyn_hint
+    surf_thr = max(thr_noise, thr_rel)
+
+    sx = max(1, int(round(10.0 / xy_um)))
+    vol_sub = vol[:, ::sx, ::sx].astype(np.float32, copy=False)
+    _, Ys, Xs = vol_sub.shape
+    xs_col = np.arange(Xs, dtype=np.float32) * sx * xy_um
+    ys_col = np.arange(Ys, dtype=np.float32) * sx * xy_um
+    xx, yy = np.meshgrid(xs_col, ys_col)
+
+    # Stage 2 — use THICK anchor so it skips AF bands and locks on pia
+    anchor_top, _, _ = _mod._per_column_top_in_band(
+        vol_sub, z_um, None, None,
+        relative_margin=0.05, min_signal_abs_frac=0.20, min_thick_um=thick)
+    mask_a = np.isfinite(anchor_top)
+    if mask_a.sum() < 50:
+        anchor = {"a": 0.0, "b": 0.0, "c": float(vol.shape[0]) * z_um * 0.5,
+                  "p": 0.0, "q": 0.0, "r": 0.0, "tilt_deg": 0.0, "n_points": 0}
+    else:
+        za = anchor_top[mask_a].ravel().astype(np.float64)
+        med_z = float(np.median(za))
+        mad_z = float(np.median(np.abs(za - med_z))) + 1e-6
+        keep = np.abs(za - med_z) <= 6.0 * 1.4826 * mad_z
+        xa = xx[mask_a].ravel().astype(np.float64)[keep]
+        ya = yy[mask_a].ravel().astype(np.float64)[keep]
+        zat = za[keep]
+        anchor = _mod._robust_plane_fit(xa, ya, zat)
+        if abs(anchor["tilt_deg"]) > 25.0:
+            anchor = {"a": 0.0, "b": 0.0, "c": float(np.median(zat)),
+                      "p": 0.0, "q": 0.0, "r": 0.0, "tilt_deg": 0.0,
+                      "n_points": int(len(zat))}
+
+    # Stage 3 — TWO passes (thin + thick) within anchor-band; then adaptive merge
+    anchor_zz = _mod._surface_z(anchor, xx, yy).astype(np.float32)
+    z_low = anchor_zz - 150.0
+    z_high = anchor_zz + 150.0
+
+    top_thin, _, _ = _mod._per_column_top_in_band(
+        vol_sub, z_um, z_low, z_high,
+        relative_margin=0.25, min_signal_abs_frac=0.20, min_thick_um=thin)
+    top_thick, _, _ = _mod._per_column_top_in_band(
+        vol_sub, z_um, z_low, z_high,
+        relative_margin=0.25, min_signal_abs_frac=0.20, min_thick_um=thick)
+
+    # Adaptive merge
+    top = np.full_like(top_thin, np.nan)
+    m_both = np.isfinite(top_thin) & np.isfinite(top_thick)
+    m_thin_only = np.isfinite(top_thin) & ~np.isfinite(top_thick)
+    m_thick_only = ~np.isfinite(top_thin) & np.isfinite(top_thick)
+    # Both valid → use thin if agrees; else use thick
+    if m_both.any():
+        diff = top_thick[m_both] - top_thin[m_both]
+        use_thick = diff > gap_um
+        both_vals = np.where(use_thick, top_thick[m_both], top_thin[m_both])
+        top[m_both] = both_vals
+    top[m_thin_only] = top_thin[m_thin_only]
+    top[m_thick_only] = top_thick[m_thick_only]
+
+    mask = np.isfinite(top)
+    n_top = int(mask.sum())
+    if n_top < 50:
+        return None, 0, anchor
+
+    xs_fit = xx[mask].ravel().astype(np.float64)
+    ys_fit = yy[mask].ravel().astype(np.float64)
+    zs_fit = top[mask].ravel().astype(np.float64)
+
+    # Stage 4
+    surface = _mod._quadratic_quantile_fit(xs_fit, ys_fit, zs_fit,
+                                           target_quantile=tq)
+
+    # Stage 5
+    surface, lift, n_ct = _mod._clamp_to_column_tops(
+        surface, xs_fit, ys_fit, zs_fit,
+        tile_um=120.0, within_tile_q=0.10,
+        safety_offset_um=3.0, min_per_tile=5,
+        lift_q=1.0, lift_iqr_k=1.5)
+    surface["clamp_lift_um"] = float(lift)
+
+    # Count switch stats
+    n_used_thick = int(np.sum((top_thick - top_thin > gap_um) & m_both)) if m_both.any() else 0
+    n_both = int(m_both.sum())
+    return surface, n_used_thick, n_both
+
+
+for sid in HCR_SUBJECTS:
+    print(f"=== {sid} ===", flush=True)
+    s = load_subject(sid)
+    vol, xy_um, z_um, channels = load_hcr_combined(s, level=4)
+    pts = hcr_px_to_um(s.hcr_centroids[["z_px","y_px","x_px"]].values, s)[:, [2,1,0]]
+
+    for (gap, thin, thick, tq) in [
+        (40, 10, 40, 0.85),
+        (50, 10, 40, 0.85),
+        (30, 10, 40, 0.85),
+        (40, 10, 60, 0.85),
+        (40, 10, 40, 0.70),
+    ]:
+        surf, n_switch, n_both = run_adaptive(
+            vol, z_um, xy_um, gap_um=gap, thin=thin, thick=thick, tq=tq)
+        c, a, o = eval_surf(surf, pts)
+        pct_switch = 100.0 * n_switch / max(n_both, 1)
+        lift = surf.get("clamp_lift_um", 0) if surf else 0
+        print(f"  gap={gap} thin={thin} thick={thick} tq={tq}: "
+              f"c={c:6.1f} lift={lift:5.1f} above={a:.4f} onset={o} "
+              f"(switched {n_switch}/{n_both}={pct_switch:.1f}%)",
+              flush=True)

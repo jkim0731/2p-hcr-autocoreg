@@ -1,0 +1,9 @@
+{
+  "id": "1",
+  "subject": "Phase 1: Explore G1 codebase context",
+  "description": "Read Grand Plan + survey existing landmarks/coreg-table schema, viewer libs, image-loading conventions, session structure",
+  "activeForm": "Exploring G1 codebase context",
+  "status": "completed",
+  "blocks": [],
+  "blockedBy": []
+}

@@ -1,0 +1,9 @@
+{
+  "id": "42",
+  "subject": "Update CZ analysis notebook with failure + 3 experiments",
+  "description": "Rewrite iter07_cz_analysis.ipynb to tell the full story: (1) original TRANS_FRAC=0.5 port, (2) user-flagged failure, (3) diagnosis (HCR cliff vs CZ ramp), (4) three experiments (noise-anchored, bg-sub, low-frac) with figures, (5) recommendation + remaining gap.",
+  "activeForm": "Updating CZ analysis notebook",
+  "status": "in_progress",
+  "blocks": [],
+  "blockedBy": []
+}

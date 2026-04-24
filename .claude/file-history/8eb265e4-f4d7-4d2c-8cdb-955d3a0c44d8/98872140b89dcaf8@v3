@@ -1,0 +1,5 @@
+- [HCR surface fitter default](surface_fitter_choice.md) — `analyze_subject` now defaults to `quantile_ceiling` (N22); treat the returned surface as a feature, not a diagnostic.
+- [03 image-based surface + L2](project_03_image_based_surface.md) — image-only pia, v2.1 single-fit + v2.2 `estimate_pia_surface_image_autoselect` candidate-bank selection; 6/6 HCR subjects match N22 onset ≤ 2.5 µm.
+- [Threshold methods must be distribution-driven](feedback_threshold_generalisability.md) — never default to a fixed percentile/fraction; coreg table is validation-only.
+- [Subgoal 04/R1 01+02 GFP+ thresholds landed](project_subgoal_01_02_gfp_thresholds.md) — v2.2 defaults: `peakgauss3_density_p0.1` (spot) and `peakgauss3_mean_bg_p1` (intensity).
+- [Session 07 ICP scales REVOKED](project_07_anisotropic_icp_scales.md) — ICP pass was GT-tuned; depth-density shows HCR GFP+ is subject/depth-biased; centroid-based scale is blocked until GFP+ threshold is re-characterised.

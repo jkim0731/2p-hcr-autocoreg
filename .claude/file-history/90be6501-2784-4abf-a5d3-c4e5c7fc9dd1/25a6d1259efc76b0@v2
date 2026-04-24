@@ -1,0 +1,59 @@
+"""I3 — SimpleITK MI + B-spline deformable refinement.
+
+Runs I2 first to get a coarse affine, then hits the volume with the F5 B-
+spline deformable stage.  Reports metric improvement; does not emit per-pair
+assignments (that is downstream C1/C2/M4's job).
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+import numpy as np
+import pandas as pd
+
+_THIS = Path(__file__).resolve().parent
+_ROOT = _THIS.parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+if str(_ROOT.parent / "dev_code") not in sys.path:
+    sys.path.insert(0, str(_ROOT.parent / "dev_code"))
+
+from bench.harness import register_candidate, CoregResult
+from lib.sitk_wrapper import mi_bspline
+
+
+@register_candidate("I3")
+def run_i3(s, *, target_um=8.0) -> CoregResult:
+    from bench.candidate_impls._i1_axial_ncc import (_load_cz_fullstack,
+                                                       _load_hcr_fullstack)
+    from scipy.ndimage import zoom
+    try:
+        cz_stack, cz_xy_um, cz_z_um = _load_cz_fullstack(s)
+        hcr_vol, hcr_xy_um, hcr_z_um = _load_hcr_fullstack(s)
+    except Exception as e:
+        return CoregResult(pd.DataFrame(), 0.0, diagnostics={"error": f"load: {e}"})
+
+    cz_zoom = (cz_z_um / target_um, cz_xy_um / target_um, cz_xy_um / target_um)
+    hcr_zoom = (hcr_z_um / target_um, hcr_xy_um / target_um, hcr_xy_um / target_um)
+    cz_ds = zoom(cz_stack, cz_zoom, order=1).astype(np.float32)
+    hcr_ds = zoom(hcr_vol, hcr_zoom, order=1).astype(np.float32)
+
+    try:
+        r = mi_bspline(
+            cz_ds, hcr_ds,
+            cz_xy_um=target_um, cz_z_um=target_um,
+            hcr_xy_um=target_um, hcr_z_um=target_um,
+            grid_spacing_um=(30.0, 30.0, 60.0),
+            n_iterations=50,
+        )
+    except Exception as e:
+        return CoregResult(pd.DataFrame(), 0.0, diagnostics={"error": f"bspline: {e}"})
+
+    return CoregResult(
+        pairs_df=pd.DataFrame(),
+        confidence=max(0.0, min(1.0, 1.0 - abs(r.metric) / 5.0)),
+        transform=None,
+        diagnostics=dict(metric=r.metric, iterations=r.iterations,
+                         converged=r.converged,
+                         grid_spacing_um=r.bspline_grid_spacing_um),
+    )

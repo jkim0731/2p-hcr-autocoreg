@@ -1,0 +1,340 @@
+# Session 07e — sxy from xy-kNN + sz from z-variance trace, iterated
+
+## Context
+
+Four prior sessions each closed negative on the CZ→HCR `(sxy, sz)`
+scale recovery:
+
+| Session | Method                                   | Result                       |
+|---------|------------------------------------------|------------------------------|
+| 06      | centroid k-NN ratio                      | 0/6 — GFP+ depth bias        |
+| 07      | anisotropic ICP                          | GT-tuned, revoked            |
+| 07b     | strict-GMM GFP+ + per-axis k-NN (M1)     | M1 sz always −70 %           |
+| 07c     | BIC-GFP+ + GT-mapped density gate        | CV 0.21–0.38; 0/6 pass       |
+| 07d     | image-level 1D intensity-profile NCC     | best 2/6 (488 + p10 base)    |
+
+Two separate ceilings are now well-characterised:
+
+1. **Depth-dependent detection fraction `f(d)`** (from 07c). Mean ≈
+   1 over the overlap, but per-bin CV 0.21–0.38. Kills any *count*-
+   based z statistic (k-NN, density).
+2. **GCaMP-vs-488 stain-shape mismatch** (from 07d). 1D intensity
+   profile NCC picks the sz that aligns *shapes*, not physical
+   tissue expansion.
+
+**The 07e hypothesis.** A scale statistic that is a **position**
+(not count) statistic on centroids — specifically the
+*sub-window z-variance of centroid positions* — escapes both
+ceilings:
+
+- Invariant to `f(d)`: detection bias is a random subsampling
+  within a narrow slab → doesn't shift the mean z of the retained
+  cells much.
+- Modality-agnostic: a cell at (x, y, z) is at (x, y, z) whether
+  labelled by GCaMP or HCR; there's no stain shape to mismatch.
+
+Combined with an xy-kNN seed for `sxy`, and detection-fraction-
+derived iteration to tighten both, this gives a clean estimator
+that uses the cell-position information we already trust (centroid
+localisation) and discards the information we cannot trust
+(GFP+ counts at fixed depth, intensity depth profile).
+
+## Stopping condition (primary / extended)
+
+- **Primary (probe):** `|rel_err_sxy| ≤ 5 %` AND `|rel_err_sz| ≤ 5 %`
+  on **788406 and 790322**. These are the two failing-but-close
+  subjects from 07c and 07d: 790322 was 7 % over the 07c CV-0.20
+  bar and clean on 07d 488-only (−3.3 %); 788406 had the cleanest
+  M1 sxy error (≈ +8 %) in 07c and passes the HCR z-extent check.
+- **Extended (if primary passes):** run on 755252, 767018, 767022
+  too. Target 5/5 (excluding 782149).
+- **782149 skipped.** Structural HCR z-truncation: HCR observation
+  depth 1004 µm vs GT-stretched CZ depth 1318 µm. No centroid-
+  spread method can recover cells that don't exist in HCR. Flag as
+  known blocker; do not let it pull the stopping bar.
+- **If 788406 or 790322 fails:** do not chain into a different
+  variant in this session. Log the failure mode and stop.
+
+## Stopping condition — diagnostic
+
+GT comparison uses `fit_anisotropic_similarity(landmark_pairs_um(s,
+active_only=True))` — scoring only; no leak into seed / variance
+fit / iteration.
+
+## Design
+
+### Step 0 — Inputs and frame
+
+Per subject:
+
+- `s = load_subject(sid)` — v2.2 thresholds for GFP+.
+- `r1_fit = coarse_align_revised(s)` then wipe scales to identity
+  → rigid transform only. Apply to CZ centroids → CZ in HCR µm.
+- HCR pia `(a, b, c)` from `analyze_subject(s)['hcr_surface']`
+  (iter07, via default `quantile_ceiling` → iter08 after promotion).
+- HCR bottom `(a_b, b_b, c_b)` from
+  `get_hcr_bottom_surface_iter08(s)`.
+- CZ bottom `(a_c, b_c, c_c)` from `get_cz_surface_iter08(s)` (or
+  equivalent for the CZ tissue lower bound).
+- HCR-GFP+: `s.hcr_gfp_df` post v2.2 threshold. Alternative track:
+  BIC-intersection GFP+ from `dev_code/07b_gfp_intersection_threshold`
+  (ablation).
+
+Depth axis (common frame):
+```
+depth(x, y, z) = z - (a·x + b·y + c)    # pia-relative in HCR µm
+```
+Applied identically to (CZ-after-R1) and (HCR-GFP+). Both clouds
+live in the same depth coordinate after R1.
+
+### Step 1 — Initial sxy from xy k-NN (depth-matched seed)
+
+1. Restrict both clouds to the xy AABB overlap.
+2. Restrict both to the pia-relative depth band
+   `d ∈ [d_skin, d_match]` where
+   - `d_skin = 100 µm` (skip the immediate pia sub-cortical noise);
+   - `d_match = min(CZ-native-depth-range, HCR-depth-range-so-far)`.
+   `d_match` depends on sz (which we don't yet have), so use
+   `sxy_guess = 1.7` (historical prior) and `sz_guess = 2.5` to
+   crop CZ at `CZ_native_depth_bottom / sz_guess` mapped into HCR
+   µm. Refined after Step 4.
+3. `knn_xy2d_cloud` = median k-NN distance (k=5) on xy-only
+   coordinates in the restricted set.
+4. `sxy_0 = knn_xy2d_HCR_GFP+ / knn_xy2d_CZ_mapped`.
+5. Sanity: expect ±10 % of 07c's M1 sxy. If off by more, abort and
+   inspect.
+
+### Step 2 — z-variance trace (the new thing)
+
+Compute `σ_z(d)` on each cloud as a sliding-window standard deviation
+of z-coordinates of cells whose xy centroid lies in the matched xy
+AABB and whose pia-depth sits in a window around `d`.
+
+Window parameters (sweep as ablation; primary choice
+pre-registered):
+
+- `window_depth_um = 100` primary, sweep `{50, 100, 150, 200}`.
+- No xy sub-window (full AABB) — xy-variance itself is not used for
+  sxy; xy selection is only for spatial inclusion.
+- `stride_um = 25`.
+
+For each window centred at `d_c`:
+```
+cells_in_window = {c : |depth(c) - d_c| <= window_depth_um / 2
+                   AND xy(c) in AABB_overlap}
+σ_z(d_c) = std([z_c for c in cells_in_window])
+n_z(d_c) = |cells_in_window|
+```
+
+Compute separately on:
+- `σ_z_CZ(d_c)` from CZ-after-R1 (all CZ centroids — GFP+ filter
+  not applied; CZ is the "truth" population).
+- `σ_z_HCR(d_c)` from HCR-GFP+ (v2.2 thresholded).
+
+Mask to informative bins: `n_z(d_c) >= n_min` with `n_min = 50`.
+
+### Step 3 — sz from z-variance profile match
+
+Under pure z-stretch:
+```
+σ_z_HCR(d) = sz · σ_z_CZ( (d - d_anchor) / sz + d_anchor )
+```
+where `d_anchor` is the pia-depth of the R1 translation vector
+(following 07d). A candidate `sz` stretches both the depth axis and
+the σ_z magnitude by the same factor.
+
+For each `sz` in
+`sz_grid = np.arange(1.5, 4.5, 0.02)`:
+1. Map each CZ depth `d_c` → `d_c' = sz · (d_c - d_anchor) + d_anchor`.
+2. Map each CZ σ_z value: `σ_z_CZ' = sz · σ_z_CZ`.
+3. Interpolate `σ_z_CZ'(·)` onto the HCR `d_c` grid.
+4. Compute score on the overlap where both profiles are in their
+   informative masks. Primary score: **Pearson NCC between
+   `σ_z_HCR(d)` and `σ_z_CZ'(d)`**. Secondary (for ablation):
+   weighted L2 with weights `∝ min(n_z_HCR(d), n_z_CZ(d))`.
+
+`sz_1 = argmax_sz NCC(sz)`. Record the full curve, best NCC, overlap
+range, and n-bin count in the overlap.
+
+### Step 4 — Iterate
+
+With `sz_1` and `sxy_0`:
+
+1. Re-crop both clouds to the **mutually observable** depth band
+   under the scale estimate:
+   - CZ: `d ∈ [d_skin_CZ, d_bottom_CZ]` (native).
+   - HCR: map CZ-depth band through sz: `[sz · d_skin_CZ,
+     min(sz · d_bottom_CZ, d_bottom_HCR)]`. Intersect with
+     HCR-observed slab.
+2. Re-compute matched-depth xy k-NN, this time only on cells in
+   the mutually observable band → `sxy_1`.
+3. Re-compute σ_z profiles on the new bands → `sz_2`.
+4. Repeat until `|Δsxy| < 0.01` and `|Δsz| < 0.01` or 5 iter.
+
+If iteration oscillates (sxy and sz flip around the fixed point):
+damp by averaging with previous iterate.
+
+### Step 5 — Detection-fraction diagnostic (NOT in estimator)
+
+After convergence:
+```
+ρ_CZ(d_c)      = n_z_CZ(d_c)     / (AABB_area · window_depth_um)
+ρ_HCR_GFP(d_c) = n_z_HCR(d_c)    / (AABB_area · window_depth_um)
+f(d) = ρ_HCR_GFP(d) / ρ_CZ(d / sz_final)    # d in HCR µm
+```
+Report:
+- integrated mean `f̄`;
+- per-bin CV over informative bins;
+- compare to 07c's CV 0.21–0.38 band.
+
+Sanity: `f̄ ≈ 1 ± 0.2`, `CV_f` close to 07c's values.
+
+### Step 6 — GT comparison (scoring only)
+
+```
+sxy_gt, sz_gt, _ = fit_anisotropic_similarity(
+    landmark_pairs_um(s, active_only=True)
+)
+err_sxy = (sxy_est - sxy_gt) / sxy_gt
+err_sz  = (sz_est  - sz_gt ) / sz_gt
+pass5   = abs(err_sxy) <= 0.05 AND abs(err_sz) <= 0.05
+```
+
+Grep the driver to confirm `landmark_pairs_um|fit_anisotropic`
+appears only in this scoring block.
+
+## Self-critique (weakest assumptions)
+
+1. **Sub-window z-variance carries scale signal.** If cells are
+   ~uniform within each window, `σ_z → window_depth_um / √12`
+   regardless of `sz`. Then the profile is a flat constant and
+   stretching it any amount still gives a flat line — NCC is
+   ill-defined. **Mitigation:** window sweep; pick the size that
+   shows maximum `var(σ_z(d_c))` across depth as a separate
+   diagnostic plot. If no window size shows depth-varying σ_z,
+   this method is falsified before scoring.
+
+2. **f(d) invariance of σ_z.** `f(d)` is claimed to subsample
+   uniformly within each window. If `f(d)` has sub-window
+   gradient (e.g., drops steeply through a window straddling a
+   layer boundary), σ_z shifts too. Diagnostic: compute σ_z on
+   CZ-mapped-cells subsampled by HCR's per-cell retention pattern
+   and compare to σ_z on all CZ-mapped cells. Divergence > 5 %
+   would weaken the invariance claim.
+
+3. **sxy seed error propagates.** 07c M1 sxy was 7–17 %. A 10 %
+   sxy error shifts the xy AABB overlap by ~10 % in area, which
+   changes `ρ_CZ(d_c)` by ~10 %, which bends the `f(d)`
+   estimate. But `f(d)` isn't in the sz estimator (step 3 does
+   not use f(d)) — it's only a post-hoc diagnostic. So sxy seed
+   error affects only which cells are in the AABB, not the σ_z
+   profile shape. Small effect expected; bound it in ablation.
+
+4. **Anchor depth.** Using `d_anchor = pia-depth of R1 translation`
+   may not be the physically correct expansion centre. Ablation:
+   run with `d_anchor ∈ {0, pia-depth R1 trans, mean CZ depth}`
+   and check sensitivity. If > 5 % sz drift, this assumption is
+   load-bearing and the method needs a principled anchor choice
+   (e.g., the fixed-point of R1 restricted to the z axis).
+
+5. **Iteration may not converge.** sxy and sz are partially
+   coupled through the AABB / depth-band crop. Damping (avg with
+   prior) and a max-iter cap prevent blow-up. If oscillating
+   on a specific subject, log and run both fixed-point candidates
+   through GT to see if either is right.
+
+6. **Pre-registered window sweep can still leak.** We choose
+   window size by `max var(σ_z)`, which is a data-driven choice
+   that *could* correlate with GT. Mitigation: choose window
+   size on **788406 only**, then freeze it and score 790322
+   with the frozen choice. If 790322 passes, generalise to the
+   remaining 3 subjects without re-tuning.
+
+## Verification
+
+1. **Synthetic control.** Uniform random cloud inside a CZ-shaped
+   volume, stretched by `(1.77, 1.77, 2.82)`, subsampled by
+   `f(d) = 1 + 0.3·cos(π·d / 500)`. Run estimator. Expected:
+   `sxy_err < 2 %`, `sz_err < 3 %`. If worse, the algorithm has
+   a bug independent of real-data ceilings.
+
+2. **788406 primary.** Full run with window_depth_um = 100.
+   Report `(sxy_est, sz_est, err_sxy, err_sz, NCC_best,
+   iter_count, CV_f)`.
+
+3. **Window ablation on 788406.** `{50, 100, 150, 200}`.
+   Pick the size that maximises `var(σ_z(d))` (the diagnostic,
+   not GT error). Freeze.
+
+4. **790322 confirmation with frozen window.** Report same
+   metrics. Both subjects must pass the 5 % bar.
+
+5. **Extended run (if both pass).** 755252, 767018, 767022 with
+   the frozen window. Expected: 3/3 or close.
+
+6. **Ablation: σ_z → σ_xy (wrong).** Run with xy-variance inside
+   the depth window as the sz estimator. Expected failure (FOV
+   contamination) — this confirms the xy/z asymmetry we
+   articulated.
+
+7. **Ablation: σ_z → local density (07c-equivalent).** Run with
+   `n_z(d_c) / volume` instead of `σ_z(d_c)`. Expected failure
+   (this is 07c M1 sz, −70 %) — confirms that the variance
+   statistic is doing the work, not the sliding-window framework.
+
+8. **No-iter baseline.** Run with only Step 1–3 (no iteration).
+   Expected slight degradation vs iterated; quantifies iteration
+   gain.
+
+## Files
+
+```
+dev_code/07e_sz_from_zvar_profile.py    # estimator + driver
+dev_code/07e_probe_one_subject.py       # single-subject probe
+sessions/07e_sz_from_zvar_profile/
+    plan.md                             # this file
+    log.md                              # results + verdict
+    results.json                        # machine-readable
+    figures/
+        zvar_profile_<sid>.png          # σ_z curves + aligned
+        xy_knn_seed_<sid>.png           # xy k-NN per depth band
+        iteration_trace_<sid>.png       # sxy/sz over iter
+        scales_vs_gt.png                # per-subject bar
+        ablation_window_size.png        # σ_z var vs window size
+        f_of_d_<sid>.png                # detection-fraction diag
+    _build_notebook.py
+    notebook.ipynb
+```
+
+## Reused infrastructure (read-only)
+
+- `benchmark_data_loader.load_subject`.
+- `benchmark_analysis.analyze_subject`, `fit_anisotropic_similarity`,
+  `landmark_pairs_um(active_only=True)` — GT only.
+- `r1_revised.coarse_align_revised`, `apply_coarse_affine`.
+- `dev_code/surfaces_iter08.get_hcr_bottom_surface_iter08` (cached).
+- `dev_code/local_distance_scale.estimate_local_distance_scale` —
+  for xy k-NN primitives; reuse `_median_knn_axis`-style helper.
+- `dev_code/07b_gfp_intersection_threshold.fit_gmm_sweep` — for
+  the BIC-GFP+ ablation track.
+
+No GT in the estimator path. Final `grep` check before writing
+`results.json`.
+
+## Next-candidate fallbacks (if 07e fails)
+
+1. **2D `σ_z(d, θ)` with lateral sub-tiling.** If 1D `σ_z(d)`
+   washes out sub-layer structure, tile the xy plane into 3×3 or
+   5×5 sub-tiles within the AABB and compute `σ_z(d, tile)` as a
+   2D surface. Match by 2D NCC. Encodes columnar organisation.
+2. **Cell-count conservation for sz, given sxy.** `sz_est =
+   N_ratio / sxy_est²` using only the well-constrained `sxy`
+   from Step 1 and total cell count in the overlap. Bypasses σ_z
+   entirely. Works if detection fraction ≈ 1 globally (confirmed
+   in 07c), fails if not.
+3. **Layer-boundary depth matching.** Segment cortical layers
+   independently in CZ and HCR; match layer-boundary depths in
+   µm. Side-steps both detection bias and stain mismatch but
+   requires a robust layer segmenter — its own project.
+
+Each of these is a separate session. Not part of 07e's scope.

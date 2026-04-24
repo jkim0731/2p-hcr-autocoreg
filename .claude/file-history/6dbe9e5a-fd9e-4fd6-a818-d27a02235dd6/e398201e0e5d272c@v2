@@ -1,0 +1,132 @@
+"""Test deep-quantile anchor: fit anchor plane only on tops where z >= pctile.
+
+Hypothesis: for AF-contaminated subjects (755252), the median of tops is
+pulled shallow by AF. Fitting the anchor plane only on the DEEPER HALF
+(z >= p50) bypasses AF and gets anchor near real pia. For clean subjects,
+this pushes anchor deeper but band_um=150 is wide enough to still cover pia.
+"""
+from __future__ import annotations
+import sys, importlib.util, os
+from pathlib import Path
+import numpy as np
+os.environ["PYTHONUNBUFFERED"] = "1"
+
+sys.path.insert(0, "/root/capsule/code/dev_code")
+_spec = importlib.util.spec_from_file_location(
+    "img_surface_l2",
+    str(Path("/root/capsule/code/dev_code") / "03_image_based_surface.py"))
+_mod = importlib.util.module_from_spec(_spec); sys.modules["img_surface_l2"] = _mod
+_spec.loader.exec_module(_mod)
+
+from benchmark_analysis import load_hcr_combined
+from benchmark_data_loader import hcr_px_to_um, load_subject
+
+
+def sz(s, x, y):
+    return s["a"]*x + s["b"]*y + s["c"]
+def eval_surf(s, pts):
+    if s is None: return np.nan, np.nan, np.nan
+    zs = sz(s, pts[:,0], pts[:,1])
+    depth = pts[:,2] - zs
+    n = len(depth); above = (depth < 0).sum() / n
+    edges = np.arange(-200, 404, 5.0)
+    h, _ = np.histogram(depth, bins=edges)
+    density = h / (5.0 * max(n, 1))
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    bulk = density[(centers >= 50) & (centers <= 200)].mean()
+    onset = np.nan
+    if bulk > 0:
+        for c, d in zip(centers, density):
+            if c >= 0 and d >= 0.5 * bulk:
+                onset = float(c); break
+    return s["c"], above, onset
+
+
+def fit_with_anchor_pctile(vol_sub, z_um, xy_um, pctile, pts, **kw):
+    """Override anchor by custom pctile-of-tops trim before plane fit."""
+    sx = max(1, int(round(10.0 / xy_um)))
+    _, Ys, Xs = vol_sub.shape
+    xs_col = np.arange(Xs, dtype=np.float32) * sx * xy_um
+    ys_col = np.arange(Ys, dtype=np.float32) * sx * xy_um
+    xx, yy = np.meshgrid(xs_col, ys_col)
+
+    a_top, _, _ = _mod._per_column_top_in_band(
+        vol_sub, z_um, None, None, relative_margin=0.05,
+        min_signal_abs_frac=0.20, min_thick_um=15.0)
+    mask_a = np.isfinite(a_top)
+    xa = xx[mask_a].ravel().astype(np.float64)
+    ya = yy[mask_a].ravel().astype(np.float64)
+    za = a_top[mask_a].ravel().astype(np.float64)
+
+    z_cut = float(np.quantile(za, pctile))
+    keep_deep = za >= z_cut
+    if keep_deep.sum() < 50:
+        return None
+    anchor = _mod._robust_plane_fit(xa[keep_deep], ya[keep_deep], za[keep_deep])
+    return anchor
+
+
+def run_pipeline_with_custom_anchor(vol_sub, z_um, xy_um, anchor, **kw):
+    """Run Stages 3+4+5 with our custom anchor."""
+    sx = max(1, int(round(10.0 / xy_um)))
+    _, Ys, Xs = vol_sub.shape
+    xs_col = np.arange(Xs, dtype=np.float32) * sx * xy_um
+    ys_col = np.arange(Ys, dtype=np.float32) * sx * xy_um
+    xx, yy = np.meshgrid(xs_col, ys_col)
+
+    band_um = kw.get("band_um", 150.0)
+    anchor_zz = _mod._surface_z(anchor, xx, yy).astype(np.float32)
+    z_low = anchor_zz - band_um
+    z_high = anchor_zz + band_um
+
+    top_z, dyn_grid, peak_grid = _mod._per_column_top_in_band(
+        vol_sub, z_um, z_low, z_high,
+        relative_margin=kw.get("column_margin", 0.05),
+        min_signal_abs_frac=kw.get("min_signal_abs_frac", 0.20),
+        min_thick_um=kw.get("column_min_thick_um", 10.0),
+        top_method=kw.get("column_top_method", "first"),
+        top_substantial_frac=kw.get("column_top_substantial_frac", 0.5),
+    )
+    mask_t = np.isfinite(top_z)
+    if mask_t.sum() < 50:
+        return None, 0.0
+    x_t = xx[mask_t].ravel().astype(np.float64)
+    y_t = yy[mask_t].ravel().astype(np.float64)
+    z_t = top_z[mask_t].ravel().astype(np.float64)
+
+    surf = _mod._quadratic_quantile_fit(
+        x_t, y_t, z_t,
+        target_quantile=kw.get("target_quantile", 0.85), n_iter=30)
+    if surf is None:
+        return None, 0.0
+    surf_clamped, lift, _ = _mod._clamp_to_column_tops(
+        surf, x_t, y_t, z_t,
+        tile_um=kw.get("clamp_tile_um", 120.0),
+        within_tile_q=kw.get("clamp_within_tile_q", 0.10),
+        safety_offset_um=kw.get("clamp_safety_offset_um", 3.0),
+        min_per_tile=kw.get("clamp_min_per_tile", 5),
+    )
+    return surf_clamped, lift
+
+
+HCR = ["755252", "767018", "767022", "782149", "788406", "790322"]
+PCTILES = [0.0, 0.25, 0.4, 0.5, 0.6, 0.75]
+
+for sid in HCR:
+    print(f"=== {sid} ===", flush=True)
+    s = load_subject(sid)
+    vol, xy_um, z_um, channels = load_hcr_combined(s, level=4)
+    pts = hcr_px_to_um(s.hcr_centroids[["z_px","y_px","x_px"]].values, s)[:, [2,1,0]]
+    sx = max(1, int(round(10.0 / xy_um)))
+    vol_sub = vol[:, ::sx, ::sx].astype(np.float32, copy=False)
+
+    for pct in PCTILES:
+        anchor = fit_with_anchor_pctile(vol_sub, z_um, xy_um, pct, pts)
+        if anchor is None:
+            print(f"  pctile={pct}: anchor fit failed")
+            continue
+        surf, lift = run_pipeline_with_custom_anchor(
+            vol_sub, z_um, xy_um, anchor, target_quantile=0.85)
+        c, a, o = eval_surf(surf, pts)
+        print(f"  pctile={pct}: anchor_c={anchor['c']:6.1f}  "
+              f"surf_c={c:6.1f} lift={lift:5.1f} above={a:.4f} onset={o}", flush=True)

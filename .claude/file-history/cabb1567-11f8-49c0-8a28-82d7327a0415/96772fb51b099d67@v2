@@ -1,0 +1,213 @@
+{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "id": "b3fd4b32",
+   "metadata": {},
+   "source": [
+    "# Iteration 4 — Integration of auto-select into the image module\n",
+    "\n",
+    "**Goal.**  Move the iter-3 candidate-bank scoring + selection out of the exploratory compute scripts and into the shared estimator module so application code can produce an image-only pia surface with one call.\n",
+    "\n",
+    "**Changes.**\n",
+    "- Added two public functions to `code/dev_code/03_image_based_surface.py`:\n",
+    "    - `score_surface_quality(surface, vol, z_um, xy_um, ...) -> dict`\n",
+    "    - `auto_select_surface(candidates, ref_vol, z_um, xy_um, ...) -> (name, result, scores_df)`\n",
+    "- Added a convenience wrapper to `code/dev_code/benchmark_analysis.py`:\n",
+    "    - `estimate_pia_surface_image_autoselect(s, *, level=4, qcon_n_threshold=0.9) -> (surface, info, scores)`\n",
+    "\n",
+    "**Validation.**  Re-ran the 7-candidate bank on all 6 HCR subjects via the new API (`iter04_compute.py`) — the selected candidate matches what an independent `argmax Q s.t. Qcon_n ≥ 0.9` on iter-3 scores gives.  Result: every selection produces onset = 2.5 µm and above-fraction ≤ 1.13 %."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 1,
+   "id": "313bddf7",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2026-04-19T08:50:11.913126Z",
+     "iopub.status.busy": "2026-04-19T08:50:11.912949Z",
+     "iopub.status.idle": "2026-04-19T08:50:12.199903Z",
+     "shell.execute_reply": "2026-04-19T08:50:12.199106Z"
+    }
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "=== Selected pia surface per subject (via new public API) ===\n",
+      "subject           name       Q  Qcon_n   above   onset\n",
+      " 755252  mid488_tq0.85  0.0506  0.9818  0.0051  2.5000\n",
+      " 767018 only594_tq0.85  0.0144  0.9998  0.0056  2.5000\n",
+      " 767022     all_tq0.70  0.0135  0.9999  0.0002  2.5000\n",
+      " 782149   no405_tq0.85  0.0188  0.9998  0.0008  2.5000\n",
+      " 788406   no405_tq0.85  0.0014  0.9992  0.0034  2.5000\n",
+      " 790322     all_tq0.70  0.0022  0.9985  0.0113  2.5000\n"
+     ]
+    }
+   ],
+   "source": [
+    "from pathlib import Path\n",
+    "import pandas as pd\n",
+    "\n",
+    "SESSION = Path('/root/capsule/code/sessions/03c_onset_features')\n",
+    "df = pd.read_csv(SESSION / 'data' / 'iter04_autoselect.csv')\n",
+    "df['subject'] = df.subject.astype(str)\n",
+    "\n",
+    "sel = df[df.selected].copy()\n",
+    "print('=== Selected pia surface per subject (via new public API) ===')\n",
+    "print(sel[['subject', 'name', 'Q', 'Qcon_n', 'above', 'onset']]\n",
+    "      .to_string(index=False, float_format=lambda x: f'{x:7.4f}'))"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "442674ec",
+   "metadata": {},
+   "source": [
+    "## Full per-subject selection table\n",
+    "\n",
+    "Every candidate, sorted by Q within each subject.  ★ = selected, ✓ = passes the `Qcon_n ≥ 0.9` gate, ✗ = rejected.  Columns `above` and `onset` come from centroid-truth evaluation and are **not used** by the selection rule."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 2,
+   "id": "de672dc1",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2026-04-19T08:50:12.201900Z",
+     "iopub.status.busy": "2026-04-19T08:50:12.201697Z",
+     "iopub.status.idle": "2026-04-19T08:50:12.227787Z",
+     "shell.execute_reply": "2026-04-19T08:50:12.227078Z"
+    }
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "\n",
+      "=== 755252 ===\n",
+      "mark           name       Q  Qabove  Qcon_n   above   onset\n",
+      "   ✗ only488_tq0.85  0.0723  0.0030  0.8562  0.0212  2.5000\n",
+      "   ★  mid488_tq0.85  0.0506  0.0000  0.9818  0.0051  2.5000\n",
+      "   ✗     all_tq0.85  0.0000  0.0000  0.0000  0.0000 62.5000\n",
+      "   ✗     all_tq0.95  0.0000  0.0000  0.0000  0.0000 57.5000\n",
+      "   ✗     all_tq0.70  0.0000  0.0000  0.0000  0.0000 72.5000\n",
+      "   ✗   no405_tq0.85  0.0000  0.0000  0.0000  0.0000 72.5000\n",
+      "   ✗ only594_tq0.85  0.0000  0.0000  0.0000  0.0000 67.5000\n",
+      "\n",
+      "=== 767018 ===\n",
+      "mark           name       Q  Qabove  Qcon_n   above   onset\n",
+      "   ✗ only488_tq0.85  0.0339  0.0092  0.5540  0.1189 42.5000\n",
+      "   ★ only594_tq0.85  0.0144  0.0000  0.9998  0.0056  2.5000\n",
+      "   ✓     all_tq0.70  0.0105  0.0000  0.9998  0.0034  2.5000\n",
+      "   ✓     all_tq0.95  0.0097  0.0000  0.9998  0.0038  2.5000\n",
+      "   ✓   no405_tq0.85  0.0090  0.0000  0.9998  0.0045  2.5000\n",
+      "   ✓     all_tq0.85  0.0075  0.0000  0.9998  0.0035  2.5000\n",
+      "   ✗  mid488_tq0.85  0.0053  0.0071 -0.0458  0.1000  2.5000\n",
+      "\n",
+      "=== 767022 ===\n",
+      "mark           name       Q  Qabove  Qcon_n   above   onset\n",
+      "   ✗ only488_tq0.85  0.0198  0.0056  0.5039  0.0560 47.5000\n",
+      "   ★     all_tq0.70  0.0135  0.0000  0.9999  0.0002  2.5000\n",
+      "   ✓   no405_tq0.85  0.0121  0.0000  0.9999  0.0001 17.5000\n",
+      "   ✓ only594_tq0.85  0.0121  0.0000  0.9999  0.0000 12.5000\n",
+      "   ✓     all_tq0.95  0.0110  0.0000  0.9999  0.0000 17.5000\n",
+      "   ✓  mid488_tq0.85  0.0080  0.0000  0.9990  0.0115  2.5000\n",
+      "   ✓     all_tq0.85  0.0073  0.0000  0.9999  0.0000 12.5000\n",
+      "\n",
+      "=== 782149 ===\n",
+      "mark           name       Q  Qabove  Qcon_n   above   onset\n",
+      "   ✗ only488_tq0.85  0.0282  0.0210  0.1170  0.1702  2.5000\n",
+      "   ✗  mid488_tq0.85  0.0197  0.0166 -0.0005  0.1293  2.5000\n",
+      "   ★   no405_tq0.85  0.0188  0.0000  0.9998  0.0008  2.5000\n",
+      "   ✓ only594_tq0.85  0.0110  0.0000  0.9970  0.0106  7.5000\n",
+      "   ✓     all_tq0.95  0.0097  0.0000  0.9997  0.0000 12.5000\n",
+      "   ✓     all_tq0.85  0.0075  0.0000  0.9987  0.0000 12.5000\n",
+      "   ✗     all_tq0.70  0.0001  0.0000  0.0000  0.0000  7.5000\n",
+      "\n",
+      "=== 788406 ===\n",
+      "mark           name       Q  Qabove  Qcon_n   above   onset\n",
+      "   ✗ only488_tq0.85  0.0082  0.0028  0.4443  0.0553 42.5000\n",
+      "   ✗  mid488_tq0.85  0.0024  0.0006  0.0000  0.0375  2.5000\n",
+      "   ★   no405_tq0.85  0.0014  0.0000  0.9992  0.0034  2.5000\n",
+      "   ✓ only594_tq0.85  0.0014  0.0000  0.9984  0.0165  2.5000\n",
+      "   ✓     all_tq0.95  0.0008  0.0000  0.9984  0.0040  2.5000\n",
+      "   ✓     all_tq0.85  0.0007  0.0000  0.9984  0.0020  2.5000\n",
+      "   ✓     all_tq0.70  0.0006  0.0000  0.9984  0.0015  2.5000\n",
+      "\n",
+      "=== 790322 ===\n",
+      "mark           name       Q  Qabove  Qcon_n   above   onset\n",
+      "   ✗ only488_tq0.85  0.0084  0.0031  0.3313  0.0672 62.5000\n",
+      "   ✗  mid488_tq0.85  0.0029  0.0001  0.4250  0.0538 82.5000\n",
+      "   ★     all_tq0.70  0.0022  0.0000  0.9985  0.0113  2.5000\n",
+      "   ✓ only594_tq0.85  0.0020  0.0000  0.9990  0.0095  2.5000\n",
+      "   ✓     all_tq0.95  0.0015  0.0000  0.9992  0.0031  2.5000\n",
+      "   ✓     all_tq0.85  0.0007  0.0000  0.9983  0.0006  2.5000\n",
+      "   ✓   no405_tq0.85  0.0006  0.0000  0.9981  0.0006  2.5000\n"
+     ]
+    }
+   ],
+   "source": [
+    "import numpy as np\n",
+    "subjects = ['755252', '767018', '767022', '782149', '788406', '790322']\n",
+    "for sid in subjects:\n",
+    "    sub = df[df.subject == sid].sort_values('Q', ascending=False).copy()\n",
+    "    sub['mark'] = np.where(sub.selected, '★',\n",
+    "                  np.where(sub['pass'], '✓', '✗'))\n",
+    "    print(f'\\n=== {sid} ===')\n",
+    "    print(sub[['mark', 'name', 'Q', 'Qabove', 'Qcon_n', 'above', 'onset']]\n",
+    "          .to_string(index=False, float_format=lambda x: f'{x:7.4f}'))"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "b8bf7274",
+   "metadata": {},
+   "source": [
+    "## Public API — example call\n",
+    "\n",
+    "```python\n",
+    "from benchmark_data_loader import load_subject\n",
+    "from benchmark_analysis import estimate_pia_surface_image_autoselect\n",
+    "\n",
+    "s = load_subject('755252')\n",
+    "surface, info, scores = estimate_pia_surface_image_autoselect(s)\n",
+    "# surface → {'a', 'b', 'c', 'p', 'q', 'r', ...}\n",
+    "# info    → {'selected': 'mid488_tq0.85', 'used_channels': ['488', '514'], ...}\n",
+    "# scores  → DataFrame of all candidates with Q/Qcon_n/pass/selected\n",
+    "```\n",
+    "\n",
+    "Smoke-tested on 755252 (the problem subject from prior iterations): returns `mid488_tq0.85` with `Qcon_n = 0.982`, matching both iter 3's exhaustive score table and iter 4's independent reproduction.\n",
+    "\n",
+    "## Bottom line\n",
+    "\n",
+    "Image-only pia surface estimation now matches N22 onset quality (≤ 2.5 µm) on **6/6** HCR benchmark subjects, including the previously-broken 755252, without touching centroid data.  The selection rule is simple, distribution-driven on the per-subject candidate bank, and exposed through a single wrapper function in the benchmark API."
+   ]
+  }
+ ],
+ "metadata": {
+  "kernelspec": {
+   "display_name": "Python 3 (ipykernel)",
+   "language": "python",
+   "name": "python3"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 3
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.11.15"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 5
+}

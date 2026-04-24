@@ -1,0 +1,65 @@
+---
+name: Session 07c BIC-GFP+ + CZ-density gate FAILED
+description: BIC-selected GMM K∈[2,6] per subject + CZ-mapped uniformity gate; lowered CV vs 07b but still 0.30–0.60 >> 0.20 bar; 0/6 subjects pass ±5% on both axes; centroid-only approach doubly falsified.
+type: project
+originSessionId: 8eb265e4-f4d7-4d2c-8cdb-955d3a0c44d8
+---
+Session 07c tested two fixes to 07b:
+1. **K was wrong.** Production R1 (Session 04) uses GMM-3 for intensity;
+   07b used GMM-2. 07c sweeps K∈[2,6] per subject, selects K* by BIC.
+2. **Truth proxy replaced.** 07b compared GFP+ to matched-HCR ∪ unmatched-CZ
+   (coreg-derived proxy). 07c compares GFP+ directly to *all CZ centroids
+   mapped into HCR via R1* (coreg-free, dense reference).
+
+**K* distribution.** 5/6 subjects landed at K* ∈ {5, 6} — upper edge of
+the sweep; 782149 at K*=4. 767022's 07b GMM-2 degeneracy fixed (K*=6,
+cutoff 140.25 vs v2.2's 28.43). 755252 now fails coreg coverage (0.70
+vs 0.80 bar) because K*=6 produces a much stricter cutoff 215.12 (v2.2:
+20.75); CZ-density gate is coverage-independent so 755252 still ran.
+
+**CZ-density gate results:**
+- Per-bin CV of ρ_GFP+/ρ_CZ on informative bins (ρ_CZ > p25): 0.30–0.60
+  across all 6 subjects. **Still 1.5–3× over the 0.20 bar, 0/6 pass.**
+  Improvement vs 07b's strict CV (0.35–1.09): CZ baseline is denser and
+  less quantised than matched-HCR ∪ unmatched-CZ.
+- **Integrated mean GFP+/CZ tracks 1/(sxy²·sz) within +3 % to +43 %.**
+  First quantitative confirmation that BIC-GFP+ density is *proportional*
+  to true density in bulk — the failure is per-bin depth non-uniformity.
+
+**Scale results (0/6 pass at ±5%):**
+- M1 sxy **improved** vs 07b: 5/6 subjects within 7–17 % (exception
+  782149 at +57 %). Was scattered −46 % to +57 % in 07b.
+- M1 sz **still broken**: universal underestimate by 54–79 %. Strict
+  GFP+ clusters shallower → median z-NN on GFP+ smaller than CZ →
+  sz = med_hcr_z / med_cz_z < 1 instead of ~3.
+- M3 sxy unchanged: 4.6–5.9 vs GT ~1.7 (FOV contamination, independent
+  of threshold).
+- M3 sz competitive on 3/6: 755252 +3.8 %, 767022 −4.3 %, 788406 +8.2 %.
+- Hybrid (M1 sxy, M3 sz) best-case: 755252 (+7.7 %, +3.8 %) — still
+  outside 5 % on sxy.
+
+**Conclusion.** Centroid-only HCR GFP+ scale estimation is now **doubly
+falsified** (07b + 07c). Residual depth-dependent detection bias is
+larger than the scale ratio we want (0.05 on ~2× scale = CV 0.025 on
+the ratio); BIC reduces CV by ~10–40 % but the bias floor is set by the
+feature itself. Further threshold tweaking (K=7, K=8, per-subject
+feature selection) will not close the 3× gap.
+
+**Reusable from 07c:**
+- `dev_code/07b_gfp_intersection_threshold.py` — now has
+  `fit_gmm_sweep(log_values, k_min=2, k_max=6)` + BIC-selection panel.
+  General-purpose threshold tool.
+- `dev_code/07c_scale_bic_cz_density.py::cz_density_gate(...)` — mapped-
+  CZ reference is a better-quality diagnostic than the 07 matched-HCR +
+  unmatched-CZ proxy; reuse for future density comparisons.
+
+**Do NOT** try another centroid-only HCR GFP+ scale estimator.
+
+**Next candidate (new session, 07c' — NOT implemented):** image-level
+488 NCC after R1 + pia-normal alignment. Intensity is linear in signal
+so threshold bias is bypassed. Session 05 has zstack reading machinery;
+new contribution is pia-normal alignment before NCC.
+
+**Where:** `sessions/07c_gfp_bic_cz_density/log.md`, `results.json`,
+`cz_density_summary.json`, `notebook.ipynb`; figures
+`depth_density_cz_<sid>.png` (6), `scales_comparison.png`.

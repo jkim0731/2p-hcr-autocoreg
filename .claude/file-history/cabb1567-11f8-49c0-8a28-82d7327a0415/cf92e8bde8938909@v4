@@ -1,0 +1,39 @@
+---
+name: 03 image-based surface (curved)
+description: Session 03_image_based_surface_estimation — image-only curved pia surface (global-baseline + per-tile onset + quadratic Huber). No L2.
+type: project
+originSessionId: cabb1567-11f8-49c0-8a28-82d7327a0415
+---
+Session `03_image_based_surface_estimation` implements
+`estimate_surface_and_l2_image_based()` in
+`code/dev_code/03_image_based_surface.py`.  Two-stage:
+
+1. **Global baseline** from the top 1–2 z-planes pooled across the
+   whole image (median + 1.4826·MAD; skip planes ≥ 95 % zero; drop
+   exact-zero padding voxels).  HCR pure-padding top → fallback
+   `σ = 0.02 · percentile(vol, 99)`.  Threshold =
+   `max(bg + 6σ, bg + 0.02·dyn_hint)`.
+2. **Per-tile onset** (80 µm HCR / 60 µm CZ) — 1-D median-along-z
+   profile, Gaussian-smooth, first-sustained-above-thr run of
+   ≥ `min_thick_surface_um` µm within the top 30 % of z.  Fit quadratic
+   `z = a·x + b·y + c + p·x² + q·x·y + r·y²` via IRLS-Huber.
+
+Driver + figures in `03_image_based_surface_run.py` /
+`03_image_based_surface_figs.py`; results + log in
+`sessions/03_image_based_surface_estimation/`.
+
+**Why:** The previous per-column-in-band port of N22 was too complex
+and still flat; user asked for a simpler global-stats approach.
+L2 was explicitly dropped (CZ L2 ambiguous in side views).  No ROI
+clamp — explicitly image-only.
+
+**How to apply:** Onset_depth 2.5 µm on every HCR subject; CZ resid
+MAD < 3.3 µm on every subject.  Walkthroughs confirm the red surface
+hugs the tissue top.  above_frac still 1.4–10 % on HCR (no ROI clamp)
+— treat this session as a complementary image-driven cross-check for
+pia, not a replacement for N22.
+
+**Known outliers (2026-04-17):** HCR resid_mad highest on 767022/755252
+(74 / 66 µm — 80-µm tiles are noisy); CZ above_frac highest on 782149
+(8.3 % — unusually bright upper-layer GFP+ cells).  Open: quantile
+loss at q≈0.80 for HCR might close above_frac gap without hurting CZ.

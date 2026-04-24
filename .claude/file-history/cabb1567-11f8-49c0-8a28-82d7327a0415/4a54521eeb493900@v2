@@ -1,0 +1,83 @@
+"""Sweep density filter and band_um."""
+from __future__ import annotations
+import sys
+import importlib.util
+from pathlib import Path
+import numpy as np
+
+ROOT = Path("/root/capsule")
+DEV = ROOT / "code" / "dev_code"
+sys.path.insert(0, str(DEV))
+
+_spec = importlib.util.spec_from_file_location(
+    "img_surface_l2", str(DEV / "03_image_based_surface.py"))
+_mod = importlib.util.module_from_spec(_spec)
+sys.modules["img_surface_l2"] = _mod
+_spec.loader.exec_module(_mod)
+
+# Monkeypatch _filter_tops_by_density to accept radius/min_neighbors
+_orig_filter = _mod._filter_tops_by_density
+_orig_clamp = _mod._clamp_to_column_tops
+
+def _clamp_patched(surface, xs, ys, zs, *, tile_um=120.0, within_tile_q=0.10,
+                   safety_offset_um=3.0, min_per_tile=5,
+                   density_radius_um=30.0, density_min_neighbors=3,
+                   **kw):
+    return _orig_clamp(surface, xs, ys, zs, tile_um=tile_um,
+                       within_tile_q=within_tile_q,
+                       safety_offset_um=safety_offset_um,
+                       min_per_tile=min_per_tile,
+                       density_radius_um=density_radius_um,
+                       density_min_neighbors=density_min_neighbors)
+
+from benchmark_analysis import load_hcr_combined
+from benchmark_data_loader import hcr_px_to_um, load_subject
+
+def sz(surf, x, y):
+    return (surf["a"]*x + surf["b"]*y + surf["c"] +
+            surf.get("p",0)*x*x + surf.get("q",0)*x*y + surf.get("r",0)*y*y)
+
+def eval_surf(surf, pts):
+    z_surf = sz(surf, pts[:,0], pts[:,1])
+    depth = pts[:,2] - z_surf
+    n = len(depth)
+    above = (depth < 0).sum() / n
+    edges = np.arange(-200, 404, 5.0)
+    h, _ = np.histogram(depth, bins=edges)
+    density = h / (5.0 * max(n, 1))
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    bulk = density[(centers >= 50) & (centers <= 200)].mean()
+    onset = np.nan
+    if bulk > 0:
+        halfmax = 0.5 * bulk
+        for c, d in zip(centers, density):
+            if c >= 0 and d >= halfmax:
+                onset = float(c); break
+    return above, onset
+
+# Patch the module's _clamp_to_column_tops with density args
+_mod._clamp_to_column_tops = _clamp_patched
+
+for sid in ["755252", "767018", "767022", "782149", "788406", "790322"]:
+    s = load_subject(sid)
+    vol, xy_um, z_um, channels = load_hcr_combined(s, level=4)
+    pts = hcr_px_to_um(s.hcr_centroids[["z_px","y_px","x_px"]].values, s)[:, [2,1,0]]
+    print(f"--- {sid} ---")
+    for band in [150.0, 80.0, 60.0]:
+        for density in [(30.0, 3), (20.0, 8), (15.0, 15), (20.0, 15)]:
+            r_um, min_n = density
+            res = _mod.estimate_surface_and_l2_image_based(
+                vol, z_um, xy_um,
+                target_quantile=0.70,
+                column_margin=0.25,
+                band_um=band,
+                clamp_within_tile_q=0.10,
+                clamp_density_radius_um=r_um,
+                clamp_density_min_neighbors=min_n,
+            )
+            if res.surface is None:
+                continue
+            above, onset = eval_surf(res.surface, pts)
+            print(f" band={band:3.0f} den=(r{r_um:.0f},n{min_n:2d}): "
+                  f"c={res.surface['c']:6.1f} lift={res.clamp_lift_um:6.1f} "
+                  f"above={above:.4f} onset={onset:.1f}")

@@ -1,0 +1,106 @@
+{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "# S03 — F1 HCR + F2 CZ mask loaders\n",
+    "\n",
+    "Loads:\n",
+    "- **F1** — HCR `cell_body_segmentation/segmentation_mask.zarr` restricted to GFP+ IDs\n",
+    "- **F2** — CZ `*_seg-mask-outline.tif`\n",
+    "\n",
+    "See `log.md` for the design notes."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "import sys\n",
+    "from pathlib import Path\n",
+    "ROOT = Path('/root/capsule/code/full_automatic_execution_01')\n",
+    "sys.path.insert(0, str(ROOT))\n",
+    "sys.path.insert(0, str(ROOT.parent / 'dev_code'))\n",
+    "import numpy as np\n",
+    "import matplotlib.pyplot as plt\n",
+    "from benchmark_data_loader import load_subject\n",
+    "from lib.mask_loaders import load_hcr_seg_mask, load_cz_seg_mask"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "s = load_subject('788406')\n",
+    "gfp_ids = s.hcr_gfp_df['hcr_id'].astype(int).tolist()\n",
+    "hcr_mask, hcr_xy_um, hcr_z_um = load_hcr_seg_mask(s, level=4, gfp_ids=gfp_ids)\n",
+    "cz_mask, cz_xy_um, cz_z_um = load_cz_seg_mask(s)\n",
+    "\n",
+    "print(f'HCR mask {hcr_mask.shape} @ {hcr_xy_um:.2f}µm xy / {hcr_z_um:.2f}µm z')\n",
+    "print(f'   nonzero {(hcr_mask>0).sum():,}  unique GFP+ labels {len(np.unique(hcr_mask[hcr_mask>0]))}')\n",
+    "print(f'CZ  mask {cz_mask.shape} @ {cz_xy_um:.2f}µm xy / {cz_z_um:.2f}µm z')\n",
+    "print(f'   nonzero {(cz_mask>0).sum():,}  unique labels {len(np.unique(cz_mask[cz_mask>0]))}')"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "fig, axes = plt.subplots(1, 2, figsize=(10, 5))\n",
+    "axes[0].imshow((hcr_mask[hcr_mask.shape[0]//2] > 0), cmap='gray_r')\n",
+    "axes[0].set_title(f'HCR GFP+ mask, z=mid ({hcr_mask.shape[0]//2})')\n",
+    "axes[0].set_xlabel('x (level-4 px)')\n",
+    "axes[0].set_ylabel('y (level-4 px)')\n",
+    "axes[1].imshow((cz_mask[cz_mask.shape[0]//2] > 0), cmap='gray_r')\n",
+    "axes[1].set_title(f'CZ mask, z=mid ({cz_mask.shape[0]//2})')\n",
+    "axes[1].set_xlabel('x (CZ px)')\n",
+    "axes[1].set_ylabel('y (CZ px)')\n",
+    "fig.tight_layout()\n",
+    "plt.savefig(ROOT / 'sessions/03_F1_F2_mask_loaders/mask_slices.png', dpi=100)\n",
+    "plt.show()"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "### Sanity check — GFP+ fraction\n",
+    "\n",
+    "HCR level-4 nonzero / total-voxels should approximate the GFP+ cell density."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "nz = (hcr_mask > 0).sum()\n",
+    "total = np.prod(hcr_mask.shape)\n",
+    "print(f'GFP+ fraction in HCR mask: {nz/total:.4%}')\n",
+    "print(f'CZ nonzero fraction: {(cz_mask>0).sum()/cz_mask.size:.4%}')"
+   ]
+  }
+ ],
+ "metadata": {
+  "kernelspec": {
+   "display_name": "Python 3",
+   "language": "python",
+   "name": "python3"
+  },
+  "language_info": {
+   "name": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.11"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 5
+}

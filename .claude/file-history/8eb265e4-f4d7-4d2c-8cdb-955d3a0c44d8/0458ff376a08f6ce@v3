@@ -1,0 +1,298 @@
+"""Data-only check: is HCR strict-GFP+ really MORE numerous than CZ
+active cells in the GROUND-TRUTH overlapping volume?
+
+Previous sz density estimator built its matched box via R1
+(translation-only) + sxy-scaled CZ extent and reported N_CZ/N_HCR
+≈ 0.62–0.85 for 3 subjects. User challenge: that's an R1-matching
+artifact, not a real detection-fraction gap. Redo the count using
+the GT anisotropic-similarity affine.
+
+Pipeline per subject:
+ 1. Load subject. Get CZ centroids (s.cz_centroids) and HCR
+    strict-GFP+ centroids (BIC-GMM intersection via
+    07b_gfp_intersection_threshold).
+ 2. Fit GT: `fit_anisotropic_similarity(landmark_pairs_um(s,
+    active_only=True))`. This gives R, per-axis scales, and we
+    reconstruct src_mean / dst_mean from the landmark pairs.
+ 3. Map all CZ centroids into HCR µm frame via the GT affine.
+ 4. Apply cortex depth filter on both populations:
+        depth ∈ [D_SKIN_UM, p99(depth)]
+    with each population's own pia surface (CZ uses cz_surface,
+    HCR uses hcr_surface; depth is evaluated AFTER mapping, using
+    HCR surface for both, because they now live in the same frame).
+ 5. Overlap AABB = intersection of xyz bounding boxes of the two
+    cortex-filtered clouds.
+ 6. Count each population inside the overlap box.
+ 7. Also report the naive full-cloud counts (no overlap), the CZ-only
+    box (all CZ mapped, count HCR strict-GFP+ inside), and the
+    HCR-only box for symmetry.
+
+Prints a table and dumps JSON to:
+  sessions/07e_sz_from_zvar_profile/gt_overlap_counts.json
+"""
+from __future__ import annotations
+
+import importlib.util
+import json
+import sys
+from pathlib import Path
+
+import numpy as np
+
+THIS = Path(__file__).resolve().parent
+if str(THIS) not in sys.path:
+    sys.path.insert(0, str(THIS))
+
+from benchmark_analysis import (
+    analyze_subject,
+    depth_from_surface,
+    fit_anisotropic_similarity,
+)
+from benchmark_data_loader import (
+    cz_px_to_um,
+    hcr_px_to_um,
+    landmark_pairs_um,
+    load_subject,
+)
+from roi_area_sxy import D_SKIN_UM, SPOT_SUBJECTS
+
+SESSION = Path("/root/capsule/code/sessions/07e_sz_from_zvar_profile")
+SESSION.mkdir(parents=True, exist_ok=True)
+
+
+def _load_strict_gfp_module():
+    spec = importlib.util.spec_from_file_location(
+        "_gfp_thr", THIS / "07b_gfp_intersection_threshold.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["_gfp_thr"] = mod
+    spec.loader.exec_module(mod)  # type: ignore
+    return mod
+
+
+def _cz_xyz_um(s, coreg_only: bool = False):
+    """CZ centroids in µm. Full segmentation unless coreg_only=True,
+    in which case restrict to cz_ids that appear in s.coreg_table."""
+    df = s.cz_centroids
+    if coreg_only:
+        coreg_ids = set(int(x) for x in s.coreg_table["cz_id"].values)
+        df = df[df["cz_id"].astype(int).isin(coreg_ids)]
+    arr = df[["z_px", "y_px", "x_px"]].to_numpy(float)
+    return cz_px_to_um(arr, s)[:, [2, 1, 0]]
+
+
+def _hcr_xyz_um_for_ids(s, ids):
+    want = {int(x) for x in ids}
+    if not want or s.hcr_centroids.empty:
+        return np.zeros((0, 3))
+    px = s.hcr_centroids.copy()
+    keep = px["hcr_id"].astype(int).isin(want)
+    arr = px.loc[keep, ["z_px", "y_px", "x_px"]].to_numpy(float)
+    if arr.size == 0:
+        return np.zeros((0, 3))
+    return hcr_px_to_um(arr, s)[:, [2, 1, 0]]
+
+
+def _apply_gt_affine(pts_xyz, fit, src_mean, dst_mean):
+    """pts_hcr_um = (pts_cz_um - src_mean) @ R * scales + dst_mean.
+
+    Matches the convention in `fit_anisotropic_similarity`:
+      pred = (src - src_mean) @ R * scales + dst_mean
+    """
+    return (pts_xyz - src_mean) @ fit.R * fit.scales + dst_mean
+
+
+def _cortex_mask(xyz_um, surf, d_skin=D_SKIN_UM):
+    d = depth_from_surface(xyz_um, surf)
+    p99 = float(np.nanpercentile(d, 99))
+    m = (d >= d_skin) & (d <= p99)
+    return m, d, p99
+
+
+def _count_in_box(xyz, box):
+    x0, x1, y0, y1, z0, z1 = box
+    return int((
+        (xyz[:, 0] >= x0) & (xyz[:, 0] <= x1)
+        & (xyz[:, 1] >= y0) & (xyz[:, 1] <= y1)
+        & (xyz[:, 2] >= z0) & (xyz[:, 2] <= z1)
+    ).sum())
+
+
+def _aabb(xyz):
+    return [
+        float(xyz[:, 0].min()), float(xyz[:, 0].max()),
+        float(xyz[:, 1].min()), float(xyz[:, 1].max()),
+        float(xyz[:, 2].min()), float(xyz[:, 2].max()),
+    ]
+
+
+def _intersect_aabb(a, b):
+    return [
+        max(a[0], b[0]), min(a[1], b[1]),
+        max(a[2], b[2]), min(a[3], b[3]),
+        max(a[4], b[4]), min(a[5], b[5]),
+    ]
+
+
+def check_subject(sid: str) -> dict:
+    s = load_subject(sid)
+    info = analyze_subject(s)
+    cz_surf, hcr_surf = info["cz_surface"], info["hcr_surface"]
+
+    # GT fit + means (needed to apply affine)
+    cz_lm, hcr_lm = landmark_pairs_um(s, active_only=True)
+    fit = fit_anisotropic_similarity(cz_lm, hcr_lm)
+    src_mean = cz_lm.mean(axis=0)
+    dst_mean = hcr_lm.mean(axis=0)
+
+    # strict GFP+
+    _gfp_thr = _load_strict_gfp_module()
+    gi = _gfp_thr.analyze_subject(sid)
+    cutoff = float(gi.cutoff_linear)
+    strict_df = _gfp_thr.strict_gfp_df(sid, cutoff)
+    strict_ids = set(int(x) for x in strict_df["hcr_id"].values)
+
+    # raw clouds
+    cz_um_native = _cz_xyz_um(s, coreg_only=False)
+    cz_um_coreg_native = _cz_xyz_um(s, coreg_only=True)
+    hcr_um = _hcr_xyz_um_for_ids(s, strict_ids)
+    n_cz_total = int(len(cz_um_native))
+    n_cz_coreg_total = int(len(cz_um_coreg_native))
+    n_hcr_total = int(len(hcr_um))
+
+    # map CZ into HCR frame via GT
+    cz_um_gt = _apply_gt_affine(cz_um_native, fit, src_mean, dst_mean)
+    cz_um_coreg_gt = (
+        _apply_gt_affine(cz_um_coreg_native, fit, src_mean, dst_mean)
+        if n_cz_coreg_total > 0
+        else np.zeros((0, 3))
+    )
+
+    # cortex filter on each — both now in HCR frame, so use hcr_surf
+    # for the HCR-side cloud; use cz_surf (in native CZ frame) to
+    # filter CZ BEFORE mapping, to respect each modality's own
+    # detection depth. Then intersect in HCR frame.
+    cz_native_mask, _, cz_p99_um = _cortex_mask(cz_um_native, cz_surf)
+    hcr_mask, _, hcr_p99_um = _cortex_mask(hcr_um, hcr_surf)
+    if n_cz_coreg_total > 0:
+        cz_coreg_native_mask, _, _ = _cortex_mask(cz_um_coreg_native, cz_surf)
+    else:
+        cz_coreg_native_mask = np.zeros(0, dtype=bool)
+
+    cz_um_gt_filt = cz_um_gt[cz_native_mask]
+    cz_um_coreg_gt_filt = cz_um_coreg_gt[cz_coreg_native_mask]
+    hcr_um_filt = hcr_um[hcr_mask]
+
+    n_cz_cortex = int(len(cz_um_gt_filt))
+    n_cz_coreg_cortex = int(len(cz_um_coreg_gt_filt))
+    n_hcr_cortex = int(len(hcr_um_filt))
+
+    if n_cz_cortex == 0 or n_hcr_cortex == 0:
+        raise RuntimeError(f"{sid}: empty cortex cloud")
+
+    cz_aabb = _aabb(cz_um_gt_filt)
+    hcr_aabb = _aabb(hcr_um_filt)
+    overlap = _intersect_aabb(cz_aabb, hcr_aabb)
+    x_valid = overlap[1] > overlap[0]
+    y_valid = overlap[3] > overlap[2]
+    z_valid = overlap[5] > overlap[4]
+    overlap_valid = x_valid and y_valid and z_valid
+
+    if overlap_valid:
+        n_cz_in_overlap = _count_in_box(cz_um_gt_filt, overlap)
+        n_cz_coreg_in_overlap = _count_in_box(cz_um_coreg_gt_filt, overlap)
+        n_hcr_in_overlap = _count_in_box(hcr_um_filt, overlap)
+        V_overlap = (
+            (overlap[1] - overlap[0])
+            * (overlap[3] - overlap[2])
+            * (overlap[5] - overlap[4])
+        )
+    else:
+        n_cz_in_overlap = 0
+        n_cz_coreg_in_overlap = 0
+        n_hcr_in_overlap = 0
+        V_overlap = 0.0
+
+    # asymmetric checks — count other population inside each cloud's
+    # own box, to isolate whether the asymmetry is in xy or z
+    n_cz_in_hcr_box = _count_in_box(cz_um_gt_filt, hcr_aabb)
+    n_hcr_in_cz_box = _count_in_box(hcr_um_filt, cz_aabb)
+
+    # xy-only overlap (ignore z mismatch: CZ and HCR imaging depth
+    # differs, but xy FOV should overlap)
+    xy_overlap = overlap.copy()
+    xy_overlap[4] = min(cz_aabb[4], hcr_aabb[4]) - 1
+    xy_overlap[5] = max(cz_aabb[5], hcr_aabb[5]) + 1
+    n_cz_in_xy = _count_in_box(cz_um_gt_filt, xy_overlap) if (x_valid and y_valid) else 0
+    n_hcr_in_xy = _count_in_box(hcr_um_filt, xy_overlap) if (x_valid and y_valid) else 0
+
+    return {
+        "sid": sid,
+        "cutoff_linear": cutoff,
+        "n_components_bic": int(gi.n_components),
+        "gt_scales": [float(x) for x in fit.scales],
+        "src_mean_cz_um": [float(x) for x in src_mean],
+        "dst_mean_hcr_um": [float(x) for x in dst_mean],
+        "n_cz_total": n_cz_total,
+        "n_cz_coreg_total": n_cz_coreg_total,
+        "n_hcr_strict_total": n_hcr_total,
+        "n_cz_cortex": n_cz_cortex,
+        "n_cz_coreg_cortex": n_cz_coreg_cortex,
+        "n_hcr_cortex": n_hcr_cortex,
+        "cz_cortex_aabb_hcr_frame": cz_aabb,
+        "hcr_cortex_aabb": hcr_aabb,
+        "gt_overlap_aabb": overlap,
+        "gt_overlap_valid_xyz": [bool(x_valid), bool(y_valid), bool(z_valid)],
+        "n_cz_in_gt_overlap": n_cz_in_overlap,
+        "n_cz_coreg_in_gt_overlap": n_cz_coreg_in_overlap,
+        "n_hcr_in_gt_overlap": n_hcr_in_overlap,
+        "ratio_cz_over_hcr_gt_overlap": (
+            n_cz_in_overlap / n_hcr_in_overlap if n_hcr_in_overlap else None
+        ),
+        "ratio_cz_coreg_over_hcr_gt_overlap": (
+            n_cz_coreg_in_overlap / n_hcr_in_overlap if n_hcr_in_overlap else None
+        ),
+        "V_overlap_um3": V_overlap,
+        "n_cz_in_hcr_cortex_aabb": n_cz_in_hcr_box,
+        "n_hcr_in_cz_cortex_aabb": n_hcr_in_cz_box,
+        "n_cz_in_xy_overlap": n_cz_in_xy,
+        "n_hcr_in_xy_overlap": n_hcr_in_xy,
+        "ratio_cz_over_hcr_xy_only": (
+            n_cz_in_xy / n_hcr_in_xy if n_hcr_in_xy else None
+        ),
+        "cz_p99_depth_um": cz_p99_um,
+        "hcr_p99_depth_um": hcr_p99_um,
+    }
+
+
+def main():
+    sids = sys.argv[1:] or sorted(SPOT_SUBJECTS)
+    out = {}
+    hdr = (f"{'sid':<8} {'N_CZ':>6} {'N_CZcor':>7} {'N_HCR+':>7}  "
+           f"{'N_CZ∩':>6} {'N_CZcor∩':>8} {'N_HCR∩':>7} "
+           f"{'CZ/H':>5} {'CZcor/H':>7}")
+    print(hdr)
+    for sid in sids:
+        try:
+            r = check_subject(sid)
+        except Exception as e:
+            print(f"{sid}: ERROR {e}")
+            import traceback; traceback.print_exc()
+            continue
+        ratio = r["ratio_cz_over_hcr_gt_overlap"] or 0
+        ratio_c = r["ratio_cz_coreg_over_hcr_gt_overlap"] or 0
+        print(f"{sid:<8} {r['n_cz_cortex']:>6} {r['n_cz_coreg_cortex']:>7} "
+              f"{r['n_hcr_cortex']:>7}  "
+              f"{r['n_cz_in_gt_overlap']:>6} {r['n_cz_coreg_in_gt_overlap']:>8} "
+              f"{r['n_hcr_in_gt_overlap']:>7} "
+              f"{ratio:>5.3f} {ratio_c:>7.3f}")
+        out[sid] = r
+
+    out_path = SESSION / "gt_overlap_counts.json"
+    with open(out_path, "w") as f:
+        json.dump(out, f, indent=2, default=float)
+    print(f"\nWrote {out_path}")
+
+
+if __name__ == "__main__":
+    main()

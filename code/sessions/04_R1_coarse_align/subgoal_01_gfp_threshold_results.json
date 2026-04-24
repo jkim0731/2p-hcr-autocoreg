@@ -120,6 +120,66 @@
           "coreg_coverage": 0.9428208386277002,
           "n_coreg": 787
         },
+        "PeakGauss3_counts_p0.1": {
+          "threshold_counts": 91.0,
+          "threshold_density": null,
+          "source": "GMM-3 on log(counts>=1), rightmost component, 0.1st percentile lower tail",
+          "n_gfp": 19297,
+          "n_hcr_total": 127275,
+          "gfp_frac": 0.15161657827538794,
+          "coreg_coverage": 0.9796696315120712,
+          "n_coreg": 787
+        },
+        "PeakGauss3_counts_p1": {
+          "threshold_counts": 125.0,
+          "threshold_density": null,
+          "source": "GMM-3 on log(counts>=1), rightmost component, 1st percentile lower tail",
+          "n_gfp": 16016,
+          "n_hcr_total": 127275,
+          "gfp_frac": 0.1258377528972697,
+          "coreg_coverage": 0.9644218551461246,
+          "n_coreg": 787
+        },
+        "FiltGMM3_counts_p0.1": {
+          "threshold_counts": 79.0,
+          "threshold_density": null,
+          "source": "GMM-3 on log(counts>=10), rightmost component, 0.1st percentile",
+          "n_gfp": 21360,
+          "n_hcr_total": 127275,
+          "gfp_frac": 0.16782557454331173,
+          "coreg_coverage": 0.9860228716645489,
+          "n_coreg": 787
+        },
+        "FiltGMM4_counts_p0.1": {
+          "threshold_counts": 90.0,
+          "threshold_density": null,
+          "source": "GMM-4 on log(counts>=10), rightmost component, 0.1st percentile",
+          "n_gfp": 19434,
+          "n_hcr_total": 127275,
+          "gfp_frac": 0.152692987625221,
+          "coreg_coverage": 0.9809402795425667,
+          "n_coreg": 787
+        },
+        "FiltGMM5_counts_p0.1": {
+          "threshold_counts": 107.0,
+          "threshold_density": null,
+          "source": "GMM-5 on log(counts>=10), rightmost component, 0.1st percentile",
+          "n_gfp": 17491,
+          "n_hcr_total": 127275,
+          "gfp_frac": 0.1374268316637203,
+          "coreg_coverage": 0.974587039390089,
+          "n_coreg": 787
+        },
+        "MirrorGauss_counts_p0.1": {
+          "threshold_counts": 81.0,
+          "threshold_density": null,
+          "source": "Rightmost peak of log-hist + right-side reflection; Gaussian 0.1st pct",
+          "n_gfp": 20974,
+          "n_hcr_total": 127275,
+          "gfp_frac": 0.16479277155765076,
+          "coreg_coverage": 0.9860228716645489,
+          "n_coreg": 787
+        },
         "Yen_log_density": {
           "threshold_counts": 0.0,
           "threshold_density": 0.00011529952530843462,
@@ -190,6 +250,36 @@
           "coreg_coverage": 1.0,
           "n_coreg": 787
         },
+        "PeakGauss3_density_p0.1": {
+          "threshold_counts": 0.0,
+          "threshold_density": 0.0006727883702799961,
+          "source": "GMM-3 on log(density>0), rightmost component, 0.1st percentile lower tail",
+          "n_gfp": 17427,
+          "n_hcr_total": 127275,
+          "gfp_frac": 0.13692398350029464,
+          "coreg_coverage": 0.9961880559085133,
+          "n_coreg": 787
+        },
+        "PeakGauss3_density_p1": {
+          "threshold_counts": 0.0,
+          "threshold_density": 0.0009349445817433593,
+          "source": "GMM-3 on log(density>0), rightmost component, 1st percentile lower tail",
+          "n_gfp": 13891,
+          "n_hcr_total": 127275,
+          "gfp_frac": 0.10914162247102731,
+          "coreg_coverage": 0.9796696315120712,
+          "n_coreg": 787
+        },
+        "MirrorGauss_density_p0.1": {
+          "threshold_counts": 0.0,
+          "threshold_density": 0.0011162068052766978,
+          "source": "Rightmost peak of log(density) + right-side reflection; Gaussian 0.1st pct",
+          "n_gfp": 12321,
+          "n_hcr_total": 127275,
+          "gfp_frac": 0.09680612846199176,
+          "coreg_coverage": 0.963151207115629,
+          "n_coreg": 787
+        },
         "Joint_Yen_counts_x_Yen_density": {
           "threshold_counts": 84.0,
           "threshold_density": 0.00011529952530843462,
@@ -228,6 +318,46 @@
           "n_hcr_total": 127275,
           "gfp_frac": 0.11680219996071499,
           "coreg_coverage": 0.9428208386277002,
+          "n_coreg": 787
+        },
+        "Joint_PeakGauss3_p0.1": {
+          "threshold_counts": 91.0,
+          "threshold_density": 0.0006727883702799961,
+          "source": "Peak-Gauss 0.1st pct on counts AND density (both must pass)",
+          "n_gfp": 16220,
+          "n_hcr_total": 127275,
+          "gfp_frac": 0.12744058141818895,
+          "coreg_coverage": 0.97712833545108,
+          "n_coreg": 787
+        },
+        "Joint_PeakGauss3_p1": {
+          "threshold_counts": 125.0,
+          "threshold_density": 0.0009349445817433593,
+          "source": "Peak-Gauss 1st pct on counts AND density (both must pass)",
+          "n_gfp": 13054,
+          "n_hcr_total": 127275,
+          "gfp_frac": 0.10256531133372618,
+          "coreg_coverage": 0.9529860228716646,
+          "n_coreg": 787
+        },
+        "Joint_MirrorGauss_p0.1": {
+          "threshold_counts": 81.0,
+          "threshold_density": 0.0011162068052766978,
+          "source": "MirrorGauss 0.1st pct on counts AND density (both must pass)",
+          "n_gfp": 11859,
+          "n_hcr_total": 127275,
+          "gfp_frac": 0.09317619328226281,
+          "coreg_coverage": 0.9504447268106735,
+          "n_coreg": 787
+        },
+        "Joint_FiltGMM3_x_MirrorDensity_p0.1": {
+          "threshold_counts": 79.0,
+          "threshold_density": 0.0011162068052766978,
+          "source": "FiltGMM-3 on counts AND MirrorGauss on density (0.1st pct)",
+          "n_gfp": 11864,
+          "n_hcr_total": 127275,
+          "gfp_frac": 0.09321547829503045,
+          "coreg_coverage": 0.9504447268106735,
           "n_coreg": 787
         }
       }
@@ -351,6 +481,66 @@
           "coreg_coverage": 0.9922879177377892,
           "n_coreg": 778
         },
+        "PeakGauss3_counts_p0.1": {
+          "threshold_counts": 25.0,
+          "threshold_density": null,
+          "source": "GMM-3 on log(counts>=1), rightmost component, 0.1st percentile lower tail",
+          "n_gfp": 52983,
+          "n_hcr_total": 106379,
+          "gfp_frac": 0.4980588274001448,
+          "coreg_coverage": 1.0,
+          "n_coreg": 778
+        },
+        "PeakGauss3_counts_p1": {
+          "threshold_counts": 45.0,
+          "threshold_density": null,
+          "source": "GMM-3 on log(counts>=1), rightmost component, 1st percentile lower tail",
+          "n_gfp": 43162,
+          "n_hcr_total": 106379,
+          "gfp_frac": 0.4057379746002501,
+          "coreg_coverage": 0.9987146529562982,
+          "n_coreg": 778
+        },
+        "FiltGMM3_counts_p0.1": {
+          "threshold_counts": 91.0,
+          "threshold_density": null,
+          "source": "GMM-3 on log(counts>=10), rightmost component, 0.1st percentile",
+          "n_gfp": 25854,
+          "n_hcr_total": 106379,
+          "gfp_frac": 0.24303668957219,
+          "coreg_coverage": 0.993573264781491,
+          "n_coreg": 778
+        },
+        "FiltGMM4_counts_p0.1": {
+          "threshold_counts": 102.0,
+          "threshold_density": null,
+          "source": "GMM-4 on log(counts>=10), rightmost component, 0.1st percentile",
+          "n_gfp": 22986,
+          "n_hcr_total": 106379,
+          "gfp_frac": 0.21607648126039913,
+          "coreg_coverage": 0.9922879177377892,
+          "n_coreg": 778
+        },
+        "FiltGMM5_counts_p0.1": {
+          "threshold_counts": 117.0,
+          "threshold_density": null,
+          "source": "GMM-5 on log(counts>=10), rightmost component, 0.1st percentile",
+          "n_gfp": 19755,
+          "n_hcr_total": 106379,
+          "gfp_frac": 0.18570394532755524,
+          "coreg_coverage": 0.9922879177377892,
+          "n_coreg": 778
+        },
+        "MirrorGauss_counts_p0.1": {
+          "threshold_counts": 115.0,
+          "threshold_density": null,
+          "source": "Rightmost peak of log-hist + right-side reflection; Gaussian 0.1st pct",
+          "n_gfp": 20138,
+          "n_hcr_total": 106379,
+          "gfp_frac": 0.18930427998007127,
+          "coreg_coverage": 0.9922879177377892,
+          "n_coreg": 778
+        },
         "Yen_log_density": {
           "threshold_counts": 0.0,
           "threshold_density": 0.00012415967531761426,
@@ -421,6 +611,36 @@
           "coreg_coverage": 1.0,
           "n_coreg": 778
         },
+        "PeakGauss3_density_p0.1": {
+          "threshold_counts": 0.0,
+          "threshold_density": 0.001511763074159834,
+          "source": "GMM-3 on log(density>0), rightmost component, 0.1st percentile lower tail",
+          "n_gfp": 10131,
+          "n_hcr_total": 106379,
+          "gfp_frac": 0.09523496178757085,
+          "coreg_coverage": 0.9884318766066839,
+          "n_coreg": 778
+        },
+        "PeakGauss3_density_p1": {
+          "threshold_counts": 0.0,
+          "threshold_density": 0.0018469720544253615,
+          "source": "GMM-3 on log(density>0), rightmost component, 1st percentile lower tail",
+          "n_gfp": 9318,
+          "n_hcr_total": 106379,
+          "gfp_frac": 0.08759247595860085,
+          "coreg_coverage": 0.9550128534704371,
+          "n_coreg": 778
+        },
+        "MirrorGauss_density_p0.1": {
+          "threshold_counts": 0.0,
+          "threshold_density": 0.0016840239428987352,
+          "source": "Rightmost peak of log(density) + right-side reflection; Gaussian 0.1st pct",
+          "n_gfp": 9702,
+          "n_hcr_total": 106379,
+          "gfp_frac": 0.09120221096269,
+          "coreg_coverage": 0.9768637532133676,
+          "n_coreg": 778
+        },
         "Joint_Yen_counts_x_Yen_density": {
           "threshold_counts": 153.0,
           "threshold_density": 0.00012415967531761426,
@@ -459,6 +679,46 @@
           "n_hcr_total": 106379,
           "gfp_frac": 0.21375459442183137,
           "coreg_coverage": 0.9922879177377892,
+          "n_coreg": 778
+        },
+        "Joint_PeakGauss3_p0.1": {
+          "threshold_counts": 25.0,
+          "threshold_density": 0.001511763074159834,
+          "source": "Peak-Gauss 0.1st pct on counts AND density (both must pass)",
+          "n_gfp": 9902,
+          "n_hcr_total": 106379,
+          "gfp_frac": 0.09308228127731977,
+          "coreg_coverage": 0.9884318766066839,
+          "n_coreg": 778
+        },
+        "Joint_PeakGauss3_p1": {
+          "threshold_counts": 45.0,
+          "threshold_density": 0.0018469720544253615,
+          "source": "Peak-Gauss 1st pct on counts AND density (both must pass)",
+          "n_gfp": 9052,
+          "n_hcr_total": 106379,
+          "gfp_frac": 0.08509198244014327,
+          "coreg_coverage": 0.9537275064267352,
+          "n_coreg": 778
+        },
+        "Joint_MirrorGauss_p0.1": {
+          "threshold_counts": 115.0,
+          "threshold_density": 0.0016840239428987352,
+          "source": "MirrorGauss 0.1st pct on counts AND density (both must pass)",
+          "n_gfp": 9257,
+          "n_hcr_total": 106379,
+          "gfp_frac": 0.08701905451263878,
+          "coreg_coverage": 0.9704370179948586,
+          "n_coreg": 778
+        },
+        "Joint_FiltGMM3_x_MirrorDensity_p0.1": {
+          "threshold_counts": 91.0,
+          "threshold_density": 0.0016840239428987352,
+          "source": "FiltGMM-3 on counts AND MirrorGauss on density (0.1st pct)",
+          "n_gfp": 9309,
+          "n_hcr_total": 106379,
+          "gfp_frac": 0.08750787279444251,
+          "coreg_coverage": 0.9717223650385605,
           "n_coreg": 778
         }
       }
@@ -582,6 +842,66 @@
           "coreg_coverage": 0.9926739926739927,
           "n_coreg": 273
         },
+        "PeakGauss3_counts_p0.1": {
+          "threshold_counts": 86.0,
+          "threshold_density": null,
+          "source": "GMM-3 on log(counts>=1), rightmost component, 0.1st percentile lower tail",
+          "n_gfp": 12295,
+          "n_hcr_total": 108506,
+          "gfp_frac": 0.11331170626509134,
+          "coreg_coverage": 0.9963369963369964,
+          "n_coreg": 273
+        },
+        "PeakGauss3_counts_p1": {
+          "threshold_counts": 120.0,
+          "threshold_density": null,
+          "source": "GMM-3 on log(counts>=1), rightmost component, 1st percentile lower tail",
+          "n_gfp": 9761,
+          "n_hcr_total": 108506,
+          "gfp_frac": 0.0899581589958159,
+          "coreg_coverage": 0.9926739926739927,
+          "n_coreg": 273
+        },
+        "FiltGMM3_counts_p0.1": {
+          "threshold_counts": 74.0,
+          "threshold_density": null,
+          "source": "GMM-3 on log(counts>=10), rightmost component, 0.1st percentile",
+          "n_gfp": 14099,
+          "n_hcr_total": 108506,
+          "gfp_frac": 0.12993751497613035,
+          "coreg_coverage": 1.0,
+          "n_coreg": 273
+        },
+        "FiltGMM4_counts_p0.1": {
+          "threshold_counts": 79.0,
+          "threshold_density": null,
+          "source": "GMM-4 on log(counts>=10), rightmost component, 0.1st percentile",
+          "n_gfp": 13220,
+          "n_hcr_total": 108506,
+          "gfp_frac": 0.12183658046559637,
+          "coreg_coverage": 1.0,
+          "n_coreg": 273
+        },
+        "FiltGMM5_counts_p0.1": {
+          "threshold_counts": 84.0,
+          "threshold_density": null,
+          "source": "GMM-5 on log(counts>=10), rightmost component, 0.1st percentile",
+          "n_gfp": 12547,
+          "n_hcr_total": 108506,
+          "gfp_frac": 0.11563415847971541,
+          "coreg_coverage": 1.0,
+          "n_coreg": 273
+        },
+        "MirrorGauss_counts_p0.1": {
+          "threshold_counts": 69.0,
+          "threshold_density": null,
+          "source": "Rightmost peak of log-hist + right-side reflection; Gaussian 0.1st pct",
+          "n_gfp": 15103,
+          "n_hcr_total": 108506,
+          "gfp_frac": 0.1391904595137596,
+          "coreg_coverage": 1.0,
+          "n_coreg": 273
+        },
         "Yen_log_density": {
           "threshold_counts": 0.0,
           "threshold_density": 0.0005610430589807292,
@@ -652,6 +972,36 @@
           "coreg_coverage": 1.0,
           "n_coreg": 273
         },
+        "PeakGauss3_density_p0.1": {
+          "threshold_counts": 0.0,
+          "threshold_density": 0.0008001200622725772,
+          "source": "GMM-3 on log(density>0), rightmost component, 0.1st percentile lower tail",
+          "n_gfp": 9161,
+          "n_hcr_total": 108506,
+          "gfp_frac": 0.08442851086575857,
+          "coreg_coverage": 0.989010989010989,
+          "n_coreg": 273
+        },
+        "PeakGauss3_density_p1": {
+          "threshold_counts": 0.0,
+          "threshold_density": 0.0010516625448309279,
+          "source": "GMM-3 on log(density>0), rightmost component, 1st percentile lower tail",
+          "n_gfp": 7986,
+          "n_hcr_total": 108506,
+          "gfp_frac": 0.07359961661106298,
+          "coreg_coverage": 0.9816849816849816,
+          "n_coreg": 273
+        },
+        "MirrorGauss_density_p0.1": {
+          "threshold_counts": 0.0,
+          "threshold_density": 0.0009905231847617039,
+          "source": "Rightmost peak of log(density) + right-side reflection; Gaussian 0.1st pct",
+          "n_gfp": 8221,
+          "n_hcr_total": 108506,
+          "gfp_frac": 0.0757653954620021,
+          "coreg_coverage": 0.9816849816849816,
+          "n_coreg": 273
+        },
         "Joint_Yen_counts_x_Yen_density": {
           "threshold_counts": 90.0,
           "threshold_density": 0.0005610430589807292,
@@ -690,6 +1040,46 @@
           "n_hcr_total": 108506,
           "gfp_frac": 0.09665824931340203,
           "coreg_coverage": 0.9926739926739927,
+          "n_coreg": 273
+        },
+        "Joint_PeakGauss3_p0.1": {
+          "threshold_counts": 86.0,
+          "threshold_density": 0.0008001200622725772,
+          "source": "Peak-Gauss 0.1st pct on counts AND density (both must pass)",
+          "n_gfp": 8580,
+          "n_hcr_total": 108506,
+          "gfp_frac": 0.07907396825981973,
+          "coreg_coverage": 0.989010989010989,
+          "n_coreg": 273
+        },
+        "Joint_PeakGauss3_p1": {
+          "threshold_counts": 120.0,
+          "threshold_density": 0.0010516625448309279,
+          "source": "Peak-Gauss 1st pct on counts AND density (both must pass)",
+          "n_gfp": 7460,
+          "n_hcr_total": 108506,
+          "gfp_frac": 0.06875195841704607,
+          "coreg_coverage": 0.978021978021978,
+          "n_coreg": 273
+        },
+        "Joint_MirrorGauss_p0.1": {
+          "threshold_counts": 69.0,
+          "threshold_density": 0.0009905231847617039,
+          "source": "MirrorGauss 0.1st pct on counts AND density (both must pass)",
+          "n_gfp": 7820,
+          "n_hcr_total": 108506,
+          "gfp_frac": 0.07206974729508045,
+          "coreg_coverage": 0.9816849816849816,
+          "n_coreg": 273
+        },
+        "Joint_FiltGMM3_x_MirrorDensity_p0.1": {
+          "threshold_counts": 74.0,
+          "threshold_density": 0.0009905231847617039,
+          "source": "FiltGMM-3 on counts AND MirrorGauss on density (0.1st pct)",
+          "n_gfp": 7802,
+          "n_hcr_total": 108506,
+          "gfp_frac": 0.07190385785117874,
+          "coreg_coverage": 0.9816849816849816,
           "n_coreg": 273
         }
       }
@@ -813,6 +1203,66 @@
           "coreg_coverage": 0.9933993399339934,
           "n_coreg": 303
         },
+        "PeakGauss3_counts_p0.1": {
+          "threshold_counts": 9.0,
+          "threshold_density": null,
+          "source": "GMM-3 on log(counts>=1), rightmost component, 0.1st percentile lower tail",
+          "n_gfp": 23458,
+          "n_hcr_total": 39291,
+          "gfp_frac": 0.5970323992771882,
+          "coreg_coverage": 0.9966996699669967,
+          "n_coreg": 303
+        },
+        "PeakGauss3_counts_p1": {
+          "threshold_counts": 16.0,
+          "threshold_density": null,
+          "source": "GMM-3 on log(counts>=1), rightmost component, 1st percentile lower tail",
+          "n_gfp": 21302,
+          "n_hcr_total": 39291,
+          "gfp_frac": 0.5421597821384032,
+          "coreg_coverage": 0.9966996699669967,
+          "n_coreg": 303
+        },
+        "FiltGMM3_counts_p0.1": {
+          "threshold_counts": 96.0,
+          "threshold_density": null,
+          "source": "GMM-3 on log(counts>=10), rightmost component, 0.1st percentile",
+          "n_gfp": 8940,
+          "n_hcr_total": 39291,
+          "gfp_frac": 0.22753302282965565,
+          "coreg_coverage": 0.9834983498349835,
+          "n_coreg": 303
+        },
+        "FiltGMM4_counts_p0.1": {
+          "threshold_counts": 107.0,
+          "threshold_density": null,
+          "source": "GMM-4 on log(counts>=10), rightmost component, 0.1st percentile",
+          "n_gfp": 7716,
+          "n_hcr_total": 39291,
+          "gfp_frac": 0.1963808505764679,
+          "coreg_coverage": 0.976897689768977,
+          "n_coreg": 303
+        },
+        "FiltGMM5_counts_p0.1": {
+          "threshold_counts": 113.0,
+          "threshold_density": null,
+          "source": "GMM-5 on log(counts>=10), rightmost component, 0.1st percentile",
+          "n_gfp": 7108,
+          "n_hcr_total": 39291,
+          "gfp_frac": 0.18090656893436155,
+          "coreg_coverage": 0.976897689768977,
+          "n_coreg": 303
+        },
+        "MirrorGauss_counts_p0.1": {
+          "threshold_counts": 128.0,
+          "threshold_density": null,
+          "source": "Rightmost peak of log-hist + right-side reflection; Gaussian 0.1st pct",
+          "n_gfp": 5933,
+          "n_hcr_total": 39291,
+          "gfp_frac": 0.1510015016161462,
+          "coreg_coverage": 0.9702970297029703,
+          "n_coreg": 303
+        },
         "Yen_log_density": {
           "threshold_counts": 0.0,
           "threshold_density": 0.0001628645252408618,
@@ -883,6 +1333,36 @@
           "coreg_coverage": 1.0,
           "n_coreg": 303
         },
+        "PeakGauss3_density_p0.1": {
+          "threshold_counts": 0.0,
+          "threshold_density": 0.0013382972196936116,
+          "source": "GMM-3 on log(density>0), rightmost component, 0.1st percentile lower tail",
+          "n_gfp": 3831,
+          "n_hcr_total": 39291,
+          "gfp_frac": 0.09750324501794304,
+          "coreg_coverage": 0.9867986798679867,
+          "n_coreg": 303
+        },
+        "PeakGauss3_density_p1": {
+          "threshold_counts": 0.0,
+          "threshold_density": 0.0016762017440103167,
+          "source": "GMM-3 on log(density>0), rightmost component, 1st percentile lower tail",
+          "n_gfp": 3477,
+          "n_hcr_total": 39291,
+          "gfp_frac": 0.0884935481407956,
+          "coreg_coverage": 0.9735973597359736,
+          "n_coreg": 303
+        },
+        "MirrorGauss_density_p0.1": {
+          "threshold_counts": 0.0,
+          "threshold_density": 0.0014325020444225932,
+          "source": "Rightmost peak of log(density) + right-side reflection; Gaussian 0.1st pct",
+          "n_gfp": 3704,
+          "n_hcr_total": 39291,
+          "gfp_frac": 0.09427095263546359,
+          "coreg_coverage": 0.9867986798679867,
+          "n_coreg": 303
+        },
         "Joint_Yen_counts_x_Yen_density": {
           "threshold_counts": 156.0,
           "threshold_density": 0.0001628645252408618,
@@ -921,6 +1401,46 @@
           "n_hcr_total": 39291,
           "gfp_frac": 0.38008704283423683,
           "coreg_coverage": 0.9933993399339934,
+          "n_coreg": 303
+        },
+        "Joint_PeakGauss3_p0.1": {
+          "threshold_counts": 9.0,
+          "threshold_density": 0.0013382972196936116,
+          "source": "Peak-Gauss 0.1st pct on counts AND density (both must pass)",
+          "n_gfp": 3774,
+          "n_hcr_total": 39291,
+          "gfp_frac": 0.09605253111399557,
+          "coreg_coverage": 0.9834983498349835,
+          "n_coreg": 303
+        },
+        "Joint_PeakGauss3_p1": {
+          "threshold_counts": 16.0,
+          "threshold_density": 0.0016762017440103167,
+          "source": "Peak-Gauss 1st pct on counts AND density (both must pass)",
+          "n_gfp": 3390,
+          "n_hcr_total": 39291,
+          "gfp_frac": 0.08627930060319157,
+          "coreg_coverage": 0.9702970297029703,
+          "n_coreg": 303
+        },
+        "Joint_MirrorGauss_p0.1": {
+          "threshold_counts": 128.0,
+          "threshold_density": 0.0014325020444225932,
+          "source": "MirrorGauss 0.1st pct on counts AND density (both must pass)",
+          "n_gfp": 3415,
+          "n_hcr_total": 39291,
+          "gfp_frac": 0.08691557863123871,
+          "coreg_coverage": 0.9603960396039604,
+          "n_coreg": 303
+        },
+        "Joint_FiltGMM3_x_MirrorDensity_p0.1": {
+          "threshold_counts": 96.0,
+          "threshold_density": 0.0014325020444225932,
+          "source": "FiltGMM-3 on counts AND MirrorGauss on density (0.1st pct)",
+          "n_gfp": 3458,
+          "n_hcr_total": 39291,
+          "gfp_frac": 0.08800997683947978,
+          "coreg_coverage": 0.9702970297029703,
           "n_coreg": 303
         }
       }
@@ -1237,6 +1757,192 @@
       "coreg_cov_min": 0.9428208386277002,
       "coreg_cov_mean": 0.9802955222433689
     },
+    "PeakGauss3_counts_p0.1": {
+      "threshold_counts_per_subject": {
+        "788406": 91.0,
+        "790322": 25.0,
+        "767018": 86.0,
+        "782149": 9.0
+      },
+      "threshold_density_per_subject": {
+        "788406": null,
+        "790322": null,
+        "767018": null,
+        "782149": null
+      },
+      "gfp_frac_per_subject": {
+        "788406": 0.15161657827538794,
+        "790322": 0.4980588274001448,
+        "767018": 0.11331170626509134,
+        "782149": 0.5970323992771882
+      },
+      "coreg_cov_per_subject": {
+        "788406": 0.9796696315120712,
+        "790322": 1.0,
+        "767018": 0.9963369963369964,
+        "782149": 0.9966996699669967
+      },
+      "gfp_frac_max": 0.5970323992771882,
+      "gfp_frac_mean": 0.3400048778044531,
+      "gfp_frac_min": 0.11331170626509134,
+      "coreg_cov_min": 0.9796696315120712,
+      "coreg_cov_mean": 0.9931765744540161
+    },
+    "PeakGauss3_counts_p1": {
+      "threshold_counts_per_subject": {
+        "788406": 125.0,
+        "790322": 45.0,
+        "767018": 120.0,
+        "782149": 16.0
+      },
+      "threshold_density_per_subject": {
+        "788406": null,
+        "790322": null,
+        "767018": null,
+        "782149": null
+      },
+      "gfp_frac_per_subject": {
+        "788406": 0.1258377528972697,
+        "790322": 0.4057379746002501,
+        "767018": 0.0899581589958159,
+        "782149": 0.5421597821384032
+      },
+      "coreg_cov_per_subject": {
+        "788406": 0.9644218551461246,
+        "790322": 0.9987146529562982,
+        "767018": 0.9926739926739927,
+        "782149": 0.9966996699669967
+      },
+      "gfp_frac_max": 0.5421597821384032,
+      "gfp_frac_mean": 0.29092341715793474,
+      "gfp_frac_min": 0.0899581589958159,
+      "coreg_cov_min": 0.9644218551461246,
+      "coreg_cov_mean": 0.988127542685853
+    },
+    "FiltGMM3_counts_p0.1": {
+      "threshold_counts_per_subject": {
+        "788406": 79.0,
+        "790322": 91.0,
+        "767018": 74.0,
+        "782149": 96.0
+      },
+      "threshold_density_per_subject": {
+        "788406": null,
+        "790322": null,
+        "767018": null,
+        "782149": null
+      },
+      "gfp_frac_per_subject": {
+        "788406": 0.16782557454331173,
+        "790322": 0.24303668957219,
+        "767018": 0.12993751497613035,
+        "782149": 0.22753302282965565
+      },
+      "coreg_cov_per_subject": {
+        "788406": 0.9860228716645489,
+        "790322": 0.993573264781491,
+        "767018": 1.0,
+        "782149": 0.9834983498349835
+      },
+      "gfp_frac_max": 0.24303668957219,
+      "gfp_frac_mean": 0.19208320048032196,
+      "gfp_frac_min": 0.12993751497613035,
+      "coreg_cov_min": 0.9834983498349835,
+      "coreg_cov_mean": 0.990773621570256
+    },
+    "FiltGMM4_counts_p0.1": {
+      "threshold_counts_per_subject": {
+        "788406": 90.0,
+        "790322": 102.0,
+        "767018": 79.0,
+        "782149": 107.0
+      },
+      "threshold_density_per_subject": {
+        "788406": null,
+        "790322": null,
+        "767018": null,
+        "782149": null
+      },
+      "gfp_frac_per_subject": {
+        "788406": 0.152692987625221,
+        "790322": 0.21607648126039913,
+        "767018": 0.12183658046559637,
+        "782149": 0.1963808505764679
+      },
+      "coreg_cov_per_subject": {
+        "788406": 0.9809402795425667,
+        "790322": 0.9922879177377892,
+        "767018": 1.0,
+        "782149": 0.976897689768977
+      },
+      "gfp_frac_max": 0.21607648126039913,
+      "gfp_frac_mean": 0.1717467249819211,
+      "gfp_frac_min": 0.12183658046559637,
+      "coreg_cov_min": 0.976897689768977,
+      "coreg_cov_mean": 0.9875314717623331
+    },
+    "FiltGMM5_counts_p0.1": {
+      "threshold_counts_per_subject": {
+        "788406": 107.0,
+        "790322": 117.0,
+        "767018": 84.0,
+        "782149": 113.0
+      },
+      "threshold_density_per_subject": {
+        "788406": null,
+        "790322": null,
+        "767018": null,
+        "782149": null
+      },
+      "gfp_frac_per_subject": {
+        "788406": 0.1374268316637203,
+        "790322": 0.18570394532755524,
+        "767018": 0.11563415847971541,
+        "782149": 0.18090656893436155
+      },
+      "coreg_cov_per_subject": {
+        "788406": 0.974587039390089,
+        "790322": 0.9922879177377892,
+        "767018": 1.0,
+        "782149": 0.976897689768977
+      },
+      "gfp_frac_max": 0.18570394532755524,
+      "gfp_frac_mean": 0.15491787610133814,
+      "gfp_frac_min": 0.11563415847971541,
+      "coreg_cov_min": 0.974587039390089,
+      "coreg_cov_mean": 0.9859431617242138
+    },
+    "MirrorGauss_counts_p0.1": {
+      "threshold_counts_per_subject": {
+        "788406": 81.0,
+        "790322": 115.0,
+        "767018": 69.0,
+        "782149": 128.0
+      },
+      "threshold_density_per_subject": {
+        "788406": null,
+        "790322": null,
+        "767018": null,
+        "782149": null
+      },
+      "gfp_frac_per_subject": {
+        "788406": 0.16479277155765076,
+        "790322": 0.18930427998007127,
+        "767018": 0.1391904595137596,
+        "782149": 0.1510015016161462
+      },
+      "coreg_cov_per_subject": {
+        "788406": 0.9860228716645489,
+        "790322": 0.9922879177377892,
+        "767018": 1.0,
+        "782149": 0.9702970297029703
+      },
+      "gfp_frac_max": 0.18930427998007127,
+      "gfp_frac_mean": 0.16107225316690696,
+      "gfp_frac_min": 0.1391904595137596,
+      "coreg_cov_min": 0.9702970297029703,
+      "coreg_cov_mean": 0.9871519547763271
+    },
     "Yen_log_density": {
       "threshold_counts_per_subject": {
         "788406": 0.0,
@@ -1454,6 +2160,99 @@
       "coreg_cov_min": 1.0,
       "coreg_cov_mean": 1.0
     },
+    "PeakGauss3_density_p0.1": {
+      "threshold_counts_per_subject": {
+        "788406": 0.0,
+        "790322": 0.0,
+        "767018": 0.0,
+        "782149": 0.0
+      },
+      "threshold_density_per_subject": {
+        "788406": 0.0006727883702799961,
+        "790322": 0.001511763074159834,
+        "767018": 0.0008001200622725772,
+        "782149": 0.0013382972196936116
+      },
+      "gfp_frac_per_subject": {
+        "788406": 0.13692398350029464,
+        "790322": 0.09523496178757085,
+        "767018": 0.08442851086575857,
+        "782149": 0.09750324501794304
+      },
+      "coreg_cov_per_subject": {
+        "788406": 0.9961880559085133,
+        "790322": 0.9884318766066839,
+        "767018": 0.989010989010989,
+        "782149": 0.9867986798679867
+      },
+      "gfp_frac_max": 0.13692398350029464,
+      "gfp_frac_mean": 0.10352267529289177,
+      "gfp_frac_min": 0.08442851086575857,
+      "coreg_cov_min": 0.9867986798679867,
+      "coreg_cov_mean": 0.9901074003485432
+    },
+    "PeakGauss3_density_p1": {
+      "threshold_counts_per_subject": {
+        "788406": 0.0,
+        "790322": 0.0,
+        "767018": 0.0,
+        "782149": 0.0
+      },
+      "threshold_density_per_subject": {
+        "788406": 0.0009349445817433593,
+        "790322": 0.0018469720544253615,
+        "767018": 0.0010516625448309279,
+        "782149": 0.0016762017440103167
+      },
+      "gfp_frac_per_subject": {
+        "788406": 0.10914162247102731,
+        "790322": 0.08759247595860085,
+        "767018": 0.07359961661106298,
+        "782149": 0.0884935481407956
+      },
+      "coreg_cov_per_subject": {
+        "788406": 0.9796696315120712,
+        "790322": 0.9550128534704371,
+        "767018": 0.9816849816849816,
+        "782149": 0.9735973597359736
+      },
+      "gfp_frac_max": 0.10914162247102731,
+      "gfp_frac_mean": 0.08970681579537168,
+      "gfp_frac_min": 0.07359961661106298,
+      "coreg_cov_min": 0.9550128534704371,
+      "coreg_cov_mean": 0.972491206600866
+    },
+    "MirrorGauss_density_p0.1": {
+      "threshold_counts_per_subject": {
+        "788406": 0.0,
+        "790322": 0.0,
+        "767018": 0.0,
+        "782149": 0.0
+      },
+      "threshold_density_per_subject": {
+        "788406": 0.0011162068052766978,
+        "790322": 0.0016840239428987352,
+        "767018": 0.0009905231847617039,
+        "782149": 0.0014325020444225932
+      },
+      "gfp_frac_per_subject": {
+        "788406": 0.09680612846199176,
+        "790322": 0.09120221096269,
+        "767018": 0.0757653954620021,
+        "782149": 0.09427095263546359
+      },
+      "coreg_cov_per_subject": {
+        "788406": 0.963151207115629,
+        "790322": 0.9768637532133676,
+        "767018": 0.9816849816849816,
+        "782149": 0.9867986798679867
+      },
+      "gfp_frac_max": 0.09680612846199176,
+      "gfp_frac_mean": 0.08951117188053687,
+      "gfp_frac_min": 0.0757653954620021,
+      "coreg_cov_min": 0.963151207115629,
+      "coreg_cov_mean": 0.9771246554704912
+    },
     "Joint_Yen_counts_x_Yen_density": {
       "threshold_counts_per_subject": {
         "788406": 84.0,
@@ -1577,11 +2376,146 @@
       "gfp_frac_min": 0.09665824931340203,
       "coreg_cov_min": 0.9428208386277002,
       "coreg_cov_mean": 0.9802955222433689
+    },
+    "Joint_PeakGauss3_p0.1": {
+      "threshold_counts_per_subject": {
+        "788406": 91.0,
+        "790322": 25.0,
+        "767018": 86.0,
+        "782149": 9.0
+      },
+      "threshold_density_per_subject": {
+        "788406": 0.0006727883702799961,
+        "790322": 0.001511763074159834,
+        "767018": 0.0008001200622725772,
+        "782149": 0.0013382972196936116
+      },
+      "gfp_frac_per_subject": {
+        "788406": 0.12744058141818895,
+        "790322": 0.09308228127731977,
+        "767018": 0.07907396825981973,
+        "782149": 0.09605253111399557
+      },
+      "coreg_cov_per_subject": {
+        "788406": 0.97712833545108,
+        "790322": 0.9884318766066839,
+        "767018": 0.989010989010989,
+        "782149": 0.9834983498349835
+      },
+      "gfp_frac_max": 0.12744058141818895,
+      "gfp_frac_mean": 0.09891234051733101,
+      "gfp_frac_min": 0.07907396825981973,
+      "coreg_cov_min": 0.97712833545108,
+      "coreg_cov_mean": 0.9845173877259341
+    },
+    "Joint_PeakGauss3_p1": {
+      "threshold_counts_per_subject": {
+        "788406": 125.0,
+        "790322": 45.0,
+        "767018": 120.0,
+        "782149": 16.0
+      },
+      "threshold_density_per_subject": {
+        "788406": 0.0009349445817433593,
+        "790322": 0.0018469720544253615,
+        "767018": 0.0010516625448309279,
+        "782149": 0.0016762017440103167
+      },
+      "gfp_frac_per_subject": {
+        "788406": 0.10256531133372618,
+        "790322": 0.08509198244014327,
+        "767018": 0.06875195841704607,
+        "782149": 0.08627930060319157
+      },
+      "coreg_cov_per_subject": {
+        "788406": 0.9529860228716646,
+        "790322": 0.9537275064267352,
+        "767018": 0.978021978021978,
+        "782149": 0.9702970297029703
+      },
+      "gfp_frac_max": 0.10256531133372618,
+      "gfp_frac_mean": 0.08567213819852676,
+      "gfp_frac_min": 0.06875195841704607,
+      "coreg_cov_min": 0.9529860228716646,
+      "coreg_cov_mean": 0.963758134255837
+    },
+    "Joint_MirrorGauss_p0.1": {
+      "threshold_counts_per_subject": {
+        "788406": 81.0,
+        "790322": 115.0,
+        "767018": 69.0,
+        "782149": 128.0
+      },
+      "threshold_density_per_subject": {
+        "788406": 0.0011162068052766978,
+        "790322": 0.0016840239428987352,
+        "767018": 0.0009905231847617039,
+        "782149": 0.0014325020444225932
+      },
+      "gfp_frac_per_subject": {
+        "788406": 0.09317619328226281,
+        "790322": 0.08701905451263878,
+        "767018": 0.07206974729508045,
+        "782149": 0.08691557863123871
+      },
+      "coreg_cov_per_subject": {
+        "788406": 0.9504447268106735,
+        "790322": 0.9704370179948586,
+        "767018": 0.9816849816849816,
+        "782149": 0.9603960396039604
+      },
+      "gfp_frac_max": 0.09317619328226281,
+      "gfp_frac_mean": 0.08479514343030518,
+      "gfp_frac_min": 0.07206974729508045,
+      "coreg_cov_min": 0.9504447268106735,
+      "coreg_cov_mean": 0.9657406915236185
+    },
+    "Joint_FiltGMM3_x_MirrorDensity_p0.1": {
+      "threshold_counts_per_subject": {
+        "788406": 79.0,
+        "790322": 91.0,
+        "767018": 74.0,
+        "782149": 96.0
+      },
+      "threshold_density_per_subject": {
+        "788406": 0.0011162068052766978,
+        "790322": 0.0016840239428987352,
+        "767018": 0.0009905231847617039,
+        "782149": 0.0014325020444225932
+      },
+      "gfp_frac_per_subject": {
+        "788406": 0.09321547829503045,
+        "790322": 0.08750787279444251,
+        "767018": 0.07190385785117874,
+        "782149": 0.08800997683947978
+      },
+      "coreg_cov_per_subject": {
+        "788406": 0.9504447268106735,
+        "790322": 0.9717223650385605,
+        "767018": 0.9816849816849816,
+        "782149": 0.9702970297029703
+      },
+      "gfp_frac_max": 0.09321547829503045,
+      "gfp_frac_mean": 0.08515929644503287,
+      "gfp_frac_min": 0.07190385785117874,
+      "coreg_cov_min": 0.9504447268106735,
+      "coreg_cov_mean": 0.9685372758092965
     }
   },
   "winners_ranked": [
+    "Joint_MirrorGauss_p0.1",
+    "Joint_FiltGMM3_x_MirrorDensity_p0.1",
+    "MirrorGauss_density_p0.1",
+    "Joint_PeakGauss3_p1",
+    "PeakGauss3_density_p1",
+    "Joint_PeakGauss3_p0.1",
+    "PeakGauss3_density_p0.1",
     "Joint_Yen_counts_x_Yen_density",
     "Yen_log_counts",
+    "FiltGMM5_counts_p0.1",
+    "MirrorGauss_counts_p0.1",
+    "FiltGMM4_counts_p0.1",
+    "FiltGMM3_counts_p0.1",
     "Joint_Otsu_counts_x_Otsu_density",
     "Isodata_log_counts",
     "Otsu_log_density",
@@ -1590,14 +2524,58 @@
     "Isodata_log_density",
     "GMM3_log_density",
     "Joint_GMM_counts_x_GMM_density",
+    "PeakGauss3_counts_p1",
     "A_gmm_log_counts",
     "Yen_log_density",
     "GMM3bg_log_density",
     "GMM_log_density",
+    "PeakGauss3_counts_p0.1",
     "Triangle_log_density",
     "Triangle_log_counts"
   ],
   "winners_detail": [
+    {
+      "name": "Joint_MirrorGauss_p0.1",
+      "gfp_frac_max": 0.09317619328226281,
+      "gfp_frac_mean": 0.08479514343030518,
+      "coreg_cov_min": 0.9504447268106735
+    },
+    {
+      "name": "Joint_FiltGMM3_x_MirrorDensity_p0.1",
+      "gfp_frac_max": 0.09321547829503045,
+      "gfp_frac_mean": 0.08515929644503287,
+      "coreg_cov_min": 0.9504447268106735
+    },
+    {
+      "name": "MirrorGauss_density_p0.1",
+      "gfp_frac_max": 0.09680612846199176,
+      "gfp_frac_mean": 0.08951117188053687,
+      "coreg_cov_min": 0.963151207115629
+    },
+    {
+      "name": "Joint_PeakGauss3_p1",
+      "gfp_frac_max": 0.10256531133372618,
+      "gfp_frac_mean": 0.08567213819852676,
+      "coreg_cov_min": 0.9529860228716646
+    },
+    {
+      "name": "PeakGauss3_density_p1",
+      "gfp_frac_max": 0.10914162247102731,
+      "gfp_frac_mean": 0.08970681579537168,
+      "coreg_cov_min": 0.9550128534704371
+    },
+    {
+      "name": "Joint_PeakGauss3_p0.1",
+      "gfp_frac_max": 0.12744058141818895,
+      "gfp_frac_mean": 0.09891234051733101,
+      "coreg_cov_min": 0.97712833545108
+    },
+    {
+      "name": "PeakGauss3_density_p0.1",
+      "gfp_frac_max": 0.13692398350029464,
+      "gfp_frac_mean": 0.10352267529289177,
+      "coreg_cov_min": 0.9867986798679867
+    },
     {
       "name": "Joint_Yen_counts_x_Yen_density",
       "gfp_frac_max": 0.16078570025535258,
@@ -1609,6 +2587,30 @@
       "gfp_frac_max": 0.16079355725790612,
       "gfp_frac_mean": 0.13148344579877325,
       "coreg_cov_min": 0.9603960396039604
+    },
+    {
+      "name": "FiltGMM5_counts_p0.1",
+      "gfp_frac_max": 0.18570394532755524,
+      "gfp_frac_mean": 0.15491787610133814,
+      "coreg_cov_min": 0.974587039390089
+    },
+    {
+      "name": "MirrorGauss_counts_p0.1",
+      "gfp_frac_max": 0.18930427998007127,
+      "gfp_frac_mean": 0.16107225316690696,
+      "coreg_cov_min": 0.9702970297029703
+    },
+    {
+      "name": "FiltGMM4_counts_p0.1",
+      "gfp_frac_max": 0.21607648126039913,
+      "gfp_frac_mean": 0.1717467249819211,
+      "coreg_cov_min": 0.976897689768977
+    },
+    {
+      "name": "FiltGMM3_counts_p0.1",
+      "gfp_frac_max": 0.24303668957219,
+      "gfp_frac_mean": 0.19208320048032196,
+      "coreg_cov_min": 0.9834983498349835
     },
     {
       "name": "Joint_Otsu_counts_x_Otsu_density",
@@ -1659,6 +2661,12 @@
       "coreg_cov_min": 0.9966996699669967
     },
     {
+      "name": "PeakGauss3_counts_p1",
+      "gfp_frac_max": 0.5421597821384032,
+      "gfp_frac_mean": 0.29092341715793474,
+      "coreg_cov_min": 0.9644218551461246
+    },
+    {
       "name": "A_gmm_log_counts",
       "gfp_frac_max": 0.5459536186653381,
       "gfp_frac_mean": 0.4680832179453327,
@@ -1681,6 +2689,12 @@
       "gfp_frac_max": 0.5650081313041108,
       "gfp_frac_mean": 0.4759158641996925,
       "coreg_cov_min": 1.0
+    },
+    {
+      "name": "PeakGauss3_counts_p0.1",
+      "gfp_frac_max": 0.5970323992771882,
+      "gfp_frac_mean": 0.3400048778044531,
+      "coreg_cov_min": 0.9796696315120712
     },
     {
       "name": "Triangle_log_density",

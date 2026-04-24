@@ -1,0 +1,183 @@
+# Session 03 — Image-based surface + L2 estimation
+
+Date: 2026-04-17
+
+## Goal
+
+Replace the feature-centroid-driven pia estimators of session 03 v2 with a
+purely **image-intensity-driven** approach that also estimates the L2
+boundary.  The algorithm must be distribution-driven (no hand-tuned absolute
+thresholds) and generalise across HCR (multi-channel fluorescence) and CZ
+(GFP confocal) volumes.
+
+User-specified priors (biological / geometric, not calibration):
+
+* Top of the volume is always blank (outside tissue).
+* Pia (surface) lies within the top 25 % of the volume in z.
+* Below pia lies L1 (neuropil); L2 is a second, deeper intensity jump.
+* L2 is roughly parallel to pia.
+* For CZ, L2 must be detected from *background* intensity only
+  (segmentation-mask == 0), because GFP cell bodies dominate the raw
+  profile and mask the underlying layer signal.
+
+## Files
+
+* `code/dev_code/03_image_based_surface.py`
+  — `estimate_surface_and_l2_image_based(vol, z_um, xy_um, ...)` returning
+  `SurfaceL2Result(surface, l2, baseline_mean, baseline_sigma, surf_thr,
+  l2_thr, n_tiles_total, n_surface_tiles, n_l2_tiles, tile_records, ...)`.
+  Plus `depth_profile_stats()` for v2-compatible metrics.
+* `code/dev_code/03_image_based_surface_run.py`
+  — driver over `BENCHMARK_SUBJECTS`; runs HCR (combined channels) and CZ
+  (raw volume + segmentation-masked background for L2 search); dumps
+  `results.csv`.
+* `code/dev_code/03_image_based_surface_figs.py`
+  — 3×2 walkthrough figures per subject: XZ and YZ MIPs overlaid with the
+  fitted surface and L2 planes, plus the aggregated intensity profile with
+  surf / L2 thresholds.
+* `code/sessions/03_image_based_surface_estimation/results.csv`
+  — per-subject scalars (surface coefficients, tilts, residuals, L2
+  thickness, depth-profile metrics).
+* `code/sessions/03_image_based_surface_estimation/figures/walkthrough_<sid>.png`.
+
+## Algorithm
+
+### 1. Tile & aggregate
+
+* Tile size: 150 µm for HCR, 80 µm for CZ (one manual landmark cluster).
+* Per tile, compute the median intensity along each z-slice → 1-D profile.
+* For CZ we additionally build a **background-only** profile per tile
+  (median over voxels where `segmentation_mask == 0`), used for L2.
+
+### 2. Baseline from the truly-blank top slab
+
+* Look at the top `max(5 %·Z, 20 µm)` of every tile profile.
+* Keep only the slices whose intensity is ≤ 5 % of the global
+  dynamic-range hint (99th percentile of per-tile peaks).  This isolates
+  the **truly blank** part of the top slab.
+* If ≥ 3 blank samples survive, `baseline_mean = median`,
+  `baseline_sigma = 1.4826 · MAD` (≥ std fallback).
+* If fewer than 3 survive (CZ: only z = 0 is zero, z ≥ 1 is already buffer
+  signal), fall back entirely to the dynamic-range floor:
+  `baseline_mean = 0`, `sigma ≥ 0.02 · dyn_hint`.
+* This is why subjects 782149 / 788406 — whose CZ top slab contains a
+  mixture of padding and buffer — now yield sane baselines instead of
+  threshold-inflating ones.
+
+### 3. Surface detection
+
+* `surf_thr = max(bg_mean + k_surface · bg_sigma,
+                  bg_mean + relative_margin_min · dyn_hint)`.
+  The first term dominates when the top is true noise; the second term
+  dominates when the top is padded flat and σ has collapsed.  Both are
+  distribution-driven.
+* Within each tile, smooth the profile (Gaussian, 6 µm), find the first z
+  in the top 30 % window where the profile stays above `surf_thr` for at
+  least 12 µm.  This rejects thin debris flakes.
+* Fit an IRLS-Huber plane through the per-tile surface-Z values.
+
+### 4. L2 detection
+
+* Per surface tile, compute an L1 window `[z_surf, z_surf + min_l1]`
+  (min_l1 = 40 µm).
+* Local L2 threshold: `l1_mean + max(l2_local_k · σ_L1, 5 % · dyn_hint)`.
+  The relative margin prevents σ_L1 from collapsing in sparse bg windows
+  (CZ) and registering a trivial sample-at-floor as L2.
+* Find the first sustained-above crossing in `[z_surf + min_l1,
+  z_surf + max_l1]` (max_l1 = 180 µm).
+* Fit L2 plane with slope (a, b) constrained to the surface plane;
+  refit only intercept c (IRLS-Huber on residuals).  Also record a free
+  tilt for diagnostics.
+
+### 5. Depth-profile metrics
+
+`depth_profile_stats(cz_centroids_xyz, surface)` reproduces the v2 log
+metrics: `above_frac`, `above_frac_5um`, `cum_above_ratio`,
+`onset_depth_um`, `n_points`.
+
+## Per-subject results
+
+From `results.csv`:
+
+| subject | HCR surface MAD | HCR above_frac | HCR onset µm | HCR L1 µm | CZ surface MAD | CZ above_frac | CZ onset µm | CZ L1 µm |
+|---|---|---|---|---|---|---|---|---|
+| 755252 | 32.8 | 0.03 |  2.5 | 107.5 | 1.25 | 0.00 | 42.5 |  40.4 |
+| 767018 | 86.9 | 0.07 |  2.5 | 140.1 | 0.00 | 0.00 | 42.5 |  40.0 |
+| 767022 | 75.1 | 0.03 |  7.5 |  88.3 | 0.86 | 0.01 |  7.5 | 133.3 |
+| 782149 |  7.9 | 0.00 |  2.5 | 133.2 | 0.00 | 0.00 | 32.5 |  40.0 |
+| 788406 | 119.6 | 0.05 | 67.5 | 105.5 | 0.00 | 0.00 | 47.5 |  40.0 |
+| 790322 | 108.7 | 0.06 | 67.5 |  98.3 | 0.33 | 0.00 | 62.5 |  41.4 |
+
+All 6 subjects produce a valid surface and a valid L2 plane on both HCR
+and CZ (previously CZ failed on 782149 / 788406 before the truly-blank
+baseline fix).
+
+## What worked
+
+* **Truly-blank filtering for baseline.** Isolating the z=0 slice from
+  the later buffer-signal slices fixed CZ surface detection on 782149 and
+  788406 without adding any hand-tuned intensities.  The dynamic-range
+  fallback keeps the threshold meaningful when the blank pool is too
+  small for MAD.
+* **Dual threshold floor.** Combining noise-driven (`k·σ`) with
+  relative-margin (`margin · dyn_hint`) prevents false positives when σ
+  collapses (padded zeros) and false negatives when σ is inflated by
+  buffer contamination.
+* **Parallel-plane L2 fit.** Constraining (a, b) to the surface keeps L2
+  robust even when only a few tiles provide L2 samples — the intercept
+  is still well-defined by the median of residuals.
+* **CZ surface is excellent.** Residual MAD ≤ 1.3 µm on all 6 subjects,
+  above_frac ≈ 0 — a near-perfect plane fit to the tissue surface.
+
+## What does not yet work
+
+1. **CZ L2 sticks at `min_l1 = 40 µm` on 4/6 subjects.**
+   For 755252 / 767018 / 782149 / 788406 the bg-only profile is not
+   monotone enough: the L1 window has so few bg voxels (cells mask most of
+   L1) that any slightly-higher slice at `z_surf + min_l1` crosses the
+   local threshold and the search terminates immediately.  The 5 %·dyn_hint
+   floor helped 755252 and 790322 but not the others.
+   * Possible fixes: use **cell-count-per-slice** (segmentation density)
+     instead of intensity for CZ L2 — cell density will jump at L2 in a
+     much clearer way.
+   * Or: require L2 threshold crossing to be sustained for ≥ 20 µm
+     *and* local amplitude ≥ 2 · σ_L1 *and* the profile must rise
+     monotonically for a minimum distance before plateauing.
+
+2. **HCR residual MAD is large (32 – 120 µm).**
+   Some subjects show 67.5 µm onset depth (788406 / 790322), meaning the
+   per-tile surface detection is catching mid-rise debris rather than
+   the tissue onset.  The HCR combined channel has heterogeneous signal
+   across tiles — a single global `surf_thr` is too blunt for it.
+   * Possible fix: use a per-tile adaptive threshold (median of
+     tile's own below-signal region + k·σ) analogous to the N22
+     quantile-ceiling estimator from v2.
+   * Another route: ensemble of per-channel surfaces instead of
+     combined-channel intensity.
+
+3. **HCR above_frac 3 – 7 %.**
+   v2's N22 achieved ≤ 0.08 %.  The current estimator places the
+   surface too shallow on HCR subjects where debris is present.  Same
+   fix path as (2).
+
+## Next step candidates
+
+* **CZ L2 via segmentation density.** Count cells per slice within each
+  tile (from the existing segmentation masks).  Find the first sustained
+  jump in cell density below pia → that's L2.  This matches the
+  biological definition better than bg intensity.
+* **Per-tile baseline for HCR.** Rather than pooling all tiles into one
+  baseline, use each tile's own top slab.  This would recover the
+  tile-local behaviour that N22's quantile-ceiling approach exploits.
+* **Iterative surface refinement.** After the first plane fit, reject
+  outlier tiles whose z_surf deviates by > 2 · MAD from the plane, and
+  refit.  Currently IRLS handles this internally but an explicit
+  rejection-refit loop may converge tighter.
+
+## Memory to persist
+
+* The image-based estimator is a **new feature** (surface + L2 planes +
+  per-tile records), not a replacement for N22.  Treat them as
+  complementary: N22 still owns the HCR-centroid-driven surface (best
+  above_frac); the image-based estimator owns CZ surface, CZ L2, and
+  provides an HCR image-side cross-check.

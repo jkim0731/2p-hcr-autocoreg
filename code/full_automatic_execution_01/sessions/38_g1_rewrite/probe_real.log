@@ -1,0 +1,36 @@
+
+=== 788406 ===
+  n_hcr=17427; training 5000 iter 96×4+3 ...
+  train 365s  final_loss=2.88
+  infer 10.1s  n_pred=932
+  n_gt=787 covered=787 exact_id=5 n_lt10=5 n_lt50=9 med=901 µm
+
+=== 755252 ===
+  n_hcr=30804; training 5000 iter 96×4+3 ...
+  train 1039s  final_loss=0.84
+  infer 31.9s  n_pred=835
+  n_gt=639 covered=639 exact_id=0 n_lt10=0 n_lt50=0 med=743 µm
+
+=== 767022 ===
+  n_hcr=14239; training 5000 iter 96×4+3 ...
+  train 385s  final_loss=1.27
+  infer 7.0s  n_pred=926
+  n_gt=793 covered=793 exact_id=1 n_lt10=1 n_lt50=1 med=781 µm
+
+=== 782149 ===
+  n_hcr=3831; training 5000 iter 96×4+3 ...
+Traceback (most recent call last):
+  File "/root/capsule/code/full_automatic_execution_01/sessions/38_g1_rewrite/probe_real.py", line 160, in <module>
+    main()
+  File "/root/capsule/code/full_automatic_execution_01/sessions/38_g1_rewrite/probe_real.py", line 115, in main
+    model, losses = train_matcher(hcr_um, n_iter=5000, hidden=96,
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/capsule/code/full_automatic_execution_01/sessions/38_g1_rewrite/probe_real.py", line 44, in train_matcher
+    e_s = _build_knn_graph(w.source_um, k=k)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/capsule/code/full_automatic_execution_01/bench/candidate_impls/_g1_gnn_matcher.py", line 47, in _build_knn_graph
+    _, idx = nn.kneighbors(pts_um)
+             ^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/conda/lib/python3.11/site-packages/sklearn/neighbors/_base.py", line 847, in kneighbors
+    raise ValueError(
+ValueError: Expected n_neighbors <= n_samples_fit, but n_neighbors = 9, n_samples_fit = 8, n_samples = 8

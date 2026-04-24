@@ -1,0 +1,120 @@
+"""Focused test: try HIGH wtq (tile median-ish) to avoid autofluorescence
+outliers in the shallow tail of per-column tops.
+
+Also test an adaptive-quantile: use wtq=0.50 when tile dynamic range is
+large (autofluorescence dominant), wtq=0.10 when tile is tight.
+"""
+from __future__ import annotations
+import sys, importlib.util
+from pathlib import Path
+import numpy as np
+import pandas as pd
+
+sys.path.insert(0, "/root/capsule/code/dev_code")
+
+_spec = importlib.util.spec_from_file_location(
+    "img_surface_l2", str(Path("/root/capsule/code/dev_code") / "03_image_based_surface.py"))
+_mod = importlib.util.module_from_spec(_spec); sys.modules["img_surface_l2"] = _mod
+_spec.loader.exec_module(_mod)
+
+from benchmark_analysis import load_hcr_combined
+from benchmark_data_loader import hcr_px_to_um, load_subject
+
+
+def sz(surf, x, y):
+    return (surf["a"]*x + surf["b"]*y + surf["c"] +
+            surf.get("p",0)*x*x + surf.get("q",0)*x*y + surf.get("r",0)*y*y)
+
+
+def eval_surf(surf, pts):
+    z_surf = sz(surf, pts[:,0], pts[:,1])
+    depth = pts[:,2] - z_surf
+    n = len(depth)
+    above = (depth < 0).sum() / n
+    edges = np.arange(-200, 404, 5.0)
+    h, _ = np.histogram(depth, bins=edges)
+    density = h / (5.0 * max(n, 1))
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    bulk = density[(centers >= 50) & (centers <= 200)].mean()
+    onset = np.nan
+    if bulk > 0:
+        halfmax = 0.5 * bulk
+        for c, d in zip(centers, density):
+            if c >= 0 and d >= halfmax:
+                onset = float(c); break
+    return above, onset
+
+
+def clamp_custom(surface, xs, ys, zs, *, tile_um=120.0, within_tile_q=0.5,
+                 safety_offset_um=3.0, min_per_tile=5,
+                 trim_iqr_mult=None):
+    """Custom clamp: optionally drop per-tile outliers by IQR mult before quantile."""
+    if len(xs) < 50:
+        return surface, 0.0, 0
+    xb = (xs // tile_um).astype(int)
+    yb = (ys // tile_um).astype(int)
+    key = yb * 100000 + xb
+    df = pd.DataFrame({"k": key, "x": xs, "y": ys, "z": zs})
+    def agg_fn(v):
+        v = np.asarray(v)
+        if trim_iqr_mult is not None and len(v) >= 5:
+            med = np.median(v)
+            iqr = np.subtract(*np.percentile(v, [75, 25]))
+            mask = v >= (med - trim_iqr_mult * iqr)
+            v = v[mask]
+        if len(v) == 0:
+            return np.nan
+        return float(np.quantile(v, within_tile_q))
+    agg = df.groupby("k").agg(
+        x=("x", "median"), y=("y", "median"),
+        z=("z", agg_fn), n=("z", "size"))
+    agg = agg[(agg["n"] >= int(min_per_tile)) & agg["z"].notna()]
+    if agg.empty:
+        return surface, 0.0, 0
+    tx, ty, tz = agg["x"].values, agg["y"].values, agg["z"].values
+    plane_z = sz(surface, tx, ty)
+    deficit = plane_z - tz
+    pos = deficit[deficit > 0]
+    lift = float(pos.max()) if len(pos) else 0.0
+    out = dict(surface)
+    out["c"] = float(out["c"] - lift - safety_offset_um)
+    return out, lift, int(len(agg))
+
+
+for sid in ["755252", "767018", "767022", "782149", "788406", "790322"]:
+    s = load_subject(sid)
+    vol, xy_um, z_um, channels = load_hcr_combined(s, level=4)
+    pts = hcr_px_to_um(s.hcr_centroids[["z_px","y_px","x_px"]].values, s)[:, [2,1,0]]
+
+    # Get pre-clamp surface + column tops
+    res = _mod.estimate_surface_and_l2_image_based(
+        vol, z_um, xy_um,
+        target_quantile=0.70,
+        column_margin=0.25,
+        band_um=150.0,
+        clamp_min_per_tile=100000,  # disable clamp
+    )
+    if res.surface is None:
+        print(f"{sid}: no surface")
+        continue
+    a0, o0 = eval_surf(res.surface, pts)
+    tops = res.tile_records
+    xs, ys, zs = tops.x_um.values, tops.y_um.values, tops.z_onset_um.values
+    print(f"--- {sid} ---  pre-clamp c={res.surface['c']:.1f} above={a0:.4f} onset={o0:.1f} "
+          f"tops={len(xs)}")
+
+    for wtq in [0.10, 0.30, 0.50, 0.70, 0.90]:
+        s2, lift, nt = clamp_custom(res.surface, xs, ys, zs,
+                                    tile_um=120.0, within_tile_q=wtq)
+        a, o = eval_surf(s2, pts)
+        print(f"  wtq={wtq:.2f}: c={s2['c']:6.1f} lift={lift:6.1f} nt={nt:3d} "
+              f"above={a:.4f} onset={o:.1f}")
+
+    # Try trimmed-mean style: drop outliers below med - 3*IQR then take q=0.1
+    for wtq in [0.10, 0.30]:
+        s2, lift, nt = clamp_custom(res.surface, xs, ys, zs,
+                                    tile_um=120.0, within_tile_q=wtq,
+                                    trim_iqr_mult=1.5)
+        a, o = eval_surf(s2, pts)
+        print(f"  trim+wtq={wtq:.2f}: c={s2['c']:6.1f} lift={lift:6.1f} nt={nt:3d} "
+              f"above={a:.4f} onset={o:.1f}")

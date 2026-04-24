@@ -1,0 +1,894 @@
+"""Subgoal 04/R1/01 (v2) — redefine the GFP+ threshold.
+
+For the four spot-data benchmark subjects (788406, 790322, 767018, 782149),
+load raw per-cell spot counts, run candidate *distribution-only* thresholding
+strategies, and score each by coverage of the canonical `coreg_table.csv`
+HCR IDs. The winning strategy is the one producing the **highest** threshold
+that still keeps `coreg_coverage >= COVERAGE_TARGET` on every subject.
+
+Per 06 Dev Protocol.md: the coreg table is used *only* to measure coverage
+post-hoc. No strategy may consult it when deriving a threshold — future
+runs will have no coreg table.
+
+Fixed-fraction / fixed-percentile strategies are **excluded**: they require
+hand-tuned parameters that cannot be generalised. Only data-driven methods
+that scale with the observed distribution are considered.
+"""
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+from typing import Callable
+
+import numpy as np
+import pandas as pd
+
+_THIS_DIR = Path(__file__).resolve().parent
+if str(_THIS_DIR) not in sys.path:
+    sys.path.insert(0, str(_THIS_DIR))
+
+from benchmark_data_loader import (
+    _aggregate_spots_from_hcr,
+    _find_coreg_dir,
+    _find_hcr_dir,
+    load_subject,
+)
+
+
+SPOT_SUBJECTS = ["788406", "790322", "767018", "782149"]
+OUT_DIR = _THIS_DIR.parent / "sessions" / "04_R1_coarse_align"
+FIG_DIR = OUT_DIR / "subgoal_01_figures"
+RESULT_JSON = OUT_DIR / "subgoal_01_gfp_threshold_results.json"
+
+COVERAGE_TARGET = 0.95
+
+
+# =====================================================================
+# Data loading
+# =====================================================================
+def load_raw_gfp_table(subject_id: str) -> pd.DataFrame:
+    """Load the un-thresholded spot-count table for a subject.
+
+    Returns a frame with [hcr_id, counts, volume, density] for every HCR
+    cell that has at least one 488 spot. Cells not present have counts == 0.
+    """
+    coreg = _find_coreg_dir(subject_id)
+    spot_csvs = list(coreg.glob("*spot_488_counts.csv"))
+    if spot_csvs:
+        df = pd.read_csv(spot_csvs[0])
+    else:
+        hcr = _find_hcr_dir(subject_id)
+        df = _aggregate_spots_from_hcr(hcr)
+        if df is None:
+            raise FileNotFoundError(f"no spot table for {subject_id}")
+    keep = ["hcr_id", "counts"]
+    if "volume" in df.columns:
+        keep.append("volume")
+    if "density" in df.columns:
+        keep.append("density")
+    return df[keep].copy()
+
+
+def parse_active_landmark_hcr_ids(s) -> list[int]:
+    lm = s.landmarks_qced
+    if lm.empty:
+        return []
+    lm = lm[lm["active"]]
+    ids = []
+    for v in lm["ids"]:
+        sv = str(v)
+        if "-hcr" in sv:
+            try:
+                ids.append(int(sv.split("-hcr")[1]))
+            except ValueError:
+                continue
+    return ids
+
+
+# =====================================================================
+# Threshold strategies
+# =====================================================================
+def strategy_gmm_log(counts: np.ndarray) -> float:
+    """Fit 2-component GMM to log(counts>=1) and return the crossover count.
+
+    Crossover = smallest integer count c where P(component_high | log c) >= 0.5.
+    """
+    from sklearn.mixture import GaussianMixture
+
+    x = np.log(counts[counts >= 1]).reshape(-1, 1)
+    gmm = GaussianMixture(n_components=2, random_state=0, n_init=5).fit(x)
+    # component with higher mean = signal
+    hi = int(np.argmax(gmm.means_.ravel()))
+    # sweep a fine log grid, find first c where P(hi|c) >= 0.5
+    grid = np.linspace(x.min(), x.max(), 4000).reshape(-1, 1)
+    p = gmm.predict_proba(grid)[:, hi]
+    idx = np.where(p >= 0.5)[0]
+    if len(idx) == 0:
+        return float("inf")
+    return float(np.ceil(np.exp(grid[idx[0], 0])))
+
+
+def strategy_otsu_log(counts: np.ndarray) -> float:
+    """Otsu threshold on log(counts>=1). Returns the crossover count."""
+    x = np.log(counts[counts >= 1])
+    # Bin the log range
+    n_bins = 256
+    hist, edges = np.histogram(x, bins=n_bins)
+    centers = (edges[:-1] + edges[1:]) / 2
+    p = hist.astype(float) / hist.sum()
+    # Otsu between-class variance
+    w_cum = np.cumsum(p)
+    mu_cum = np.cumsum(p * centers)
+    mu_tot = mu_cum[-1]
+    eps = 1e-12
+    sigma_b = (mu_tot * w_cum - mu_cum) ** 2 / np.maximum(w_cum * (1 - w_cum), eps)
+    t_idx = int(np.argmax(sigma_b))
+    return float(np.ceil(np.exp(centers[t_idx])))
+
+
+def strategy_kneedle(counts: np.ndarray) -> float:
+    """Elbow of sorted-descending counts (max distance below the start→end chord).
+
+    Sort counts descending and normalise rank & count to [0,1]; the elbow is
+    the point with the largest perpendicular distance **below** the diagonal
+    line from (0,1) to (1,0), which is where the drop transitions into the
+    long tail.
+    """
+    sc = np.sort(counts[counts >= 1])[::-1].astype(float)
+    n = len(sc)
+    xs = np.arange(n) / max(n - 1, 1)
+    ys = (sc - sc.min()) / max(sc.max() - sc.min(), 1e-12)
+    d = (1 - xs) - ys  # positive where the curve sits below the chord
+    k_idx = int(np.argmax(d))
+    return float(np.ceil(sc[k_idx]))
+
+
+def strategy_triangle_log(counts: np.ndarray) -> float:
+    """Zack's triangle method on the log(counts>=1) histogram.
+
+    Draws a line from the histogram peak to the last non-empty bin and picks
+    the bin whose distance to the line (perpendicular) is maximal — the
+    classic triangle threshold for unimodal distributions with a long tail.
+    """
+    x = np.log(counts[counts >= 1])
+    n_bins = 256
+    hist, edges = np.histogram(x, bins=n_bins)
+    centers = (edges[:-1] + edges[1:]) / 2
+    i_peak = int(np.argmax(hist))
+    # find last non-empty bin on the right of the peak
+    nz = np.where(hist > 0)[0]
+    i_end = int(nz.max())
+    if i_end <= i_peak:
+        return float("inf")
+    x0, y0 = i_peak, hist[i_peak]
+    x1, y1 = i_end, hist[i_end]
+    # perpendicular distance from each (i, hist[i]) between peak and end
+    i_arr = np.arange(i_peak, i_end + 1)
+    h_arr = hist[i_arr].astype(float)
+    # dist = |((y1-y0)*i - (x1-x0)*h + x1*y0 - y1*x0)| / sqrt(dx^2 + dy^2)
+    num = np.abs((y1 - y0) * i_arr - (x1 - x0) * h_arr + x1 * y0 - y1 * x0)
+    denom = np.hypot(x1 - x0, y1 - y0) + 1e-12
+    dist = num / denom
+    i_best = int(i_arr[int(np.argmax(dist))])
+    return float(np.ceil(np.exp(centers[i_best])))
+
+
+def strategy_yen_log(counts: np.ndarray) -> float:
+    """Yen's maximum-entropy threshold on log(counts>=1). Uses skimage."""
+    try:
+        from skimage.filters import threshold_yen
+    except Exception:
+        return float("inf")
+    x = np.log(counts[counts >= 1])
+    t = float(threshold_yen(x, nbins=256))
+    return float(np.ceil(np.exp(t)))
+
+
+def strategy_isodata_log(counts: np.ndarray) -> float:
+    """Iterative mean (ISODATA) threshold on log(counts>=1). Uses skimage."""
+    try:
+        from skimage.filters import threshold_isodata
+    except Exception:
+        return float("inf")
+    x = np.log(counts[counts >= 1])
+    t = float(threshold_isodata(x, nbins=256))
+    return float(np.ceil(np.exp(t)))
+
+
+def strategy_kittler_illingworth(counts: np.ndarray) -> float:
+    """Kittler–Illingworth min-error threshold on log(counts>=1)."""
+    x = np.log(counts[counts >= 1])
+    n_bins = 256
+    hist, edges = np.histogram(x, bins=n_bins)
+    centers = (edges[:-1] + edges[1:]) / 2
+    p = hist.astype(float) / max(hist.sum(), 1)
+    eps = 1e-12
+
+    best_t, best_j = None, np.inf
+    for t in range(1, n_bins - 1):
+        p1 = p[: t + 1].sum()
+        p2 = 1 - p1
+        if p1 < eps or p2 < eps:
+            continue
+        m1 = (p[: t + 1] * centers[: t + 1]).sum() / p1
+        m2 = (p[t + 1 :] * centers[t + 1 :]).sum() / p2
+        s1 = (p[: t + 1] * (centers[: t + 1] - m1) ** 2).sum() / p1
+        s2 = (p[t + 1 :] * (centers[t + 1 :] - m2) ** 2).sum() / p2
+        if s1 < eps or s2 < eps:
+            continue
+        j = 1 + 2 * (p1 * np.log(np.sqrt(s1)) + p2 * np.log(np.sqrt(s2))) \
+            - 2 * (p1 * np.log(p1) + p2 * np.log(p2))
+        if j < best_j:
+            best_j = j
+            best_t = centers[t]
+    if best_t is None:
+        return float("inf")
+    return float(np.ceil(np.exp(best_t)))
+
+
+def strategy_gmm_log_with_background(
+    counts_spot_bearing: np.ndarray,
+    n_zero_cells: int,
+    zero_floor: float = 0.5,
+    n_components: int = 3,
+) -> float:
+    """3-component GMM on log(counts), representing 0-count cells as log(0.5).
+
+    Gives the fit a chance to find an explicit 'background' mode, in contrast
+    to strategy_gmm_log which only sees spot-bearing cells. The threshold is
+    the smallest integer count at which the sum of the top component's
+    posteriors >= 0.5.
+    """
+    from sklearn.mixture import GaussianMixture
+
+    x_spot = np.log(counts_spot_bearing[counts_spot_bearing >= 1])
+    x_zero = np.full(n_zero_cells, np.log(zero_floor))
+    x = np.concatenate([x_zero, x_spot]).reshape(-1, 1)
+    gmm = GaussianMixture(n_components=n_components, random_state=0, n_init=5).fit(x)
+    hi = int(np.argmax(gmm.means_.ravel()))
+    grid = np.linspace(np.log(1.0), np.log(counts_spot_bearing.max()), 4000).reshape(-1, 1)
+    p_hi = gmm.predict_proba(grid)[:, hi]
+    idx = np.where(p_hi >= 0.5)[0]
+    if len(idx) == 0:
+        return float("inf")
+    return float(np.ceil(np.exp(grid[idx[0], 0])))
+
+
+def strategy_density_gmm(density: np.ndarray) -> float:
+    """GMM on log(density) for cells with density > 0. Returns density threshold (float)."""
+    from sklearn.mixture import GaussianMixture
+
+    d = density[density > 0]
+    if len(d) < 50:
+        return float("inf")
+    x = np.log(d).reshape(-1, 1)
+    gmm = GaussianMixture(n_components=2, random_state=0, n_init=5).fit(x)
+    hi = int(np.argmax(gmm.means_.ravel()))
+    grid = np.linspace(x.min(), x.max(), 4000).reshape(-1, 1)
+    p = gmm.predict_proba(grid)[:, hi]
+    idx = np.where(p >= 0.5)[0]
+    if len(idx) == 0:
+        return float("inf")
+    return float(np.exp(grid[idx[0], 0]))
+
+
+def strategy_density_gmm_3c_bg(
+    density_spot_bearing: np.ndarray,
+    n_zero_cells: int,
+    zero_floor_ratio: float = 0.5,
+) -> float:
+    """3-comp GMM on log(density), with zero-density cells padded at a low floor.
+
+    Mirrors strategy_gmm_log_with_background but for density. The zero floor is
+    a small fraction of the minimum observed positive density to place the
+    background cloud well below the signal mode without exact zeros.
+    """
+    from sklearn.mixture import GaussianMixture
+
+    d_pos = density_spot_bearing[density_spot_bearing > 0]
+    if len(d_pos) < 50:
+        return float("inf")
+    zero_floor = zero_floor_ratio * d_pos.min()
+    x_zero = np.full(n_zero_cells, np.log(zero_floor))
+    x = np.concatenate([x_zero, np.log(d_pos)]).reshape(-1, 1)
+    gmm = GaussianMixture(n_components=3, random_state=0, n_init=5).fit(x)
+    hi = int(np.argmax(gmm.means_.ravel()))
+    grid = np.linspace(np.log(d_pos.min()), np.log(d_pos.max()), 4000).reshape(-1, 1)
+    p = gmm.predict_proba(grid)[:, hi]
+    idx = np.where(p >= 0.5)[0]
+    if len(idx) == 0:
+        return float("inf")
+    return float(np.exp(grid[idx[0], 0]))
+
+
+def strategy_gmm2_log_counts_filtered(
+    counts: np.ndarray, min_count: int = 10
+) -> float:
+    """2-comp GMM on log(counts) after discarding cells with counts < min_count.
+
+    Motivation (subgoal 01 v2.2): the raw log-count histogram has a long
+    low-end shoulder that comes from cells with ≤ a few spots per cell.
+    Those dominate the lower GMM component and drag the crossover down into
+    the signal distribution. Pre-filtering to counts ≥ 10 removes the
+    shoulder so the remaining distribution has a cleaner bimodal structure
+    (weak vs strong labelling), and the crossover between the two GMM
+    components sits in the tail where the coreg cells live.
+
+    Note: `min_count` is a hand-picked preprocessing floor, not the final
+    threshold. The final threshold is still derived from the GMM posterior
+    crossover. Picked at 10 because the coreg-cell `p1` percentile is 63
+    / 77 / 128 / 135 across the four spot subjects — so counts < 10 is
+    outside the coreg mode on every subject.
+    """
+    from sklearn.mixture import GaussianMixture
+
+    c = counts[counts >= min_count].astype(float)
+    if len(c) < 50:
+        return float(min_count)
+    x = np.log(c).reshape(-1, 1)
+    gmm = GaussianMixture(n_components=2, random_state=0, n_init=5).fit(x)
+    hi = int(np.argmax(gmm.means_.ravel()))
+    grid = np.linspace(x.min(), x.max(), 4000).reshape(-1, 1)
+    p = gmm.predict_proba(grid)[:, hi]
+    idx = np.where(p >= 0.5)[0]
+    if len(idx) == 0:
+        return float("inf")
+    return float(np.ceil(np.exp(grid[idx[0], 0])))
+
+
+def strategy_density_gmm_3c(density: np.ndarray) -> float:
+    """3-component GMM on log(density) for cells with density > 0 (no zero padding).
+
+    Motivation (subgoal 01 v2.2): the density histogram has three visible
+    modes — a low shoulder, a broad mid bulk, and a high tail — even
+    without imposing an explicit zero-count cloud. A 3-comp GMM captures
+    all three. The threshold is the lower boundary of "not the lowest
+    component", i.e. the smallest x at which P(mid ∪ high | x) >= 0.5.
+    """
+    from sklearn.mixture import GaussianMixture
+
+    d = density[density > 0].astype(float)
+    if len(d) < 100:
+        return float("inf")
+    x = np.log(d).reshape(-1, 1)
+    gmm = GaussianMixture(n_components=3, random_state=0, n_init=5).fit(x)
+    order = np.argsort(gmm.means_.ravel())
+    low = int(order[0])
+    grid = np.linspace(x.min(), x.max(), 4000).reshape(-1, 1)
+    p_not_low = 1.0 - gmm.predict_proba(grid)[:, low]
+    idx = np.where(p_not_low >= 0.5)[0]
+    if len(idx) == 0:
+        return float("inf")
+    return float(np.exp(grid[idx[0], 0]))
+
+
+def strategy_peak_gauss_lower_pct(
+    x: np.ndarray,
+    percentile: float = 1.0,
+    n_components: int = 3,
+    pick: str = "max_mean",
+    ceil_int: bool = False,
+) -> float:
+    """Lower-tail percentile of the GMM component under the tallest/rightmost peak.
+
+    Rationale (subgoal 01 v2.3): in the log-histogram the signal (GFP+)
+    cells form a roughly Gaussian peak on the right; the coreg-cell
+    distribution centres on that peak. Fit a GMM on log(x>0), pick the
+    component representing that peak, and return its ``percentile``-th
+    lower quantile in linear scale, i.e. ``exp(μ + z_p · σ)`` with
+    ``z_p = Φ⁻¹(percentile/100)``. With ``percentile=1`` this keeps ~99 %
+    of the signal Gaussian while excluding the lower bulk/background.
+
+    ``pick``:
+      - ``"max_mean"`` (default): rightmost component (largest μ)
+      - ``"max_peak"``: tallest peak, i.e. largest ``π_k / σ_k``
+
+    If ``ceil_int`` is True (for count thresholds) the return is rounded
+    up to the next integer.
+    """
+    from sklearn.mixture import GaussianMixture
+    from scipy.stats import norm
+
+    x = np.asarray(x, dtype=float)
+    x = x[x > 0]
+    if len(x) < 100:
+        return float("inf")
+    log_x = np.log(x).reshape(-1, 1)
+    gmm = GaussianMixture(n_components=n_components, random_state=0, n_init=5).fit(log_x)
+    mus = gmm.means_.ravel()
+    sigmas = np.sqrt(gmm.covariances_.ravel())
+    if pick == "max_mean":
+        k = int(np.argmax(mus))
+    elif pick == "max_peak":
+        k = int(np.argmax(gmm.weights_ / np.maximum(sigmas, 1e-12)))
+    else:
+        raise ValueError(f"unknown pick={pick!r}")
+    mu = float(mus[k])
+    sigma = float(sigmas[k])
+    z = float(norm.ppf(percentile / 100.0))
+    t_log = mu + z * sigma
+    t = float(np.exp(t_log))
+    return float(np.ceil(t)) if ceil_int else t
+
+
+def _log_threshold_continuous(x: np.ndarray, method: str) -> float:
+    """Apply one of {yen, otsu, isodata, triangle} to log(x) and return exp(threshold).
+
+    Does not round — suitable for density (non-integer). ``x`` must be positive.
+    """
+    if len(x) == 0:
+        return float("inf")
+    lx = np.log(x)
+    if method == "yen":
+        from skimage.filters import threshold_yen
+        t = float(threshold_yen(lx, nbins=256))
+        return float(np.exp(t))
+    if method == "otsu":
+        # reuse skimage for consistency
+        from skimage.filters import threshold_otsu
+        t = float(threshold_otsu(lx, nbins=256))
+        return float(np.exp(t))
+    if method == "isodata":
+        from skimage.filters import threshold_isodata
+        t = float(threshold_isodata(lx, nbins=256))
+        return float(np.exp(t))
+    if method == "triangle":
+        from skimage.filters import threshold_triangle
+        t = float(threshold_triangle(lx, nbins=256))
+        return float(np.exp(t))
+    raise ValueError(f"unknown method {method!r}")
+
+
+def strategy_yen_log_density(density: np.ndarray) -> float:
+    return _log_threshold_continuous(density[density > 0], "yen")
+
+
+def strategy_otsu_log_density(density: np.ndarray) -> float:
+    return _log_threshold_continuous(density[density > 0], "otsu")
+
+
+def strategy_isodata_log_density(density: np.ndarray) -> float:
+    return _log_threshold_continuous(density[density > 0], "isodata")
+
+
+def strategy_triangle_log_density(density: np.ndarray) -> float:
+    return _log_threshold_continuous(density[density > 0], "triangle")
+
+
+# =====================================================================
+# Score a threshold
+# =====================================================================
+def score_threshold(
+    raw: pd.DataFrame,
+    n_hcr_total: int,
+    threshold_counts: float,
+    coreg_hcr_ids: list[int],
+    density_threshold: float | None = None,
+    count_column: str = "counts",
+) -> dict:
+    """Apply a threshold and compute gfp_frac + coreg_coverage.
+
+    `coreg_coverage` is the fraction of `coreg_table.csv` HCR IDs that pass
+    the threshold — the primary validation metric. High threshold with high
+    coverage = fewer non-GFP cells in the candidate pool without dropping
+    known-good pairs.
+    """
+    keep_mask = raw[count_column].values >= threshold_counts
+    if density_threshold is not None and "density" in raw.columns:
+        keep_mask &= raw["density"].values >= density_threshold
+
+    n_gfp = int(keep_mask.sum())
+    gfp_frac = n_gfp / n_hcr_total if n_hcr_total else float("nan")
+
+    out = {
+        "threshold_counts": float(threshold_counts),
+        "threshold_density": float(density_threshold) if density_threshold is not None else None,
+        "n_gfp": n_gfp,
+        "n_hcr_total": n_hcr_total,
+        "gfp_frac": gfp_frac,
+    }
+
+    if coreg_hcr_ids:
+        gfp_ids = set(raw.loc[keep_mask, "hcr_id"].astype(int).tolist())
+        in_gfp = sum(1 for x in coreg_hcr_ids if x in gfp_ids)
+        out["coreg_coverage"] = in_gfp / len(coreg_hcr_ids)
+        out["n_coreg"] = len(coreg_hcr_ids)
+
+    return out
+
+
+# =====================================================================
+# Per-subject runner
+# =====================================================================
+def analyze_one(subject_id: str) -> dict:
+    s = load_subject(subject_id, gfp_threshold_method="counts_min", gfp_min_spots=1)
+    raw = load_raw_gfp_table(subject_id)
+
+    n_hcr_total = len(s.hcr_centroids)
+
+    coreg_hcr_ids = (
+        s.coreg_table["hcr_id"].astype(int).tolist() if len(s.coreg_table) else []
+    )
+
+    counts_in_raw = raw["counts"].values.astype(float)
+    density_in_raw = (
+        raw["density"].values.astype(float) if "density" in raw.columns else None
+    )
+
+    strategies: dict[str, dict] = {}
+
+    def add(name, source, tc=0.0, td=None):
+        strategies[name] = {
+            "threshold_counts": float(tc),
+            "threshold_density": float(td) if td is not None else None,
+            "source": source,
+        }
+
+    add("baseline_counts>=5", "legacy DEFAULT_GFP_MIN_SPOTS (reference only)", tc=5.0)
+
+    # --- counts-only strategies ---
+    add("A_gmm_log_counts",
+        "2-comp GMM on log(counts>=1), crossover P=0.5",
+        tc=strategy_gmm_log(counts_in_raw))
+    add("A3_gmm_log_counts_3c_bg",
+        "3-comp GMM on log(counts) with 0-count cells as log(0.5)",
+        tc=strategy_gmm_log_with_background(
+            counts_in_raw, n_zero_cells=n_hcr_total - len(raw), n_components=3))
+    add("B_otsu_log_counts", "Otsu on log(counts>=1)",
+        tc=strategy_otsu_log(counts_in_raw))
+    add("C_kneedle_counts",
+        "Elbow of sorted-descending counts (below-chord maximum)",
+        tc=strategy_kneedle(counts_in_raw))
+    add("D_kittler_illingworth_log",
+        "Kittler–Illingworth min-error on log(counts>=1)",
+        tc=strategy_kittler_illingworth(counts_in_raw))
+    add("Triangle_log_counts", "Zack's triangle method on log(counts>=1)",
+        tc=strategy_triangle_log(counts_in_raw))
+    add("Yen_log_counts", "Yen's maximum-entropy on log(counts>=1)",
+        tc=strategy_yen_log(counts_in_raw))
+    add("Isodata_log_counts", "ISODATA iterative-mean on log(counts>=1)",
+        tc=strategy_isodata_log(counts_in_raw))
+    add("GMM2_log_counts_gte10",
+        "2-comp GMM on log(counts) after filtering counts < 10",
+        tc=strategy_gmm2_log_counts_filtered(counts_in_raw, min_count=10))
+    # Peak-Gauss: pick the rightmost GMM component (signal peak) and use
+    # its lower-tail percentile as the cutoff.
+    t_peak_counts_p1 = strategy_peak_gauss_lower_pct(
+        counts_in_raw, percentile=1.0, n_components=3, ceil_int=True
+    )
+    t_peak_counts_p25 = strategy_peak_gauss_lower_pct(
+        counts_in_raw, percentile=2.5, n_components=3, ceil_int=True
+    )
+    t_peak_counts_p5 = strategy_peak_gauss_lower_pct(
+        counts_in_raw, percentile=5.0, n_components=3, ceil_int=True
+    )
+    add("PeakGauss3_counts_p1",
+        "GMM-3 on log(counts>=1), rightmost component, 1st percentile lower tail",
+        tc=t_peak_counts_p1)
+    add("PeakGauss3_counts_p2.5",
+        "GMM-3 on log(counts>=1), rightmost component, 2.5th percentile lower tail",
+        tc=t_peak_counts_p25)
+    add("PeakGauss3_counts_p5",
+        "GMM-3 on log(counts>=1), rightmost component, 5th percentile lower tail",
+        tc=t_peak_counts_p5)
+
+    # --- density-only strategies (counts threshold 0 ⇒ only density filter) ---
+    if density_in_raw is not None:
+        t_dens_yen = strategy_yen_log_density(density_in_raw)
+        t_dens_otsu = strategy_otsu_log_density(density_in_raw)
+        t_dens_iso = strategy_isodata_log_density(density_in_raw)
+        t_dens_tri = strategy_triangle_log_density(density_in_raw)
+        t_dens_gmm = strategy_density_gmm(density_in_raw)
+        t_dens_gmm3 = strategy_density_gmm_3c_bg(
+            density_in_raw, n_zero_cells=n_hcr_total - len(raw)
+        )
+        t_dens_gmm3_raw = strategy_density_gmm_3c(density_in_raw)
+        add("Yen_log_density", "Yen's max-entropy on log(density>0)", td=t_dens_yen)
+        add("Otsu_log_density", "Otsu on log(density>0)", td=t_dens_otsu)
+        add("Isodata_log_density", "ISODATA on log(density>0)", td=t_dens_iso)
+        add("Triangle_log_density", "Zack's triangle on log(density>0)", td=t_dens_tri)
+        add("GMM_log_density", "2-comp GMM on log(density>0)", td=t_dens_gmm)
+        add("GMM3bg_log_density",
+            "3-comp GMM on log(density) with 0-density cells at a low floor",
+            td=t_dens_gmm3)
+        add("GMM3_log_density",
+            "3-comp GMM on log(density>0), no zero padding — lower-comp boundary",
+            td=t_dens_gmm3_raw)
+        t_peak_dens_p1 = strategy_peak_gauss_lower_pct(
+            density_in_raw, percentile=1.0, n_components=3
+        )
+        t_peak_dens_p25 = strategy_peak_gauss_lower_pct(
+            density_in_raw, percentile=2.5, n_components=3
+        )
+        t_peak_dens_p5 = strategy_peak_gauss_lower_pct(
+            density_in_raw, percentile=5.0, n_components=3
+        )
+        add("PeakGauss3_density_p1",
+            "GMM-3 on log(density>0), rightmost component, 1st percentile lower tail",
+            td=t_peak_dens_p1)
+        add("PeakGauss3_density_p2.5",
+            "GMM-3 on log(density>0), rightmost component, 2.5th percentile lower tail",
+            td=t_peak_dens_p25)
+        add("PeakGauss3_density_p5",
+            "GMM-3 on log(density>0), rightmost component, 5th percentile lower tail",
+            td=t_peak_dens_p5)
+
+        # --- joint strategies (counts AND density) ---
+        add("Joint_Yen_counts_x_Yen_density",
+            "Yen on counts AND Yen on density (both must pass)",
+            tc=strategy_yen_log(counts_in_raw), td=t_dens_yen)
+        add("Joint_Otsu_counts_x_Otsu_density",
+            "Otsu on counts AND Otsu on density (both must pass)",
+            tc=strategy_otsu_log(counts_in_raw), td=t_dens_otsu)
+        add("Joint_GMM_counts_x_GMM_density",
+            "GMM on counts AND GMM on density (both must pass)",
+            tc=strategy_gmm_log(counts_in_raw), td=t_dens_gmm)
+        add("Joint_GMM2c10_x_GMM3d",
+            "GMM2 on log(counts>=10) AND GMM3 on log(density>0) (both must pass)",
+            tc=strategy_gmm2_log_counts_filtered(counts_in_raw, min_count=10),
+            td=t_dens_gmm3_raw)
+        add("Joint_PeakGauss3_p1",
+            "Peak-Gauss 1st pct on counts AND density (both must pass)",
+            tc=t_peak_counts_p1, td=t_peak_dens_p1)
+        add("Joint_PeakGauss3_p2.5",
+            "Peak-Gauss 2.5th pct on counts AND density (both must pass)",
+            tc=t_peak_counts_p25, td=t_peak_dens_p25)
+        add("Joint_PeakGauss3_p5",
+            "Peak-Gauss 5th pct on counts AND density (both must pass)",
+            tc=t_peak_counts_p5, td=t_peak_dens_p5)
+
+    out_strategies = {}
+    for name, cfg in strategies.items():
+        score = score_threshold(
+            raw,
+            n_hcr_total,
+            threshold_counts=cfg["threshold_counts"],
+            coreg_hcr_ids=coreg_hcr_ids,
+            density_threshold=cfg["threshold_density"],
+        )
+        out_strategies[name] = {**cfg, **score}
+
+    return {
+        "subject": subject_id,
+        "n_hcr_total": n_hcr_total,
+        "n_spot_bearing_cells": int(len(raw)),
+        "n_coreg_rows": len(coreg_hcr_ids),
+        "raw_counts_percentiles": {
+            "p25": float(np.quantile(counts_in_raw, 0.25)),
+            "p50": float(np.quantile(counts_in_raw, 0.50)),
+            "p75": float(np.quantile(counts_in_raw, 0.75)),
+            "p90": float(np.quantile(counts_in_raw, 0.90)),
+            "p95": float(np.quantile(counts_in_raw, 0.95)),
+            "max": float(counts_in_raw.max()),
+        },
+        "coreg_counts_percentiles": (
+            {
+                "p1": float(np.quantile(
+                    raw[raw["hcr_id"].isin(coreg_hcr_ids)]["counts"].values, 0.01
+                )),
+                "p5": float(np.quantile(
+                    raw[raw["hcr_id"].isin(coreg_hcr_ids)]["counts"].values, 0.05
+                )),
+                "p10": float(np.quantile(
+                    raw[raw["hcr_id"].isin(coreg_hcr_ids)]["counts"].values, 0.10
+                )),
+            }
+            if coreg_hcr_ids
+            else None
+        ),
+        "strategies": out_strategies,
+    }
+
+
+# =====================================================================
+# Plotting
+# =====================================================================
+def _save_histograms(per_subject: dict):
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    FIG_DIR.mkdir(parents=True, exist_ok=True)
+
+    # ---- counts panel: overlay counts-only thresholds
+    fig, axes = plt.subplots(2, 2, figsize=(11, 8), sharex=True)
+    for ax, sid in zip(axes.flatten(), SPOT_SUBJECTS):
+        raw = load_raw_gfp_table(sid)
+        x = np.log10(raw["counts"].values.astype(float))
+        ax.hist(x, bins=80, color="0.7", edgecolor="k", linewidth=0.3)
+        s = load_subject(sid, gfp_threshold_method="counts_min", gfp_min_spots=1)
+        cg_ids = set(s.coreg_table["hcr_id"].astype(int).tolist())
+        cg_counts = raw.loc[raw["hcr_id"].isin(cg_ids), "counts"].values
+        if len(cg_counts):
+            ax.hist(np.log10(cg_counts), bins=80, color="C0", alpha=0.5,
+                    label=f"coreg cells ({len(cg_counts)})")
+        strat = per_subject[sid]["strategies"]
+        count_overlays = {
+            "baseline_counts>=5":       ("C0", "--"),
+            "A_gmm_log_counts":         ("C3", "-"),
+            "A3_gmm_log_counts_3c_bg":  ("C5", "-"),
+            "B_otsu_log_counts":        ("C2", "-"),
+            "Triangle_log_counts":      ("C1", "-"),
+            "Yen_log_counts":           ("C6", "-"),
+            "Isodata_log_counts":       ("C7", "-"),
+            "C_kneedle_counts":         ("C9", ":"),
+            "GMM2_log_counts_gte10":    ("C4", "-."),
+            "PeakGauss3_counts_p1":     ("C8", "-"),
+            "PeakGauss3_counts_p2.5":   ("C8", "--"),
+            "PeakGauss3_counts_p5":     ("C8", ":"),
+        }
+        for name, (col, ls) in count_overlays.items():
+            if name not in strat:
+                continue
+            t = strat[name].get("threshold_counts", 0)
+            if t and np.isfinite(t) and t > 0:
+                tag = name.split("_")[0]
+                ax.axvline(np.log10(t), color=col, ls=ls, lw=1.4,
+                           label=f"{tag}={int(t)}")
+        ax.set_title(f"{sid} (n={len(raw)})")
+        ax.set_xlabel("log10(counts)")
+        ax.set_ylabel("cells")
+        ax.legend(fontsize=6, loc="upper right")
+    fig.tight_layout()
+    fig.savefig(FIG_DIR / "log_count_histograms.png", dpi=130)
+    plt.close(fig)
+
+    # ---- density panel: overlay density-only thresholds
+    if "density" not in load_raw_gfp_table(SPOT_SUBJECTS[0]).columns:
+        return
+    fig, axes = plt.subplots(2, 2, figsize=(11, 8), sharex=True)
+    for ax, sid in zip(axes.flatten(), SPOT_SUBJECTS):
+        raw = load_raw_gfp_table(sid)
+        if "density" not in raw.columns:
+            continue
+        d = raw["density"].values.astype(float)
+        d_pos = d[d > 0]
+        x = np.log10(d_pos)
+        ax.hist(x, bins=80, color="0.7", edgecolor="k", linewidth=0.3)
+        s = load_subject(sid, gfp_threshold_method="counts_min", gfp_min_spots=1)
+        cg_ids = set(s.coreg_table["hcr_id"].astype(int).tolist())
+        cg_d = raw.loc[raw["hcr_id"].isin(cg_ids), "density"].values.astype(float)
+        cg_d = cg_d[cg_d > 0]
+        if len(cg_d):
+            ax.hist(np.log10(cg_d), bins=80, color="C0", alpha=0.5,
+                    label=f"coreg cells ({len(cg_d)})")
+        strat = per_subject[sid]["strategies"]
+        density_overlays = {
+            "Yen_log_density":       ("C6", "-"),
+            "Otsu_log_density":      ("C2", "-"),
+            "Isodata_log_density":   ("C7", "-"),
+            "Triangle_log_density":  ("C1", "-"),
+            "GMM_log_density":       ("C3", "-"),
+            "GMM3bg_log_density":    ("C5", "-"),
+            "GMM3_log_density":      ("C4", "-."),
+            "PeakGauss3_density_p1":   ("C8", "-"),
+            "PeakGauss3_density_p2.5": ("C8", "--"),
+            "PeakGauss3_density_p5":   ("C8", ":"),
+        }
+        for name, (col, ls) in density_overlays.items():
+            if name not in strat:
+                continue
+            t = strat[name].get("threshold_density")
+            if t and np.isfinite(t) and t > 0:
+                tag = name.split("_")[0]
+                ax.axvline(np.log10(t), color=col, ls=ls, lw=1.4,
+                           label=f"{tag}={t:.4f}")
+        ax.set_title(f"{sid} (n={len(d_pos)})")
+        ax.set_xlabel("log10(density)")
+        ax.set_ylabel("cells")
+        ax.legend(fontsize=6, loc="upper right")
+    fig.tight_layout()
+    fig.savefig(FIG_DIR / "log_density_histograms.png", dpi=130)
+    plt.close(fig)
+
+
+# =====================================================================
+# CLI
+# =====================================================================
+def run() -> dict:
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    per_subject = {}
+    for sid in SPOT_SUBJECTS:
+        print(f"\n=== {sid} ===", flush=True)
+        try:
+            per_subject[sid] = analyze_one(sid)
+        except Exception as exc:  # noqa: BLE001
+            per_subject[sid] = {"subject": sid, "status": f"error: {exc!r}"}
+            print(per_subject[sid])
+            continue
+        print(f"n_hcr_total={per_subject[sid]['n_hcr_total']}, "
+              f"n_spot_bearing={per_subject[sid]['n_spot_bearing_cells']}, "
+              f"n_coreg={per_subject[sid]['n_coreg_rows']}")
+        for name, d in per_subject[sid]["strategies"].items():
+            td = d.get("threshold_density")
+            td_str = f"{td:.4f}" if td is not None else "    -"
+            print(f"  {name:38s} tc={d.get('threshold_counts', 0):7.1f}  "
+                  f"td={td_str}  "
+                  f"gfp_frac={d.get('gfp_frac', float('nan')):.3f}  "
+                  f"coreg_cov={d.get('coreg_coverage', float('nan')):.3f}  "
+                  f"n_gfp={d.get('n_gfp', 0)}")
+
+    # Cross-subject summary (ranking metric: max gfp_frac — lower is more stringent)
+    strategy_names = list(next(iter(per_subject.values()))["strategies"].keys())
+    summary = {}
+    for name in strategy_names:
+        fracs = [per_subject[sid]["strategies"][name]["gfp_frac"] for sid in SPOT_SUBJECTS]
+        covs = [per_subject[sid]["strategies"][name].get("coreg_coverage") for sid in SPOT_SUBJECTS]
+        tcs = [per_subject[sid]["strategies"][name].get("threshold_counts", 0.0) for sid in SPOT_SUBJECTS]
+        tds = [per_subject[sid]["strategies"][name].get("threshold_density") for sid in SPOT_SUBJECTS]
+        summary[name] = {
+            "threshold_counts_per_subject": {sid: t for sid, t in zip(SPOT_SUBJECTS, tcs)},
+            "threshold_density_per_subject": {sid: t for sid, t in zip(SPOT_SUBJECTS, tds)},
+            "gfp_frac_per_subject": {sid: f for sid, f in zip(SPOT_SUBJECTS, fracs)},
+            "coreg_cov_per_subject": {sid: c for sid, c in zip(SPOT_SUBJECTS, covs)},
+            "gfp_frac_max": float(np.max(fracs)),
+            "gfp_frac_mean": float(np.mean(fracs)),
+            "gfp_frac_min": float(np.min(fracs)),
+            "coreg_cov_min": (
+                float(np.nanmin([c for c in covs if c is not None]))
+                if any(c is not None for c in covs) else None
+            ),
+            "coreg_cov_mean": (
+                float(np.nanmean([c for c in covs if c is not None]))
+                if any(c is not None for c in covs) else None
+            ),
+        }
+
+    # Winner logic (v2.1): most stringent strategy (lowest max gfp_frac across
+    # subjects) whose coreg_coverage >= COVERAGE_TARGET on every subject.
+    # gfp_frac is the common yardstick — it is well-defined for counts-only,
+    # density-only, and joint strategies alike, so strategies of different
+    # families can be compared directly.
+    winners = []
+    for name, row in summary.items():
+        if name.startswith("baseline_"):
+            continue
+        covs_list = [c for c in row["coreg_cov_per_subject"].values() if c is not None]
+        if not covs_list or min(covs_list) < COVERAGE_TARGET:
+            continue
+        winners.append((
+            name,
+            row["gfp_frac_max"],
+            row["gfp_frac_mean"],
+            min(covs_list),
+        ))
+    # lower max gfp_frac wins; tie-break by lower mean, then higher coverage
+    winners.sort(key=lambda x: (x[1], x[2], -x[3]))
+
+    out = {
+        "coverage_target": COVERAGE_TARGET,
+        "per_subject": per_subject,
+        "cross_subject_summary": summary,
+        "winners_ranked": [w[0] for w in winners],
+        "winners_detail": [
+            {"name": w[0], "gfp_frac_max": w[1], "gfp_frac_mean": w[2], "coreg_cov_min": w[3]}
+            for w in winners
+        ],
+        "stopping_condition_note": (
+            "A strategy 'passes' if coreg_coverage >= "
+            f"{COVERAGE_TARGET:.2f} on every subject. Winners are ranked by "
+            "`max gfp_frac across subjects` (lower is more stringent), which is "
+            "well-defined for counts-only, density-only, and joint strategies. "
+            "Ties broken by mean gfp_frac, then by coverage. No fixed-percentile "
+            "strategy is considered — all methods must be distribution-driven so "
+            "they generalise to subjects without a coreg table."
+        ),
+    }
+    with open(RESULT_JSON, "w") as f:
+        json.dump(out, f, indent=2, default=lambda v: v.tolist() if hasattr(v, "tolist") else str(v))
+    print(f"\nWrote {RESULT_JSON}")
+
+    # Plots
+    try:
+        _save_histograms(per_subject)
+        print(f"Wrote figures to {FIG_DIR}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"plot skipped: {exc!r}")
+
+    return out
+
+
+if __name__ == "__main__":
+    run()

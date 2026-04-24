@@ -1,0 +1,54 @@
+"""Check the pre-clamp fit on HCR 755252."""
+from __future__ import annotations
+import sys
+import importlib.util
+from pathlib import Path
+import numpy as np
+
+ROOT = Path("/root/capsule")
+DEV = ROOT / "code" / "dev_code"
+sys.path.insert(0, str(DEV))
+
+_spec = importlib.util.spec_from_file_location(
+    "img_surface_l2", str(DEV / "03_image_based_surface.py"))
+_mod = importlib.util.module_from_spec(_spec)
+sys.modules["img_surface_l2"] = _mod
+_spec.loader.exec_module(_mod)
+
+from benchmark_analysis import load_hcr_combined
+from benchmark_data_loader import hcr_px_to_um, load_subject
+
+def sz(surf, x, y):
+    return (surf["a"]*x + surf["b"]*y + surf["c"] +
+            surf.get("p",0)*x*x + surf.get("q",0)*x*y + surf.get("r",0)*y*y)
+
+for sid in ["755252", "767018", "767022", "782149", "788406", "790322"]:
+    s = load_subject(sid)
+    vol, xy_um, z_um, channels = load_hcr_combined(s, level=4)
+    hcr_xyz = hcr_px_to_um(s.hcr_centroids[["z_px","y_px","x_px"]].values, s)[:, [2,1,0]]
+    # Disable clamp by using very high min_per_tile
+    res = _mod.estimate_surface_and_l2_image_based(
+        vol, z_um, xy_um, clamp_min_per_tile=100000,
+        column_margin=0.25,
+    )
+    if res.surface is None:
+        print(f"{sid}: NO SURFACE"); continue
+    # Evaluate pre-clamp surface
+    z_surf = sz(res.surface, hcr_xyz[:,0], hcr_xyz[:,1])
+    depth = hcr_xyz[:,2] - z_surf
+    above = (depth < 0).sum() / len(depth)
+    edges = np.arange(-200, 404, 5.0)
+    h, _ = np.histogram(depth, bins=edges)
+    density = h / (5.0 * max(len(depth), 1))
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    bulk = density[(centers >= 50) & (centers <= 200)].mean()
+    onset = np.nan
+    if bulk > 0:
+        halfmax = 0.5 * bulk
+        for c, d in zip(centers, density):
+            if c >= 0 and d >= halfmax:
+                onset = float(c); break
+    tops = res.tile_records["z_onset_um"].values
+    print(f"{sid}: c={res.surface['c']:.1f} tilt={res.surface['tilt_deg']:.1f} "
+          f"tops_p10/p50/p90={np.percentile(tops,[10,50,90]).round(0)} "
+          f"above={above:.4f} onset={onset:.1f}")

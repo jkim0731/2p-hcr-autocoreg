@@ -1,0 +1,57 @@
+"""Time G1 inference pass."""
+import sys, time
+sys.path.insert(0, "/root/capsule/code/full_automatic_execution_01")
+sys.path.insert(0, "/root/capsule/code/dev_code")
+import numpy as np
+import torch
+
+from benchmark_data_loader import load_subject
+from lib.centroid_helpers import centroids_um, default_warmstart_zyx
+from lib.cell_features import extract_cell_features, invariant_feature_mask
+from bench.candidate_impls._g1_gnn_matcher import (
+    _simple_features, _build_knn_graph, GNNMatcher, _assignment)
+
+t0 = time.time()
+s = load_subject("788406")
+hcr_um, _ = centroids_um(s, "hcr_gfp")
+cz_um, _ = centroids_um(s, "cz")
+cz_init, _ = default_warmstart_zyx(cz_um, hcr_um)
+print(f"setup: {time.time()-t0:.1f}s", flush=True)
+
+t1 = time.time()
+Fc, names, _ = extract_cell_features(s, "cz")
+Fg, _, _ = extract_cell_features(s, "hcr_gfp")
+print(f"F6: {time.time()-t1:.1f}s; Fc={Fc.shape} Fg={Fg.shape}", flush=True)
+
+t2 = time.time()
+inv = invariant_feature_mask(names)
+keep = inv & ~np.isnan(Fc).any(0) & ~np.isnan(Fg).any(0)
+mu = np.nanmean(Fg[:, keep], 0); sd = np.nanstd(Fg[:, keep], 0) + 1e-6
+fc = (Fc[:, keep] - mu) / sd
+fg = (Fg[:, keep] - mu) / sd
+print(f"feat_norm: {time.time()-t2:.1f}s; fc={fc.shape} fg={fg.shape}", flush=True)
+
+t3 = time.time()
+model = GNNMatcher(in_dim=16, hidden=96, n_layers=4, cross_layers=3)
+e_cz = _build_knn_graph(cz_init, k=8)
+e_hcr = _build_knn_graph(hcr_um, k=8)
+print(f"knn_infer: {time.time()-t3:.1f}s", flush=True)
+
+# pad/trunc to 16 dim
+fc16 = fc[:, :16] if fc.shape[1] >= 16 else np.pad(fc, ((0, 0), (0, 16 - fc.shape[1])))
+fg16 = fg[:, :16] if fg.shape[1] >= 16 else np.pad(fg, ((0, 0), (0, 16 - fg.shape[1])))
+
+t4 = time.time()
+with torch.no_grad():
+    sim, _, _ = model(
+        torch.as_tensor(fc16, dtype=torch.float32),
+        torch.as_tensor(e_cz, dtype=torch.long),
+        torch.as_tensor(fg16, dtype=torch.float32),
+        torch.as_tensor(e_hcr, dtype=torch.long),
+    )
+print(f"forward: {time.time()-t4:.1f}s; sim.shape={sim.shape}", flush=True)
+
+t5 = time.time()
+with torch.no_grad():
+    P = _assignment(sim, model.dustbin, n_iter=30)
+print(f"assignment: {time.time()-t5:.1f}s; P.shape={P.shape}", flush=True)

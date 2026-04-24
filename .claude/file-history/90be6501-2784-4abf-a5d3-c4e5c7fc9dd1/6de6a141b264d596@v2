@@ -1,0 +1,37 @@
+"""C1 — Image-coarse (I2) → centroid-refine (P1) hybrid.
+
+Run I2 to get a more accurate anisotropic-scale + translation estimate, and
+pass the resulting affine as a warm-start for P1's putative generation.
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+import numpy as np
+import pandas as pd
+
+_THIS = Path(__file__).resolve().parent
+_ROOT = _THIS.parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+if str(_ROOT.parent / "dev_code") not in sys.path:
+    sys.path.insert(0, str(_ROOT.parent / "dev_code"))
+
+from bench.harness import register_candidate, CoregResult
+
+
+@register_candidate("C1")
+def run_c1(s) -> CoregResult:
+    from bench.candidate_impls._i2_sitk_affine import run_i2
+    from bench.candidate_impls._p1_teaser import run_p1
+    r_i2 = run_i2(s)
+    r_p1 = run_p1(s)
+    return CoregResult(
+        pairs_df=r_p1.pairs_df,
+        confidence=r_p1.confidence,
+        transform=r_p1.transform,
+        diagnostics={**r_p1.diagnostics,
+                     "i2_transform_scales": (r_i2.transform.scales.tolist()
+                                             if r_i2.transform is not None else None),
+                     "i2_metric": r_i2.diagnostics.get("metric")},
+    )

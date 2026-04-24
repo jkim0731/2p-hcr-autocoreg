@@ -1,0 +1,9 @@
+{
+  "id": "2",
+  "subject": "Phase 2: Design G1 implementation via Plan agent",
+  "description": "Launch Plan agent to design viewer choice (napari vs ipywidgets), data flow, output formats, and minimum-viable scope for session 06",
+  "activeForm": "Designing G1 implementation",
+  "status": "in_progress",
+  "blocks": [],
+  "blockedBy": []
+}

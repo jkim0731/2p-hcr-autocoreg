@@ -1,0 +1,101 @@
+
+=========== 788406 ===========
+n_cz=932 n_hcr_gfp=17427
+  g1_train it=100/1000 loss=6.468 n_src=124 n_tgt=4292 t=30.6s
+  g1_train it=200/1000 loss=5.968 n_src=129 n_tgt=4163 t=61.4s
+  g1_train it=300/1000 loss=5.757 n_src=165 n_tgt=4192 t=93.2s
+  g1_train it=400/1000 loss=5.495 n_src=286 n_tgt=5272 t=126.3s
+  g1_train it=500/1000 loss=5.268 n_src=186 n_tgt=4166 t=161.1s
+  g1_train it=600/1000 loss=5.145 n_src=184 n_tgt=5311 t=194.8s
+  g1_train it=700/1000 loss=5.163 n_src=255 n_tgt=5001 t=251.6s
+  g1_train it=800/1000 loss=4.927 n_src=162 n_tgt=5015 t=321.6s
+  g1_train it=900/1000 loss=5.092 n_src=145 n_tgt=4022 t=419.7s
+  g1_train it=1000/1000 loss=4.926 n_src=172 n_tgt=4954 t=457.3s
+  wall=467.1s n_pairs=847 train_loss_final=6.053201675415039
+  r@5=0.003 r@10=0.003 r@20=0.003 med_err=858.8 p95=1409.2 µm n_pred=714 n_gt=787
+
+=========== 790322 ===========
+n_cz=1016 n_hcr_gfp=10131
+  g1_train it=100/1000 loss=3.558 n_src=82 n_tgt=86 t=3.7s
+  g1_train it=200/1000 loss=2.944 n_src=123 n_tgt=129 t=7.2s
+  g1_train it=300/1000 loss=2.754 n_src=146 n_tgt=151 t=10.8s
+  g1_train it=400/1000 loss=2.769 n_src=139 n_tgt=130 t=14.4s
+  g1_train it=500/1000 loss=2.403 n_src=117 n_tgt=115 t=18.0s
+  g1_train it=600/1000 loss=2.438 n_src=148 n_tgt=146 t=21.4s
+  g1_train it=700/1000 loss=2.352 n_src=144 n_tgt=152 t=24.9s
+  g1_train it=800/1000 loss=2.340 n_src=114 n_tgt=113 t=28.4s
+  g1_train it=900/1000 loss=2.202 n_src=92 n_tgt=97 t=31.8s
+  g1_train it=1000/1000 loss=2.200 n_src=124 n_tgt=124 t=35.3s
+  wall=49.4s n_pairs=962 train_loss_final=2.0282464027404785
+  r@5=0.037 r@10=0.037 r@20=0.040 med_err=902.5 p95=1494.6 µm n_pred=735 n_gt=778
+
+=========== 755252 ===========
+n_cz=835 n_hcr_gfp=30804
+  g1_train it=100/1000 loss=7.290 n_src=635 n_tgt=10253 t=133.6s
+  g1_train it=200/1000 loss=6.450 n_src=562 n_tgt=10212 t=272.3s
+  g1_train it=300/1000 loss=6.117 n_src=625 n_tgt=10160 t=353.7s
+  g1_train it=400/1000 loss=6.100 n_src=638 n_tgt=10140 t=433.7s
+  g1_train it=500/1000 loss=5.843 n_src=633 n_tgt=10161 t=509.1s
+  g1_train it=600/1000 loss=5.839 n_src=614 n_tgt=10224 t=586.4s
+  g1_train it=700/1000 loss=5.695 n_src=619 n_tgt=10239 t=664.6s
+  g1_train it=800/1000 loss=5.605 n_src=619 n_tgt=10207 t=743.2s
+  g1_train it=900/1000 loss=5.570 n_src=631 n_tgt=10196 t=816.2s
+  g1_train it=1000/1000 loss=5.508 n_src=619 n_tgt=10276 t=893.0s
+  wall=935.6s n_pairs=794 train_loss_final=5.432775497436523
+  r@5=0.000 r@10=0.000 r@20=0.000 med_err=656.2 p95=1257.7 µm n_pred=609 n_gt=639
+
+=========== 767022 ===========
+n_cz=926 n_hcr_gfp=14239
+  g1_train it=100/1000 loss=4.352 n_src=287 n_tgt=283 t=5.7s
+  g1_train it=200/1000 loss=3.546 n_src=213 n_tgt=211 t=11.3s
+  g1_train it=300/1000 loss=3.262 n_src=297 n_tgt=305 t=16.9s
+  g1_train it=400/1000 loss=3.120 n_src=240 n_tgt=217 t=25.2s
+  g1_train it=500/1000 loss=2.887 n_src=281 n_tgt=285 t=30.7s
+  g1_train it=600/1000 loss=2.921 n_src=335 n_tgt=338 t=36.4s
+  g1_train it=700/1000 loss=2.898 n_src=250 n_tgt=259 t=42.1s
+  g1_train it=800/1000 loss=2.684 n_src=299 n_tgt=286 t=47.7s
+  g1_train it=900/1000 loss=2.626 n_src=283 n_tgt=290 t=52.9s
+  g1_train it=1000/1000 loss=2.682 n_src=238 n_tgt=239 t=61.9s
+  wall=68.4s n_pairs=864 train_loss_final=2.148714065551758
+  r@5=0.003 r@10=0.003 r@20=0.003 med_err=764.8 p95=1423.8 µm n_pred=742 n_gt=793
+
+=========== 767018 ===========
+n_cz=785 n_hcr_gfp=9161
+  g1_train it=100/1000 loss=5.928 n_src=75 n_tgt=2341 t=25.3s
+  g1_train it=200/1000 loss=5.523 n_src=81 n_tgt=2447 t=50.7s
+  g1_train it=300/1000 loss=4.981 n_src=72 n_tgt=2337 t=76.6s
+  g1_train it=400/1000 loss=4.865 n_src=81 n_tgt=2324 t=103.1s
+  g1_train it=500/1000 loss=4.683 n_src=96 n_tgt=2366 t=126.6s
+  g1_train it=600/1000 loss=4.697 n_src=107 n_tgt=2458 t=149.7s
+  g1_train it=700/1000 loss=4.654 n_src=81 n_tgt=2218 t=172.8s
+  g1_train it=800/1000 loss=4.522 n_src=87 n_tgt=2388 t=200.0s
+  g1_train it=900/1000 loss=4.378 n_src=106 n_tgt=2330 t=224.8s
+  g1_train it=1000/1000 loss=4.354 n_src=87 n_tgt=2208 t=253.0s
+  wall=258.1s n_pairs=586 train_loss_final=4.4093170166015625
+  r@5=0.000 r@10=0.000 r@20=0.000 med_err=719.0 p95=1206.1 µm n_pred=198 n_gt=273
+
+=========== 782149 ===========
+n_cz=894 n_hcr_gfp=3831
+  g1_train it=100/1000 loss=2.979 n_src=17 n_tgt=18 t=3.2s
+  g1_train it=200/1000 loss=2.611 n_src=77 n_tgt=80 t=6.6s
+  g1_train it=300/1000 loss=2.236 n_src=101 n_tgt=102 t=10.0s
+  g1_train it=400/1000 loss=2.235 n_src=78 n_tgt=82 t=13.5s
+  g1_train it=500/1000 loss=2.039 n_src=19 n_tgt=18 t=17.0s
+  g1_train it=600/1000 loss=2.090 n_src=67 n_tgt=68 t=20.8s
+  g1_train it=700/1000 loss=2.008 n_src=22 n_tgt=24 t=24.1s
+  g1_train it=800/1000 loss=2.137 n_src=82 n_tgt=92 t=28.0s
+  g1_train it=900/1000 loss=1.919 n_src=54 n_tgt=54 t=32.0s
+  g1_train it=1000/1000 loss=1.867 n_src=85 n_tgt=88 t=38.2s
+  wall=43.0s n_pairs=777 train_loss_final=2.1824355125427246
+  r@5=0.000 r@10=0.000 r@20=0.000 med_err=978.8 p95=1669.4 µm n_pred=258 n_gt=303
+
+
+=== SUMMARY ===
+sid        r@20    med      n   wall   loss
+788406    0.003  858.8    847  467.1  6.053
+790322    0.040  902.5    962   49.4  2.028
+755252    0.000  656.2    794  935.6  5.433
+767022    0.003  764.8    864   68.4  2.149
+767018    0.000  719.0    586  258.1  4.409
+782149    0.000  978.8    777   43.0  2.182
+sum r@20 = 0.045  (C5=1.080)

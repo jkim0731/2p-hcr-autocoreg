@@ -1,0 +1,97 @@
+"""Inspect 755252 tile z10 distribution + deficit distribution to understand
+why maxlift over-lifts and no clamp variant reaches N22 quality."""
+from __future__ import annotations
+import sys, importlib.util, os
+from pathlib import Path
+import numpy as np
+import pandas as pd
+os.environ["PYTHONUNBUFFERED"] = "1"
+
+sys.path.insert(0, "/root/capsule/code/dev_code")
+_spec = importlib.util.spec_from_file_location(
+    "img_surface_l2",
+    str(Path("/root/capsule/code/dev_code") / "03_image_based_surface.py"))
+_mod = importlib.util.module_from_spec(_spec); sys.modules["img_surface_l2"] = _mod
+_spec.loader.exec_module(_mod)
+
+from benchmark_analysis import load_hcr_combined
+from benchmark_data_loader import hcr_px_to_um, load_subject
+
+
+def sz(s, x, y):
+    return (s["a"]*x + s["b"]*y + s["c"]
+            + s.get("p",0)*x*x + s.get("q",0)*x*y + s.get("r",0)*y*y)
+
+
+sid = "755252"
+print(f"=== {sid} ===", flush=True)
+s = load_subject(sid)
+vol, xy_um, z_um, channels = load_hcr_combined(s, level=4)
+pts = hcr_px_to_um(s.hcr_centroids[["z_px","y_px","x_px"]].values, s)[:, [2,1,0]]
+
+# Centroid depth range
+print(f"Centroids: n={len(pts)}, z range=[{pts[:,2].min():.1f}, {pts[:,2].max():.1f}]", flush=True)
+print(f"  z quantiles: 5%={np.quantile(pts[:,2], 0.05):.1f} 10%={np.quantile(pts[:,2], 0.10):.1f} 25%={np.quantile(pts[:,2], 0.25):.1f} 50%={np.quantile(pts[:,2], 0.50):.1f}", flush=True)
+
+res = _mod.estimate_surface_and_l2_image_based(
+    vol, z_um, xy_um, clamp_min_per_tile=100000)
+tr = res.tile_records
+xs, ys, zs = tr.x_um.values, tr.y_um.values, tr.z_onset_um.values
+print(f"Tops: n={len(xs)}, z range=[{zs.min():.1f}, {zs.max():.1f}]", flush=True)
+print(f"  z quantiles: 1%={np.quantile(zs, 0.01):.1f} 5%={np.quantile(zs, 0.05):.1f} 10%={np.quantile(zs, 0.10):.1f} 50%={np.quantile(zs, 0.50):.1f}", flush=True)
+
+# Tile z10 distribution
+keep = _mod._filter_tops_by_density(xs, ys, zs, radius_um=30.0, min_neighbors=3)
+xs_f = xs[keep]; ys_f = ys[keep]; zs_f = zs[keep]
+tile_um = 120.0
+xb = (xs_f // tile_um).astype(int); yb = (ys_f // tile_um).astype(int)
+key = yb * 100000 + xb
+df = pd.DataFrame({"k": key, "x": xs_f, "y": ys_f, "z": zs_f})
+agg = df.groupby("k").agg(
+    x=("x", "median"), y=("y", "median"),
+    z=("z", lambda v: float(np.quantile(v, 0.10))),
+    zmed=("z", "median"),
+    n=("z", "size"))
+agg = agg[agg["n"] >= 5]
+tz10 = agg["z"].values
+tzmed = agg["zmed"].values
+print(f"Tile z10: n={len(tz10)}, range=[{tz10.min():.1f}, {tz10.max():.1f}]", flush=True)
+print(f"  quantiles: 1%={np.quantile(tz10, 0.01):.1f} 5%={np.quantile(tz10, 0.05):.1f} 10%={np.quantile(tz10, 0.10):.1f} 25%={np.quantile(tz10, 0.25):.1f} 50%={np.quantile(tz10, 0.50):.1f}", flush=True)
+print(f"Tile zmed: 1%={np.quantile(tzmed, 0.01):.1f} 5%={np.quantile(tzmed, 0.05):.1f} 10%={np.quantile(tzmed, 0.10):.1f} 25%={np.quantile(tzmed, 0.25):.1f} 50%={np.quantile(tzmed, 0.50):.1f}", flush=True)
+
+# Pre-clamp surface + deficit distribution
+pre_c = res.surface['c'] + res.clamp_lift_um + res.safety_offset_um
+surface_pre = dict(res.surface); surface_pre['c'] = pre_c
+plane_z = sz(surface_pre, agg["x"].values, agg["y"].values)
+deficit10 = plane_z - tz10
+deficitmed = plane_z - tzmed
+print(f"\nSurface pre-clamp: a={surface_pre['a']:.4f} b={surface_pre['b']:.4f} c={pre_c:.1f}", flush=True)
+print(f"Deficit (plane - z10): n_pos={np.sum(deficit10>0)}/{len(deficit10)}", flush=True)
+pos10 = deficit10[deficit10 > 0]
+print(f"  quantiles: 50%={np.quantile(pos10, 0.50):.1f} 75%={np.quantile(pos10, 0.75):.1f} 90%={np.quantile(pos10, 0.90):.1f} 95%={np.quantile(pos10, 0.95):.1f} 99%={np.quantile(pos10, 0.99):.1f} max={pos10.max():.1f}", flush=True)
+print(f"Deficit (plane - zmed): n_pos={np.sum(deficitmed>0)}/{len(deficitmed)}", flush=True)
+posmed = deficitmed[deficitmed > 0]
+if len(posmed):
+    print(f"  quantiles: 50%={np.quantile(posmed, 0.50):.1f} 75%={np.quantile(posmed, 0.75):.1f} 90%={np.quantile(posmed, 0.90):.1f} 95%={np.quantile(posmed, 0.95):.1f} 99%={np.quantile(posmed, 0.99):.1f} max={posmed.max():.1f}", flush=True)
+
+# What's the optimal lift to hit onset=2.5?
+# Assuming pia is at centroids_z10 (approximate)
+pia_z = float(np.quantile(pts[:,2], 0.05))  # shallow 5% of cells
+optimal_surface_c = pia_z - 2.5  # onset=2.5 means surface 2.5µm ABOVE pia
+# Since "lift" pushes surface shallower (smaller c), we want:
+# optimal_surface_c = pre_c - lift - safety
+# → lift = pre_c - optimal_surface_c - safety
+optimal_lift = pre_c - optimal_surface_c - 3.0
+print(f"\nOptimal lift ≈ {optimal_lift:.1f} (to reach onset=2.5 near centroid z5% = {pia_z:.1f})", flush=True)
+print(f"  lq=1.00 lift = {pos10.max():.1f}", flush=True)
+print(f"  N22 equivalent: would want ~{(pos10 <= optimal_lift).sum()}/{len(pos10)} tiles included", flush=True)
+
+# What fraction of tiles have z10 < optimal pia position?
+shallow_tiles = (tz10 < pia_z).sum()
+print(f"\n{shallow_tiles}/{len(tz10)} tiles have z10 < centroid_z5% ({pia_z:.1f}) — these are likely autofluorescence", flush=True)
+
+# Show bottom 20 tile z10s
+idx_sort = np.argsort(tz10)
+print(f"\nBottom 20 tile z10s:", flush=True)
+for i in idx_sort[:20]:
+    print(f"  tz10={tz10[i]:6.1f} zmed={tzmed[i]:6.1f} n={int(agg['n'].iloc[i])} at ({agg['x'].iloc[i]:6.1f}, {agg['y'].iloc[i]:6.1f})", flush=True)

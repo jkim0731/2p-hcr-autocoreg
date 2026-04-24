@@ -1,0 +1,57 @@
+"""Quick stats: which feature at v21 is most different from the feature at N22 for 755252?
+
+For each feature, compute per-subject:
+  - feat_at_n22 median
+  - feat_at_v21 median
+  - ratio = feat_at_n22 / feat_at_v21 (or diff if scale-invariant)
+
+755252's ratio should deviate from 1.0 (indicating v21 is NOT at the real pia).
+Other subjects' ratio should be close to 1.0.
+"""
+import pandas as pd
+import numpy as np
+
+df = pd.read_csv("/root/capsule/code/sessions/03c_onset_features/data/iter01_features.csv")
+
+feats = ["above_near", "below_near", "below_mid", "below_deep",
+         "grad", "dip_peak", "dip_trough", "dip_mag", "dip_rel"]
+
+subjects = sorted(df["subject"].astype(str).unique())
+print(f"{'feature':<14} " + " ".join(f"{s:>8}" for s in subjects))
+print("-" * 100)
+
+# Median at N22 / median at v21 per subject — should be ~1 if v21 is at pia
+for f in feats:
+    vals = []
+    for sid in subjects:
+        sub = df[df["subject"].astype(str) == sid]
+        n22_med = sub[f"n22_{f}"].median()
+        v21_med = sub[f"v21_{f}"].median()
+        if abs(v21_med) > 1e-9:
+            ratio = n22_med / v21_med
+        else:
+            ratio = np.nan
+        vals.append(f"{ratio:8.2f}")
+    print(f"{f:<14} " + " ".join(vals))
+
+print("\n=== Absolute values at v21 (current image-based surface) ===")
+print(f"{'feature':<14} " + " ".join(f"{s:>10}" for s in subjects))
+print("-" * 100)
+for f in feats:
+    vals = []
+    for sid in subjects:
+        sub = df[df["subject"].astype(str) == sid]
+        v21_med = sub[f"v21_{f}"].median()
+        vals.append(f"{v21_med:10.3f}")
+    print(f"{f:<14} " + " ".join(vals))
+
+print("\n=== Absolute values at N22 (ground truth pia) ===")
+print(f"{'feature':<14} " + " ".join(f"{s:>10}" for s in subjects))
+print("-" * 100)
+for f in feats:
+    vals = []
+    for sid in subjects:
+        sub = df[df["subject"].astype(str) == sid]
+        n22_med = sub[f"n22_{f}"].median()
+        vals.append(f"{n22_med:10.3f}")
+    print(f"{f:<14} " + " ".join(vals))

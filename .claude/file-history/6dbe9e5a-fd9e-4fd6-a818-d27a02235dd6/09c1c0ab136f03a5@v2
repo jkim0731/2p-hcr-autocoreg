@@ -1,0 +1,43 @@
+"""Diagnose anchor center per subject."""
+from __future__ import annotations
+import sys, importlib.util, os
+import numpy as np
+
+sys.path.insert(0, "/root/capsule/code/dev_code")
+_spec = importlib.util.spec_from_file_location(
+    "img_surface_l2", "/root/capsule/code/dev_code/03_image_based_surface.py")
+_mod = importlib.util.module_from_spec(_spec); sys.modules["img_surface_l2"] = _mod
+_spec.loader.exec_module(_mod)
+
+from benchmark_analysis import load_hcr_combined
+from benchmark_data_loader import load_subject
+
+for sid in ["755252", "767018", "767022", "782149", "788406", "790322"]:
+    s = load_subject(sid)
+    vol, xy_um, z_um, _ = load_hcr_combined(s, level=4)
+    sx = max(1, int(round(10.0 / xy_um)))
+    vol_sub = vol[:, ::sx, ::sx].astype(np.float32, copy=False)
+    _, Ys, Xs = vol_sub.shape
+    xs_col = np.arange(Xs, dtype=np.float32) * sx * xy_um
+    ys_col = np.arange(Ys, dtype=np.float32) * sx * xy_um
+    xx, yy = np.meshgrid(xs_col, ys_col)
+
+    a_top, _, _ = _mod._per_column_top_in_band(
+        vol_sub, z_um, None, None, relative_margin=0.05,
+        min_signal_abs_frac=0.20, min_thick_um=15.0)
+    mask_a = np.isfinite(a_top)
+    za = a_top[mask_a].ravel()
+    pct = np.percentile(za, [5, 10, 25, 50, 75, 90, 95])
+    print(f"{sid}: anchor tops n={mask_a.sum()}, p5={pct[0]:.0f} p10={pct[1]:.0f} "
+          f"p25={pct[2]:.0f} p50={pct[3]:.0f} p75={pct[4]:.0f} p90={pct[5]:.0f} p95={pct[6]:.0f}")
+
+    # Current anchor implementation
+    med = float(np.median(za))
+    mad = float(np.median(np.abs(za - med))) + 1e-6
+    keep = np.abs(za - med) <= 6.0 * 1.4826 * mad
+    xa = xx[mask_a].ravel()[keep]
+    ya = yy[mask_a].ravel()[keep]
+    zat = za[keep]
+    if len(zat) >= 50:
+        ac = _mod._robust_plane_fit(xa, ya, zat)
+        print(f"  current anchor c (irls-huber plane, 6mad trim): {ac['c']:.1f} (n={len(zat)})")

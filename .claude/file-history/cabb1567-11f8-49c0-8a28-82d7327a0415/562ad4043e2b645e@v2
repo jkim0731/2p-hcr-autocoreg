@@ -1,0 +1,64 @@
+"""Quick check: load N22 + v2.1 surfaces for all 6 HCR subjects."""
+from __future__ import annotations
+import sys, importlib.util, os
+from pathlib import Path
+import numpy as np
+os.environ["PYTHONUNBUFFERED"] = "1"
+
+sys.path.insert(0, "/root/capsule/code/dev_code")
+
+_spec = importlib.util.spec_from_file_location(
+    "img_surface",
+    str(Path("/root/capsule/code/dev_code") / "03_image_based_surface.py"))
+_img_mod = importlib.util.module_from_spec(_spec)
+sys.modules["img_surface"] = _img_mod
+_spec.loader.exec_module(_img_mod)
+
+from benchmark_analysis import (
+    load_hcr_combined,
+    estimate_pia_surface_quantile_ceiling,
+    estimate_pia_surface_image_ceiling,
+    load_hcr_volume,
+    list_hcr_channels,
+)
+from benchmark_data_loader import hcr_px_to_um, load_subject
+
+HCR = ["755252", "767018", "767022", "782149", "788406", "790322"]
+
+for sid in HCR:
+    s = load_subject(sid)
+    hcr_um = hcr_px_to_um(s.hcr_centroids[["z_px", "y_px", "x_px"]].values, s)
+    hcr_xyz = hcr_um[:, [2, 1, 0]]
+
+    # N22 surface (quantile_ceiling)
+    vol, xy_um, z_um, _ = load_hcr_combined(s, level=4)
+    min_signal = 0.1
+    anchor_for_q = estimate_pia_surface_image_ceiling(
+        hcr_xyz, vol, z_um, xy_um,
+        relative_margin=0.005, min_signal_abs=min_signal / 2,
+        safety_offset_um=0.0)
+    channels = list_hcr_channels(s)
+    per_ch_vols = []
+    for ch in channels:
+        try:
+            v_ch, _, _ = load_hcr_volume(s, channel=ch, level=4)
+            per_ch_vols.append(v_ch.astype(np.float32, copy=False))
+        except FileNotFoundError:
+            continue
+    xy_stride_um = 10.0
+    sxy = max(1, int(round(xy_stride_um / xy_um)))
+    vols_sub = [v[:, ::sxy, ::sxy] for v in per_ch_vols]
+    _, Ys, Xs = vols_sub[0].shape
+    xs_sub = np.arange(Xs) * sxy * xy_um
+    ys_sub = np.arange(Ys) * sxy * xy_um
+    xx_sub, yy_sub = np.meshgrid(xs_sub, ys_sub)
+    n22 = estimate_pia_surface_quantile_ceiling(
+        hcr_xyz, vols_sub, z_um, sxy * xy_um, xx_sub, yy_sub, anchor_for_q)
+
+    # v2.1 image-based
+    v21 = _img_mod.estimate_surface_and_l2_image_based(
+        vol, z_um, xy_um, target_quantile=0.85)
+
+    n22_c = None if n22 is None else n22["c"]
+    v21_c = None if v21.surface is None else v21.surface["c"]
+    print(f"{sid}: N22 c={n22_c} v21 c={v21_c}")

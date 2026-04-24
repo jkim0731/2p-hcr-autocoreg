@@ -1,0 +1,61 @@
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+
+=== 788406 ===
+  P1       rec_id=0.202 r@20=0.210 med=81.1 n_pred=623/787 wall=55.2s
+  P14      rec_id=0.203 r@20=0.211 med=79.3 n_pred=606/787 wall=12.5s
+  common_cz=594  agree=418  agree_frac=0.704
+  INTERSECT rec_id=0.144 r@20=0.146 precision=0.310 n_pred=364
+  FALLBACK  rec_id=0.202 r@20=0.210 precision=0.255 n_pred=623
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+
+=== 755252 ===
+  P1       rec_id=0.033 r@20=0.044 med=102.7 n_pred=542/639 wall=52.3s
+  P14      rec_id=0.050 r@20=0.058 med=104.5 n_pred=589/639 wall=22.9s
+  common_cz=629  agree=405  agree_frac=0.644
+  INTERSECT rec_id=0.028 r@20=0.033 precision=0.052 n_pred=343
+  FALLBACK  rec_id=0.033 r@20=0.044 precision=0.039 n_pred=542
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+
+=== 767022 ===
+  P1       rec_id=0.081 r@20=0.108 med=107.3 n_pred=654/793 wall=35.3s
+  P14      rec_id=0.039 r@20=0.053 med=122.2 n_pred=488/793 wall=9.5s
+  common_cz=483  agree=190  agree_frac=0.393
+  INTERSECT rec_id=0.028 r@20=0.039 precision=0.123 n_pred=179
+  FALLBACK  rec_id=0.081 r@20=0.108 precision=0.098 n_pred=654
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+
+=== 782149 ===
+  P1       rec_id=0.000 r@20=0.000 med=1135.5 n_pred=145/303 wall=32.9s
+  P14      rec_id=0.000 r@20=0.000 med=1141.5 n_pred=49/303 wall=5.9s
+  common_cz=111  agree=71  agree_frac=0.640
+  INTERSECT rec_id=0.000 r@20=0.000 precision=0.000 n_pred=27
+  FALLBACK  rec_id=0.000 r@20=0.000 precision=0.000 n_pred=145
+
+
+=== SUMMARY (r@20) ===
+subject  n_gt  n_common  n_agree  agree_frac   p1_r20  p14_r20  intersect_r20  intersect_prec  fallback_r20  fallback_prec
+ 788406   787       594      418       0.704 0.209657 0.210928       0.146125        0.310440      0.209657       0.255217
+ 755252   639       629      405       0.644 0.043818 0.057903       0.032864        0.052478      0.043818       0.038745
+ 767022   793       483      190       0.393 0.108449 0.052963       0.039092        0.122905      0.108449       0.097859
+ 782149   303       111       71       0.640 0.000000 0.000000       0.000000        0.000000      0.000000       0.000000
+
+Totals (sum across 4 subjects):
+  P1 r@20:         0.362
+  P14 r@20:        0.322
+  intersect r@20:  0.218
+  fallback r@20:   0.362
+  fallback lift:   +0.000
+  intersect median-precision: 0.088
+  intersect min-precision:    0.000

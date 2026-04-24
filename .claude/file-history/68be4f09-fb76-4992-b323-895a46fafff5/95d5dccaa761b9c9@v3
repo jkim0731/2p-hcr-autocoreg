@@ -1,0 +1,199 @@
+"""CZ adaptation of iter07 (patch-MAX detector + poly-deg2 surface).
+
+CZ stack differs from HCR:
+- single channel, raw uint16 intensities (not bg-subtracted combined)
+- OOT is near-zero but not exactly 0 — camera offset + noise typically ~30 DN
+- typical tissue columns reach log ~ 6-8; OOT log ~ 3-4
+
+We use the same machinery (log + smooth + sustain + col-p90-adaptive
+threshold + 15x15 xy patch-MAX + IRLS-Huber bivariate polynomial fit)
+but retune THR_FLOOR and leave DELTA_LOG as-is (p90-relative still OK).
+
+Prototype on 2 subjects first, print per-column stats and render
+overlays so we can verify THR_FLOOR is in a reasonable range before
+full-bench.
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import numpy as np
+import tifffile
+
+ROOT = Path("/root/capsule")
+sys.path.insert(0, str(ROOT / "code" / "dev_code"))
+sys.path.insert(0, str(ROOT / "code" / "sessions" / "03c_onset_features" / "iterations"))
+
+from scipy.ndimage import gaussian_filter1d
+
+from benchmark_analysis import estimate_pia_surface, analyze_subject
+from benchmark_data_loader import load_subject, cz_px_to_um
+from iter07_compute import (
+    fit_polysurf, eval_polysurf, sampling_grid,
+    col_detect_transition as _col_detect_hcr,
+    SMOOTH_Z_UM, SUSTAIN_Z_UM, TRANS_FRAC, PATCH_W, POLY_DEGREE, HUBER_K,
+)
+
+SESSION = ROOT / "code" / "sessions" / "03c_onset_features"
+OUT_FIG = SESSION / "figures"
+OUT_DATA = SESSION / "data"
+
+HCR = ["755252", "767018", "767022", "782149", "788406", "790322"]
+EPS = 1e-3
+# CZ THR_FLOOR: log(camera offset). Typical Zeiss/Leica ~100 DN → log ≈ 4.6.
+# This just rejects pure-OOT columns; range-relative threshold does the real work.
+CZ_THR_FLOOR = 4.5
+
+
+def load_cz_volume(s):
+    files = (list(s.coreg_dir.glob("*reg-dim-swapped.ome.tif"))
+             or list(s.coreg_dir.glob("*zstack.tif")))
+    if not files:
+        raise FileNotFoundError(f"no CZ TIFF for {s.subject_id}")
+    arr = tifffile.imread(str(files[0]))
+    while arr.ndim > 3 and arr.shape[0] == 1:
+        arr = arr[0]
+    if arr.ndim != 3:
+        raise ValueError(f"CZ TIFF shape={arr.shape} not ZYX")
+    return arr.astype(np.float32, copy=False)
+
+
+def detect_transitions(vol, z_um, grid_ix, grid_iy,
+                       patch_w=PATCH_W, thr_floor=CZ_THR_FLOOR):
+    Z, Y, X = vol.shape
+    log_vol = np.log(vol + EPS)
+    zs = np.empty(len(grid_ix))
+    thrs = np.empty(len(grid_ix))
+    for i, (iy, ix) in enumerate(zip(grid_iy, grid_ix)):
+        y0 = max(0, iy - patch_w); y1 = min(Y, iy + patch_w + 1)
+        x0 = max(0, ix - patch_w); x1 = min(X, ix + patch_w + 1)
+        log_col = log_vol[:, y0:y1, x0:x1].max(axis=(1, 2))
+        z_vox, _, thr_col = _col_detect_hcr(
+            log_col, z_um, smooth_z_um=SMOOTH_Z_UM,
+            sustain_z_um=SUSTAIN_Z_UM, trans_frac=TRANS_FRAC,
+            thr_floor=thr_floor)
+        zs[i]   = z_vox * z_um if z_vox >= 0 else np.nan
+        thrs[i] = thr_col
+    return zs, thrs
+
+
+def render_subject(sid: str):
+    print(f"=== {sid} ===", flush=True)
+    s = load_subject(sid)
+    vol = load_cz_volume(s)
+    z_um, xy_um = s.cz_z_um, s.cz_xy_um
+    Z, Y, X = vol.shape
+    print(f"  CZ vol shape = (Z={Z}, Y={Y}, X={X})  z_um={z_um}  xy_um={xy_um}")
+
+    # Quick OOT/tissue histogram to validate THR_FLOOR
+    log_vol = np.log(vol + EPS)
+    p10, p50, p90, p99 = np.percentile(log_vol, [10, 50, 90, 99])
+    print(f"  log intensity percentiles: p10={p10:.2f}, p50={p50:.2f}, "
+          f"p90={p90:.2f}, p99={p99:.2f}  (THR_FLOOR={CZ_THR_FLOOR})")
+
+    xi, yi = sampling_grid(vol.shape, xy_um)
+    xs_um = xi * xy_um; ys_um = yi * xy_um
+    zs_um, thrs = detect_transitions(vol, z_um, xi, yi)
+    valid = np.isfinite(zs_um)
+    print(f"  transitions: {valid.sum()}/{len(zs_um)} valid, "
+          f"median z = {np.nanmedian(zs_um):.1f} µm, "
+          f"median thr = {np.nanmedian(thrs):.2f}")
+
+    polyfit = fit_polysurf(xs_um, ys_um, zs_um, degree=POLY_DEGREE,
+                           huber_k=HUBER_K)
+    if polyfit is None:
+        print("  polyfit failed")
+        return None
+
+    # Compare to centroid surface (CZ coreg centroids — this is the
+    # "truth" analog of N22 on HCR).
+    cz_um = cz_px_to_um(s.cz_centroids[["z_px", "y_px", "x_px"]].values, s)
+    cz_xyz = cz_um[:, [2, 1, 0]]
+    cz_centroid_surf = estimate_pia_surface(cz_xyz)
+
+    # Also pull existing image-based CZ surface from analyze_subject
+    info = analyze_subject(s)
+    cz_existing = info.get("cz_surface")
+
+    def _surface_z(surface, xs, y0):
+        if surface is None:
+            return np.full_like(np.asarray(xs, dtype=float), np.nan)
+        a, b, c = surface["a"], surface["b"], surface["c"]
+        p = surface.get("p", 0.0); q = surface.get("q", 0.0)
+        r = surface.get("r", 0.0)
+        xs = np.asarray(xs)
+        return (a * xs + b * y0 + c + p * xs * xs
+                + q * xs * y0 + r * y0 * y0)
+
+    # Render overlays across 4 y positions
+    N_Y = 4
+    x_um = np.arange(X) * xy_um
+    z_axis = np.arange(Z) * z_um
+    y_lo = int(0.15 * Y); y_hi = Y - 1 - y_lo
+    y_idx = np.linspace(y_lo, y_hi, N_Y).astype(int)
+
+    fig, axes = plt.subplots(1, N_Y, figsize=(5*N_Y, 4.5), sharey=True)
+    for ax, iy in zip(axes, y_idx):
+        y_const = iy * xy_um
+        img = np.log(vol[:, iy, :] + EPS)
+        vmin = float(np.percentile(img, 5))
+        vmax = float(np.percentile(img, 99.5))
+        ax.imshow(img, aspect='auto', cmap='gray', origin='upper',
+                  extent=[x_um[0], x_um[-1], z_axis[-1], z_axis[0]],
+                  vmin=vmin, vmax=vmax)
+        # centroid-based CZ surface (plane)
+        ax.plot(x_um, _surface_z(cz_centroid_surf, x_um, y_const),
+                color='tab:green', lw=1.3, label='CZ centroid')
+        if cz_existing is not None:
+            ax.plot(x_um, _surface_z(cz_existing, x_um, y_const),
+                    color='tab:cyan', lw=1.3, label='CZ image_ceiling')
+        z_poly = eval_polysurf(polyfit, x_um, np.full_like(x_um, y_const))
+        ax.plot(x_um, z_poly, color='tab:red', lw=1.6,
+                label=f'iter07 poly-deg{POLY_DEGREE}')
+        ax.set_xlabel('x (µm)')
+        ax.set_title(f"y = {y_const:.0f} µm")
+        ax.legend(loc='lower right', fontsize=8)
+    axes[0].set_ylabel('z (µm)')
+    fig.suptitle(f"{sid} — CZ iter07 (poly-deg{POLY_DEGREE}) + centroid + image_ceiling",
+                 fontsize=12)
+    plt.tight_layout()
+    out = OUT_FIG / f"iter07_cz_{sid}.png"
+    plt.savefig(out, dpi=110)
+    plt.close(fig)
+    print(f"  wrote {out}")
+
+    np.savez(OUT_DATA / f"iter07_cz_transitions_{sid}.npz",
+             xs_um=xs_um, ys_um=ys_um, zs_um=zs_um, thrs=thrs)
+
+    return dict(
+        subject=sid,
+        cz_shape=(Z, Y, X),
+        cz_z_um=z_um, cz_xy_um=xy_um,
+        log_p10=float(p10), log_p50=float(p50),
+        log_p90=float(p90), log_p99=float(p99),
+        thr_floor=CZ_THR_FLOOR,
+        median_thr=float(np.nanmedian(thrs)),
+        n_valid_trans=int(valid.sum()),
+        median_trans_z_um=float(np.nanmedian(zs_um)) if valid.any() else np.nan,
+    )
+
+
+def main():
+    rows = []
+    for sid in HCR:
+        r = render_subject(sid)
+        if r is not None:
+            rows.append(r)
+    import pandas as pd
+    df = pd.DataFrame(rows)
+    out = OUT_DATA / "iter07_cz_summary.csv"
+    df.to_csv(out, index=False)
+    print("\n=== CZ summary ===")
+    print(df.to_string(index=False, float_format=lambda x: f'{x:7.2f}'))
+    print(f"\nwrote {out}")
+
+
+if __name__ == "__main__":
+    main()

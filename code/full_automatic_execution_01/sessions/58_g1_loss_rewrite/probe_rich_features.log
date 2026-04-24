@@ -1,0 +1,16 @@
+n_hcr_gfp=17427
+in_dim=20
+  it= 20  loss_recent_mean=6.762  n_src=199 n_tgt=5256 n_corr=167 t=6.1s
+  it= 40  loss_recent_mean=6.751  n_src=141 n_tgt=4539 n_corr=110 t=12.1s
+  it= 60  loss_recent_mean=6.743  n_src=217 n_tgt=4937 n_corr=183 t=17.8s
+  it= 80  loss_recent_mean=6.737  n_src=128 n_tgt=3962 n_corr=108 t=23.2s
+  it=100  loss_recent_mean=6.490  n_src=124 n_tgt=4292 n_corr=109 t=28.3s
+  it=120  loss_recent_mean=6.495  n_src=221 n_tgt=5031 n_corr=190 t=33.3s
+  it=140  loss_recent_mean=6.418  n_src=164 n_tgt=4757 n_corr=135 t=38.9s
+  it=160  loss_recent_mean=6.349  n_src=155 n_tgt=4913 n_corr=140 t=44.0s
+  it=180  loss_recent_mean=6.037  n_src=156 n_tgt=5039 n_corr=136 t=49.3s
+  it=200  loss_recent_mean=6.183  n_src=129 n_tgt=4163 n_corr=110 t=54.5s
+
+Initial 20 mean = 6.762
+Final 20 mean   = 6.183
+Descent = 0.579

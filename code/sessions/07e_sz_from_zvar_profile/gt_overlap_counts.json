@@ -1,0 +1,274 @@
+{
+  "767018": {
+    "sid": "767018",
+    "cutoff_linear": 0.0010161152576270694,
+    "n_components_bic": 6,
+    "gt_scales": [
+      1.6847080510229655,
+      1.7185763288832634,
+      3.5829933709229174
+    ],
+    "src_mean_cz_um": [
+      190.07940823936212,
+      201.13208111139772,
+      179.2836681458727
+    ],
+    "dst_mean_hcr_um": [
+      1067.2323712734594,
+      1111.613923396664,
+      789.188994121813
+    ],
+    "n_cz_total": 785,
+    "n_cz_coreg_total": 273,
+    "n_hcr_strict_total": 8114,
+    "n_cz_cortex": 507,
+    "n_cz_coreg_cortex": 175,
+    "n_hcr_cortex": 7760,
+    "cz_cortex_aabb_hcr_frame": [
+      698.2876592105544,
+      1418.6574405076103,
+      728.7919298905804,
+      1503.2736424649609,
+      609.3877303802436,
+      1690.4284417995586
+    ],
+    "hcr_cortex_aabb": [
+      3.9461366782330463,
+      2275.934329170909,
+      4.932670847791308,
+      2285.799670866492,
+      224.0,
+      1377.0
+    ],
+    "gt_overlap_aabb": [
+      698.2876592105544,
+      1418.6574405076103,
+      728.7919298905804,
+      1503.2736424649609,
+      609.3877303802436,
+      1377.0
+    ],
+    "gt_overlap_valid_xyz": [
+      true,
+      true,
+      true
+    ],
+    "n_cz_in_gt_overlap": 451,
+    "n_cz_coreg_in_gt_overlap": 175,
+    "n_hcr_in_gt_overlap": 727,
+    "ratio_cz_over_hcr_gt_overlap": 0.6203576341127923,
+    "ratio_cz_coreg_over_hcr_gt_overlap": 0.2407152682255846,
+    "V_overlap_um3": 428261034.51796335,
+    "n_cz_in_hcr_cortex_aabb": 451,
+    "n_hcr_in_cz_cortex_aabb": 727,
+    "n_cz_in_xy_overlap": 507,
+    "n_hcr_in_xy_overlap": 938,
+    "ratio_cz_over_hcr_xy_only": 0.5405117270788913,
+    "cz_p99_depth_um": 380.34139383117304,
+    "hcr_p99_depth_um": 1048.7591339467147
+  },
+  "782149": {
+    "sid": "782149",
+    "cutoff_linear": 0.0017060926833151427,
+    "n_components_bic": 4,
+    "gt_scales": [
+      1.9810399810327493,
+      1.868527967232889,
+      2.9261123017624158
+    ],
+    "src_mean_cz_um": [
+      201.15320923987875,
+      196.02120181860727,
+      124.90201071916881
+    ],
+    "dst_mean_hcr_um": [
+      1073.7428413262987,
+      1299.2680892479477,
+      601.6212959815404
+    ],
+    "n_cz_total": 894,
+    "n_cz_coreg_total": 303,
+    "n_hcr_strict_total": 3450,
+    "n_cz_cortex": 561,
+    "n_cz_coreg_cortex": 98,
+    "n_hcr_cortex": 3097,
+    "cz_cortex_aabb_hcr_frame": [
+      675.2102539379104,
+      1456.1070577910878,
+      914.08324125796,
+      1651.5002628811014,
+      591.6198119929826,
+      1614.8079486845345
+    ],
+    "hcr_cortex_aabb": [
+      1.9604446371998037,
+      2260.3926666913735,
+      2.9406669557997054,
+      2265.2937782843733,
+      168.0,
+      886.0
+    ],
+    "gt_overlap_aabb": [
+      675.2102539379104,
+      1456.1070577910878,
+      914.08324125796,
+      1651.5002628811014,
+      591.6198119929826,
+      886.0
+    ],
+    "gt_overlap_valid_xyz": [
+      true,
+      true,
+      true
+    ],
+    "n_cz_in_gt_overlap": 165,
+    "n_cz_coreg_in_gt_overlap": 98,
+    "n_hcr_in_gt_overlap": 217,
+    "ratio_cz_over_hcr_gt_overlap": 0.7603686635944701,
+    "ratio_cz_coreg_over_hcr_gt_overlap": 0.45161290322580644,
+    "V_overlap_um3": 169517828.9853895,
+    "n_cz_in_hcr_cortex_aabb": 165,
+    "n_hcr_in_cz_cortex_aabb": 217,
+    "n_cz_in_xy_overlap": 561,
+    "n_hcr_in_xy_overlap": 346,
+    "ratio_cz_over_hcr_xy_only": 1.6213872832369942,
+    "cz_p99_depth_um": 389.0122601238914,
+    "hcr_p99_depth_um": 649.6429785304848
+  },
+  "788406": {
+    "sid": "788406",
+    "cutoff_linear": 0.0013757035085830125,
+    "n_components_bic": 6,
+    "gt_scales": [
+      1.6918156672554574,
+      1.8678020151105574,
+      2.8202809348934874
+    ],
+    "src_mean_cz_um": [
+      176.66803683784093,
+      200.953487802808,
+      215.90710292422995
+    ],
+    "dst_mean_hcr_um": [
+      1222.2506743656718,
+      1181.2134358381957,
+      597.9881049264213
+    ],
+    "n_cz_total": 932,
+    "n_cz_coreg_total": 787,
+    "n_hcr_strict_total": 10729,
+    "n_cz_cortex": 650,
+    "n_cz_coreg_cortex": 560,
+    "n_hcr_cortex": 10170,
+    "cz_cortex_aabb_hcr_frame": [
+      860.0668973798201,
+      1521.900312261625,
+      813.3108136353641,
+      1572.7293888493573,
+      385.85932884055603,
+      1196.4190158036909
+    ],
+    "hcr_cortex_aabb": [
+      3.9577607865135778,
+      2274.723012048679,
+      5.936641179770366,
+      2289.564614998105,
+      88.0,
+      1297.0
+    ],
+    "gt_overlap_aabb": [
+      860.0668973798201,
+      1521.900312261625,
+      813.3108136353641,
+      1572.7293888493573,
+      385.85932884055603,
+      1196.4190158036909
+    ],
+    "gt_overlap_valid_xyz": [
+      true,
+      true,
+      true
+    ],
+    "n_cz_in_gt_overlap": 650,
+    "n_cz_coreg_in_gt_overlap": 560,
+    "n_hcr_in_gt_overlap": 944,
+    "ratio_cz_over_hcr_gt_overlap": 0.6885593220338984,
+    "ratio_cz_coreg_over_hcr_gt_overlap": 0.5932203389830508,
+    "V_overlap_um3": 407394260.5312267,
+    "n_cz_in_hcr_cortex_aabb": 650,
+    "n_hcr_in_cz_cortex_aabb": 944,
+    "n_cz_in_xy_overlap": 650,
+    "n_hcr_in_xy_overlap": 1138,
+    "ratio_cz_over_hcr_xy_only": 0.5711775043936731,
+    "cz_p99_depth_um": 380.8048897700717,
+    "hcr_p99_depth_um": 1188.156399580908
+  },
+  "790322": {
+    "sid": "790322",
+    "cutoff_linear": 0.0016931685972731629,
+    "n_components_bic": 5,
+    "gt_scales": [
+      1.6614098998699605,
+      1.8714917114854261,
+      3.0416907644628366
+    ],
+    "src_mean_cz_um": [
+      204.73241102991497,
+      184.06024190178042,
+      206.25003680382193
+    ],
+    "dst_mean_hcr_um": [
+      1070.672530921567,
+      1125.0585462206582,
+      623.3127572289228
+    ],
+    "n_cz_total": 1016,
+    "n_cz_coreg_total": 778,
+    "n_hcr_strict_total": 9675,
+    "n_cz_cortex": 760,
+    "n_cz_coreg_cortex": 569,
+    "n_hcr_cortex": 9078,
+    "cz_cortex_aabb_hcr_frame": [
+      766.5780683941284,
+      1409.1790085205268,
+      723.7462758141678,
+      1461.9072236347515,
+      436.23302253083875,
+      1342.5275275795398
+    ],
+    "hcr_cortex_aabb": [
+      0.0,
+      2265.2937782843733,
+      1.9604446371998037,
+      2261.3728890099737,
+      145.0,
+      1171.0
+    ],
+    "gt_overlap_aabb": [
+      766.5780683941284,
+      1409.1790085205268,
+      723.7462758141678,
+      1461.9072236347515,
+      436.23302253083875,
+      1171.0
+    ],
+    "gt_overlap_valid_xyz": [
+      true,
+      true,
+      true
+    ],
+    "n_cz_in_gt_overlap": 671,
+    "n_cz_coreg_in_gt_overlap": 569,
+    "n_hcr_in_gt_overlap": 736,
+    "ratio_cz_over_hcr_gt_overlap": 0.9116847826086957,
+    "ratio_cz_coreg_over_hcr_gt_overlap": 0.7730978260869565,
+    "V_overlap_um3": 348531512.902585,
+    "n_cz_in_hcr_cortex_aabb": 671,
+    "n_hcr_in_cz_cortex_aabb": 736,
+    "n_cz_in_xy_overlap": 760,
+    "n_hcr_in_xy_overlap": 888,
+    "ratio_cz_over_hcr_xy_only": 0.8558558558558559,
+    "cz_p99_depth_um": 384.43518296979994,
+    "hcr_p99_depth_um": 1004.5290413710389
+  }
+}

@@ -1,0 +1,70 @@
+"""I2 — 3D MI rigid + anisotropic affine via SimpleITK.
+
+Loads CZ z-stack and HCR 488 volume at a coarse pyramid level, downsamples to
+an isotropic 8 µm grid for the fit, and runs the F5 affine MI registration
+with a 180° + anisotropic-scale initial.  Returns the recovered transform as
+the intrinsic result (no per-pair assignment — I2 is a coarse aligner).
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+import numpy as np
+import pandas as pd
+
+_THIS = Path(__file__).resolve().parent
+_ROOT = _THIS.parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+if str(_ROOT.parent / "dev_code") not in sys.path:
+    sys.path.insert(0, str(_ROOT.parent / "dev_code"))
+
+from bench.harness import register_candidate, CoregResult, TransformDescriptor
+from lib.sitk_wrapper import mi_affine
+
+
+@register_candidate("I2")
+def run_i2(s, *, target_um=8.0) -> CoregResult:
+    try:
+        from ._i1_axial_ncc import _load_cz_fullstack, _load_hcr_fullstack
+        cz_stack, cz_xy_um, cz_z_um = _load_cz_fullstack(s)
+        hcr_vol, hcr_xy_um, hcr_z_um = _load_hcr_fullstack(s)
+    except Exception as e:
+        return CoregResult(pd.DataFrame(), 0.0, diagnostics={"error": f"load: {e}"})
+
+    # Crude downsample to ~target_um isotropic
+    from scipy.ndimage import zoom
+    cz_zoom = (cz_z_um / target_um, cz_xy_um / target_um, cz_xy_um / target_um)
+    hcr_zoom = (hcr_z_um / target_um, hcr_xy_um / target_um, hcr_xy_um / target_um)
+    cz_ds = zoom(cz_stack, cz_zoom, order=1).astype(np.float32)
+    hcr_ds = zoom(hcr_vol, hcr_zoom, order=1).astype(np.float32)
+
+    try:
+        r = mi_affine(
+            cz_ds, hcr_ds,
+            cz_xy_um=target_um, cz_z_um=target_um,
+            hcr_xy_um=target_um, hcr_z_um=target_um,
+            init_rotation_deg_z=180.0,
+            init_scale=(2.8, 1.8, 1.8),
+            n_iterations=200,
+            pyramid_levels=(4, 2, 1),
+        )
+    except Exception as e:
+        return CoregResult(pd.DataFrame(), 0.0, diagnostics={"error": f"mi: {e}"})
+
+    # Extract anisotropic scales from matrix via SVD
+    U, S_vals, Vt = np.linalg.svd(r.affine_matrix)
+    # S_vals are singular values in (z,y,x) order already
+    transform = TransformDescriptor(
+        R=U @ Vt, scales=S_vals, translation=r.translation,
+        src_mean=np.zeros(3), rotation_deg_z=180.0, kind="mi-affine",
+    )
+    return CoregResult(
+        pairs_df=pd.DataFrame(),
+        confidence=max(0.0, min(1.0, 1.0 - abs(r.metric) / 5.0)),
+        transform=transform,
+        diagnostics=dict(
+            metric=r.metric, iterations=r.iterations, converged=r.converged,
+            scales=S_vals.tolist(),
+        ),
+    )

@@ -1,0 +1,20 @@
+=== S59 CZ-aware F8 probe on 788406 ===
+n_hcr_gfp=17427
+  it=  50 loss=6.390 n_src=127 n_tgt=5121 t=16.6s
+  it= 100 loss=6.321 n_src=78 n_tgt=4641 t=36.0s
+  it= 150 loss=6.293 n_src=109 n_tgt=4566 t=52.2s
+  it= 200 loss=5.947 n_src=115 n_tgt=4908 t=69.4s
+  it= 250 loss=6.139 n_src=107 n_tgt=5054 t=86.5s
+  it= 300 loss=5.656 n_src=87 n_tgt=5032 t=103.6s
+  it= 350 loss=5.542 n_src=108 n_tgt=4885 t=120.1s
+  it= 400 loss=5.542 n_src=75 n_tgt=4119 t=136.9s
+  it= 450 loss=5.682 n_src=114 n_tgt=4708 t=153.8s
+  it= 500 loss=5.498 n_src=74 n_tgt=4491 t=171.0s
+
+Training complete. initial50_mean=6.390 final50_mean=5.498 descent=0.892
+
+--- inference on real 788406 ---
+  n_pred=932 n_in_gt=787 hits@20=1 r@20=0.001
+
+=== VERDICT: r@20=0.001 ===
+Fail-fast criterion MET. Abandon CZ-aware F8.

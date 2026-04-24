@@ -1,0 +1,77 @@
+
+=== 788406 ===
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  n_gt_with_cz_centroid=787  order build=52.8s
+    K=   1 → GT-in-top-K = 0.225 (177/787)
+    K=   3 → GT-in-top-K = 0.405 (319/787)
+    K=   5 → GT-in-top-K = 0.487 (383/787)
+    K=  10 → GT-in-top-K = 0.540 (425/787)
+    K=  20 → GT-in-top-K = 0.615 (483/787)
+    K=  50 → GT-in-top-K = 0.757 (596/787)
+    K= 100 → GT-in-top-K = 0.954 (751/787)
+    K= 500 → GT-in-top-K = 0.996 (784/787)
+  GT rank quantiles (when present, n=784): p25=1 p50=5 p75=48 p95=97 max=154
+  GT missing from HCR GFP+ list entirely: 3/787
+
+=== 755252 ===
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  n_gt_with_cz_centroid=639  order build=52.5s
+    K=   1 → GT-in-top-K = 0.066 (42/639)
+    K=   3 → GT-in-top-K = 0.125 (80/639)
+    K=   5 → GT-in-top-K = 0.160 (102/639)
+    K=  10 → GT-in-top-K = 0.219 (140/639)
+    K=  20 → GT-in-top-K = 0.280 (179/639)
+    K=  50 → GT-in-top-K = 0.473 (302/639)
+    K= 100 → GT-in-top-K = 0.673 (430/639)
+    K= 500 → GT-in-top-K = 0.844 (539/639)
+  GT rank quantiles (when present, n=596): p25=12 p50=48 p75=109 p95=11998 max=30614
+  GT missing from HCR GFP+ list entirely: 43/639
+
+=== 767022 ===
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  n_gt_with_cz_centroid=793  order build=36.3s
+    K=   1 → GT-in-top-K = 0.059 (47/793)
+    K=   3 → GT-in-top-K = 0.156 (124/793)
+    K=   5 → GT-in-top-K = 0.241 (191/793)
+    K=  10 → GT-in-top-K = 0.386 (306/793)
+    K=  20 → GT-in-top-K = 0.480 (381/793)
+    K=  50 → GT-in-top-K = 0.591 (469/793)
+    K= 100 → GT-in-top-K = 0.762 (604/793)
+    K= 500 → GT-in-top-K = 0.858 (680/793)
+  GT rank quantiles (when present, n=750): p25=4 p50=18 p75=87 p95=5034 max=14122
+  GT missing from HCR GFP+ list entirely: 43/793
+
+=== 782149 ===
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  n_gt_with_cz_centroid=303  order build=34.7s
+    K=   1 → GT-in-top-K = 0.000 (0/303)
+    K=   3 → GT-in-top-K = 0.000 (0/303)
+    K=   5 → GT-in-top-K = 0.000 (0/303)
+    K=  10 → GT-in-top-K = 0.000 (0/303)
+    K=  20 → GT-in-top-K = 0.000 (0/303)
+    K=  50 → GT-in-top-K = 0.000 (0/303)
+    K= 100 → GT-in-top-K = 0.000 (0/303)
+    K= 500 → GT-in-top-K = 0.000 (0/303)
+  GT rank quantiles (when present, n=299): p25=1635 p50=1878 p75=2182 p95=2561 max=2810
+  GT missing from HCR GFP+ list entirely: 4/303
+
+
+=== SUMMARY — GT-in-top-K (rows=subject, cols=K) ===
+K             1         3         5         10        20        50        100       500
+subject                                                                                
+755252   0.065728  0.125196  0.159624  0.219092  0.280125  0.472613  0.672926  0.843505
+767022   0.059269  0.156368  0.240858  0.385876  0.480454  0.591425  0.761665  0.857503
+782149   0.000000  0.000000  0.000000  0.000000  0.000000  0.000000  0.000000  0.000000
+788406   0.224905  0.405337  0.486658  0.540025  0.614994  0.757306  0.954257  0.996188

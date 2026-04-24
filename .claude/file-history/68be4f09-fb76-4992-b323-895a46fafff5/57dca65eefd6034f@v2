@@ -1,0 +1,161 @@
+"""Robust clamp: use quantile of positive deficits (not max), or a
+robust surface fit through tile envelope tops."""
+from __future__ import annotations
+import sys, importlib.util, os
+from pathlib import Path
+import numpy as np
+import pandas as pd
+os.environ["PYTHONUNBUFFERED"] = "1"
+
+sys.path.insert(0, "/root/capsule/code/dev_code")
+_spec = importlib.util.spec_from_file_location(
+    "img_surface_l2",
+    str(Path("/root/capsule/code/dev_code") / "03_image_based_surface.py"))
+_mod = importlib.util.module_from_spec(_spec); sys.modules["img_surface_l2"] = _mod
+_spec.loader.exec_module(_mod)
+
+from benchmark_analysis import load_hcr_combined
+from benchmark_data_loader import hcr_px_to_um, load_subject
+
+
+def sz(s, x, y):
+    return (s["a"]*x + s["b"]*y + s["c"]
+            + s.get("p",0)*x*x + s.get("q",0)*x*y + s.get("r",0)*y*y)
+
+
+def eval_surf(s, pts):
+    zs = sz(s, pts[:,0], pts[:,1])
+    depth = pts[:,2] - zs
+    n = len(depth)
+    above = (depth < 0).sum() / n
+    edges = np.arange(-200, 404, 5.0)
+    h, _ = np.histogram(depth, bins=edges)
+    density = h / (5.0 * max(n, 1))
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    bulk = density[(centers >= 50) & (centers <= 200)].mean()
+    onset = np.nan
+    if bulk > 0:
+        for c, d in zip(centers, density):
+            if c >= 0 and d >= 0.5 * bulk:
+                onset = float(c); break
+    return above, onset
+
+
+def robust_clamp_q_of_deficits(surface, xs, ys, zs, *, tile_um=120.0,
+                                within_tile_q=0.10, lift_q=0.95,
+                                safety_offset_um=3.0, min_per_tile=5):
+    """Instead of max(positive deficits), use quantile(positive deficits, lift_q).
+    Catches most tiles but ignores the worst X% (autofluorescence).
+    """
+    xb = (xs // tile_um).astype(int)
+    yb = (ys // tile_um).astype(int)
+    key = yb * 100000 + xb
+    df = pd.DataFrame({"k": key, "x": xs, "y": ys, "z": zs})
+    agg = df.groupby("k").agg(
+        x=("x", "median"), y=("y", "median"),
+        z=("z", lambda v: float(np.quantile(v, within_tile_q))),
+        n=("z", "size"))
+    agg = agg[agg["n"] >= int(min_per_tile)]
+    if agg.empty:
+        return surface, 0.0, 0
+    tx, ty, tz = agg["x"].values, agg["y"].values, agg["z"].values
+    plane_z = sz(surface, tx, ty)
+    deficit = plane_z - tz
+    pos = deficit[deficit > 0]
+    if len(pos) == 0:
+        lift = 0.0
+    else:
+        lift = float(np.quantile(pos, lift_q))
+    out = dict(surface)
+    out["c"] = float(out["c"] - lift - safety_offset_um)
+    return out, lift, int(len(agg))
+
+
+def robust_clamp_plane_fit(surface, xs, ys, zs, *, tile_um=120.0,
+                            within_tile_q=0.10, safety_offset_um=3.0,
+                            min_per_tile=5):
+    """Fit a ROBUST plane through (tx, ty, tile_q_z) points, then use its
+    c as the new surface c.  Keep tilt from original surface (or re-fit).
+    """
+    xb = (xs // tile_um).astype(int)
+    yb = (ys // tile_um).astype(int)
+    key = yb * 100000 + xb
+    df = pd.DataFrame({"k": key, "x": xs, "y": ys, "z": zs})
+    agg = df.groupby("k").agg(
+        x=("x", "median"), y=("y", "median"),
+        z=("z", lambda v: float(np.quantile(v, within_tile_q))),
+        n=("z", "size"))
+    agg = agg[agg["n"] >= int(min_per_tile)]
+    if agg.empty:
+        return surface, 0.0, 0
+    tx, ty, tz = agg["x"].values, agg["y"].values, agg["z"].values
+
+    # IRLS-Huber plane fit to (tx, ty, tz)
+    x0 = float(tx.mean()); y0 = float(ty.mean())
+    u = tx - x0; v = ty - y0
+    X = np.column_stack([u, v, np.ones_like(u)])
+    beta = np.linalg.lstsq(X, tz, rcond=None)[0]
+    for _ in range(8):
+        r = tz - X @ beta
+        sigma = 1.4826 * np.median(np.abs(r - np.median(r)))
+        if sigma < 1e-6:
+            break
+        w = np.where(np.abs(r) <= 1.345 * sigma, 1.0, 1.345 * sigma / np.abs(r))
+        sw = np.sqrt(w)
+        beta = np.linalg.lstsq(sw[:, None] * X, sw * tz, rcond=None)[0]
+    a_c, b_c, c_c = beta
+    c_abs = c_c - a_c * x0 - b_c * y0
+    # Use the SAME surface tilt/curvature, just move c to sit on envelope plane
+    # at median tile location.
+    surf_z_at_center = sz(surface, x0, y0)
+    new_c = float(surface["c"] - (surf_z_at_center - c_c) - safety_offset_um)
+    out = dict(surface)
+    out["c"] = new_c
+    lift = float(surface["c"] - new_c)
+    return out, lift, int(len(agg))
+
+
+for sid in ["755252", "767018", "767022", "782149", "788406", "790322"]:
+    print(f"=== {sid} ===", flush=True)
+    s = load_subject(sid)
+    vol, xy_um, z_um, channels = load_hcr_combined(s, level=4)
+    pts = hcr_px_to_um(s.hcr_centroids[["z_px","y_px","x_px"]].values, s)[:, [2,1,0]]
+
+    res = _mod.estimate_surface_and_l2_image_based(
+        vol, z_um, xy_um,
+        target_quantile=0.70,
+        column_margin=0.25,
+        band_um=150.0,
+        clamp_min_per_tile=100000,  # disable clamp
+    )
+    if res.surface is None:
+        continue
+    tr = res.tile_records
+    xs, ys, zs = tr.x_um.values, tr.y_um.values, tr.z_onset_um.values
+    a0, o0 = eval_surf(res.surface, pts)
+    print(f"  pre-clamp: c={res.surface['c']:6.1f} above={a0:.4f} onset={o0:.1f}", flush=True)
+
+    # Current (max-lift) clamps
+    for wtq in [0.10, 0.30]:
+        s2, lift, nt = robust_clamp_q_of_deficits(
+            res.surface, xs, ys, zs, within_tile_q=wtq, lift_q=1.0)
+        a, o = eval_surf(s2, pts)
+        print(f"  maxlift wtq={wtq:.2f}: c={s2['c']:6.1f} lift={lift:5.1f} "
+              f"above={a:.4f} onset={o:.1f}", flush=True)
+
+    # Quantile-of-deficits clamps
+    for wtq in [0.10, 0.30]:
+        for lq in [0.90, 0.75, 0.50]:
+            s2, lift, nt = robust_clamp_q_of_deficits(
+                res.surface, xs, ys, zs, within_tile_q=wtq, lift_q=lq)
+            a, o = eval_surf(s2, pts)
+            print(f"  wtq={wtq:.2f} lq={lq:.2f}: c={s2['c']:6.1f} lift={lift:5.1f} "
+                  f"above={a:.4f} onset={o:.1f}", flush=True)
+
+    # Robust plane-through-envelope clamp
+    for wtq in [0.10, 0.30]:
+        s2, lift, nt = robust_clamp_plane_fit(
+            res.surface, xs, ys, zs, within_tile_q=wtq)
+        a, o = eval_surf(s2, pts)
+        print(f"  planefit wtq={wtq:.2f}: c={s2['c']:6.1f} lift={lift:5.1f} "
+              f"above={a:.4f} onset={o:.1f}", flush=True)

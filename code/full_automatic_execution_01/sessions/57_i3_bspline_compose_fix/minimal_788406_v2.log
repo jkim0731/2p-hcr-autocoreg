@@ -1,0 +1,73 @@
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+I2 wall=15.5s
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+cz ds=(56, 50, 50) hcr ds=(190, 287, 286)
+
+-- grid=(120.0, 120.0, 240.0) iters=5 samp=0.02 --
+    bspline iter=0 metric=-0.00743 dt=3.76s
+    bspline iter=0 metric=-0.00743 dt=1.98s
+    bspline iter=0 metric=-0.00743 dt=2.12s
+    bspline iter=0 metric=-0.00743 dt=2.04s
+    bspline iter=0 metric=-0.00743 dt=2.10s
+    bspline iter=0 metric=-0.00743 dt=2.05s
+    bspline iter=0 metric=-0.00743 dt=2.05s
+    bspline iter=0 metric=-0.00744 dt=2.00s
+    bspline iter=0 metric=-0.00744 dt=1.99s
+    bspline iter=0 metric=-0.00743 dt=2.08s
+    bspline iter=0 metric=-0.00744 dt=2.05s
+    bspline iter=0 metric=-0.00744 dt=0.00s
+    bspline iter=1 metric=-0.00744 dt=2.02s
+    bspline iter=1 metric=-0.00744 dt=2.06s
+    bspline iter=1 metric=-0.00744 dt=1.95s
+    bspline iter=1 metric=-0.00744 dt=2.05s
+    bspline iter=1 metric=-0.00744 dt=2.04s
+    bspline iter=1 metric=-0.00743 dt=2.02s
+    bspline iter=1 metric=-0.00743 dt=2.03s
+    bspline iter=1 metric=-0.00744 dt=2.03s
+    bspline iter=1 metric=-0.00744 dt=2.06s
+    bspline iter=1 metric=-0.00743 dt=2.04s
+    bspline iter=1 metric=-0.00744 dt=2.02s
+    bspline iter=1 metric=-0.00744 dt=2.14s
+    bspline iter=1 metric=-0.00744 dt=2.07s
+    bspline iter=1 metric=-0.00744 dt=2.05s
+    bspline iter=1 metric=-0.00744 dt=0.00s
+    bspline iter=2 metric=-0.00744 dt=2.03s
+    bspline iter=2 metric=-0.00744 dt=2.01s
+    bspline iter=2 metric=-0.00743 dt=2.06s
+    bspline iter=2 metric=-0.00744 dt=2.05s
+    bspline iter=2 metric=-0.00744 dt=2.01s
+    bspline iter=2 metric=-0.00743 dt=1.99s
+    bspline iter=2 metric=-0.00744 dt=2.04s
+    bspline iter=2 metric=-0.00744 dt=2.06s
+    bspline iter=2 metric=-0.00743 dt=2.07s
+    bspline iter=2 metric=-0.00744 dt=2.07s
+    bspline iter=2 metric=-0.00744 dt=2.07s
+    bspline iter=2 metric=-0.00744 dt=2.08s
+    bspline iter=2 metric=-0.00744 dt=0.00s
+    bspline iter=3 metric=-0.00744 dt=2.07s
+    bspline iter=3 metric=-0.00743 dt=2.10s
+    bspline iter=3 metric=-0.00744 dt=2.02s
+    bspline iter=3 metric=-0.00743 dt=2.10s
+    bspline iter=3 metric=-0.00744 dt=2.03s
+    bspline iter=3 metric=-0.00744 dt=2.05s
+    bspline iter=3 metric=-0.00744 dt=2.02s
+    bspline iter=3 metric=-0.00744 dt=0.00s
+  wall=92.6s metric=-0.00744 iters=4 converged=True
+
+-- grid=(60.0, 60.0, 120.0) iters=5 samp=0.02 --
+    bspline iter=0 metric=-0.00777 dt=21.72s
+    bspline iter=0 metric=-0.00778 dt=14.84s
+    bspline iter=0 metric=-0.00781 dt=14.68s
+    bspline iter=0 metric=-0.00799 dt=14.87s
+    bspline iter=0 metric=-0.00854 dt=14.93s
+    bspline iter=0 metric=-0.00841 dt=14.92s
+    bspline iter=0 metric=-0.00841 dt=0.00s
+    bspline iter=1 metric=-0.00851 dt=15.10s
+    bspline iter=1 metric=-0.00851 dt=0.00s
+    bspline iter=2 metric=-0.00809 dt=15.39s
+    bspline iter=2 metric=-0.00836 dt=15.36s
+    bspline iter=2 metric=-0.00861 dt=15.32s
+    bspline iter=2 metric=-0.00861 dt=0.00s
+  wall=161.2s metric=-0.00861 iters=3 converged=True

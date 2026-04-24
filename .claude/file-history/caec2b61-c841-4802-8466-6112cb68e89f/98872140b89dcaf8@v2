@@ -1,0 +1,3 @@
+- [HCR surface fitter default](surface_fitter_choice.md) — `analyze_subject` now defaults to `quantile_ceiling` (N22); treat the returned surface as a feature, not a diagnostic.
+- [Threshold methods must be distribution-driven](feedback_threshold_generalisability.md) — never default to a fixed percentile/fraction; coreg table is validation-only.
+- [Subgoal 04/R1/02 intensity threshold pending](project_subgoal_02_intensity_pending.md) — plan ready; Yen on raw log(mean) scored 0.80/0.91 coreg coverage (below 0.95). Try `mean - background` next.

@@ -1,0 +1,14 @@
+{
+  "n_p1": 607,
+  "n_p4": 729,
+  "n_p6": 661,
+  "n_merged": 812,
+  "wall_p1_s": 102.7361216545105,
+  "wall_p4_s": 25.0554039478302,
+  "wall_p6_s": 22.121934413909912,
+  "method": "auto",
+  "chosen_strategy": "up_p4_p1_p6",
+  "sparse_threshold": 10000,
+  "dense_threshold": 20000,
+  "n_hcr_gfp": 30804
+}

@@ -57,7 +57,11 @@
       "Bash(echo \"=== $f ===\")",
       "Bash(xargs -I {} basename {})",
       "Bash(grep -i \"thin\\\\|thinn\\\\|782149\\\\|sectio\" /root/capsule/code/md_for_claude/*.md)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(touch /root/capsule/code/dev_code/cached_surfaces/.w)",
+      "Bash(rm /root/capsule/code/dev_code/cached_surfaces/.w)",
+      "Bash(touch /root/capsule/.claude/cache/.w)",
+      "Bash(rm /root/capsule/.claude/cache/.w)"
     ]
   },
   "hooks": {

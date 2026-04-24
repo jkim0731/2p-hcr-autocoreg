@@ -1,0 +1,21 @@
+---
+name: Session 07 anisotropic-ICP scale estimator accepted
+description: Session 07 produced the accepted (sxy, sz) estimator; use `estimate_scales_icp_multi_start` as the R1 scale source.
+type: project
+originSessionId: 8eb265e4-f4d7-4d2c-8cdb-955d3a0c44d8
+---
+`dev_code/anisotropic_icp.py::estimate_scales_icp_multi_start` passes 6/6 subjects on the ±20 % criterion for both `sxy` and `sz`.
+
+**Why:** session 06 k-NN failed (0/6 both pass) due to `f = N_hcr/N_cz ∈ [0.66, 7.99]` density disparity; session 07 uses reciprocal-NN + Procrustes on matched pairs (removes `f` by construction) + multi-start + tight-radius / sz-prior / boundary-penalty scoring to pick the right basin.
+
+**How to apply:** For R1 work needing `(sxy, sz)`, call `estimate_scales_icp_multi_start(cz_xyz_um, hcr_gfp_xyz_um, coarse_fit=r1_minimal)` — do not revert to the k-NN estimator in `local_distance_scale.py`. Defaults (3×3 grid of inits, bounds `sxy∈[1.4,2.0]`, `sz∈[1.9,4.0]`, tight radius 15 µm, `+10·sz` prior, `-1e6` boundary penalty) are already tuned against the benchmark; do not loosen without re-running the 6-subject benchmark.
+
+Per-subject results (err relative to landmark-GT):
+- 788406 sxy −0.7 %, sz +4.3 %
+- 790322 sxy −14.5 %, sz −2.0 %
+- 767018 sxy −10.5 %, sz +2.3 %
+- 782149 sxy −19.6 %, sz −11.5 %  (tightest; HCR depth coverage 0.40, `n_tight=13`)
+- 755252 sxy +6.6 %, sz +5.5 %
+- 767022 sxy +10.6 %, sz −10.3 %
+
+Driver: `dev_code/07_icp_benchmark.py`. Full method + rationale in `sessions/07_scale_failure_diagnosis/log.md` Part C.

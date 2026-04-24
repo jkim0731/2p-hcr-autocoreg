@@ -1,0 +1,11 @@
+{
+  "n_p1": 415,
+  "n_p6": 318,
+  "n_merged": 526,
+  "wall_p1_s": 77.2253007888794,
+  "wall_p6_s": 21.499024152755737,
+  "method": "auto",
+  "chosen_strategy": "union_conf",
+  "sparse_threshold": 10000,
+  "n_hcr_gfp": 3831
+}

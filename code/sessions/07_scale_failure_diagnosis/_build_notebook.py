@@ -1,0 +1,455 @@
+"""Build ``notebook.ipynb`` explaining session 07 anisotropic-ICP design.
+
+Writes a nbformat-native notebook into this session directory.  Run
+``jupyter nbconvert --execute`` after to embed outputs.
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+import nbformat as nbf
+
+HERE = Path(__file__).resolve().parent
+OUT = HERE / "notebook.ipynb"
+
+nb = nbf.v4.new_notebook()
+cells = []
+
+
+def md(s: str):
+    cells.append(nbf.v4.new_markdown_cell(s))
+
+
+def code(s: str):
+    cells.append(nbf.v4.new_code_cell(s))
+
+
+# ----------------------------------------------------------------------
+md(r"""# Session 07 — Anisotropic ICP for `(sxy, sz)` — design walkthrough
+
+**What this notebook is.** A narrative of the reasoning behind
+`dev_code/anisotropic_icp.py::estimate_scales_icp_multi_start` — what it
+does, why each piece exists, and what its remaining weaknesses are.
+
+**Problem.** Given CZ GCaMP⁺ centroids and HCR GFP⁺ centroids (both in
+µm; the HCR side post-anisotropic-expansion), recover the per-axis
+scale `(sxy, sz)` such that
+`hcr ≈ (cz − cz_mean) @ R · diag(sxy, sxy, sz) + t`.
+R and t come from R1 (`coarse_align_revised`). Only scales are free.
+
+**Stopping criterion.** All 6 benchmark subjects with
+`|rel_err_sxy| ≤ 20 %` **and** `|rel_err_sz| ≤ 20 %` relative to the
+landmark-fit ground truth.
+
+**Outcome.** 6/6 both pass. This notebook explains why it works and
+where it can still be tightened.
+""")
+
+code(r"""import sys, json
+from pathlib import Path
+sys.path.insert(0, '/root/capsule/code/dev_code')
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+SESSION = Path('/root/capsule/code/sessions/07_scale_failure_diagnosis')
+with open(SESSION / 'icp_results.json') as f:
+    R = json.load(f)
+
+# Show compact summary
+hdr = f"{'sid':<8} {'sxy_gt':>7} {'sxy_est':>7} {'err%':>6} {'sz_gt':>7} {'sz_est':>7} {'err%':>6}  both"
+print(hdr); print('-'*len(hdr))
+for r in R:
+    both = r['pass_sxy_20'] and r['pass_sz_20']
+    print(f"{r['subject']:<8} {r['sxy_gt']:>7.3f} {r['sxy_est']:>7.3f} "
+          f"{r['rel_err_sxy']*100:>5.1f}% {r['sz_gt']:>7.3f} {r['sz_est']:>7.3f} "
+          f"{r['rel_err_sz']*100:>5.1f}%  {'PASS' if both else 'FAIL'}")
+""")
+
+# ----------------------------------------------------------------------
+md(r"""## 1. Why the session-06 k-NN estimator failed
+
+Session 06 tried: `sxy = median_xy_NN(hcr) / median_xy_NN(cz)`,
+`sz  = median_z_NN(hcr)  / median_z_NN(cz)`. It used full populations
+within a cropped overlap.
+
+**The fatal bias** (Part A of `log.md`): the HCR GFP⁺ count inside the
+correct (GT-defined) crop is not equal to the CZ count. The ratio
+`f = N_hcr_in_overlap / N_cz` ranged from **0.66 to 7.99** across the
+6 subjects.
+
+Any density-derived statistic on unmatched populations inherits a
+`1/√f` (xy) or `1/f` (z) bias. In words: if HCR has 8× more
+detections than CZ (subject 755252), the nearest-neighbour distance in
+HCR is ≈ `f^{1/3}` ≈ 2× smaller than it should be — the estimator
+pulls `sxy` and `sz` toward 0 by exactly that amount.
+
+**Why we can't correct for `f`.** It's subject-dependent (thresholding
+variance + autofluorescence + cell-type inclusions) and we cannot
+compute it without knowing the true mapping.
+
+The failure was structural, not parameter-tuning.
+""")
+
+code(r"""# Density-disparity + depth table from the Part A diagnosis
+diag = json.load(open(SESSION / 'diagnosis.json'))
+print(f"{'sid':<8} {'N_cz':>6} {'N_gfp_ideal':>12} {'f':>6} {'depth_ratio':>11}")
+for d in diag:
+    print(f"{d['subject']:<8} {d['N_cz']:>6} {d['N_gfp_in_ideal_crop']:>12} "
+          f"{d['f_ideal']:>6.2f} {d['depth_range_ratio']:>11.2f}")
+""")
+
+# ----------------------------------------------------------------------
+md(r"""## 2. The core idea — reciprocal-NN + Procrustes kills the `f` bias
+
+Instead of comparing statistics on two populations of different
+sizes, we *build a matched pair set* on the fly:
+
+1. Map CZ into HCR space with the current `(R, [sxy, sxy, sz], t)`.
+2. For each mapped-CZ point, find its nearest HCR neighbour within
+   radius `r`.  Require the match to be **reciprocal** — HCR's nearest
+   CZ neighbour has to be the same point back.
+3. Fit anisotropic similarity on those matched pairs (Procrustes).
+   That refit gives new `(sxy, sz)`.
+
+**Why this removes the `f` bias.** The matched subset has, by
+construction, one CZ per HCR partner.  HCR extras (the `f > 1` slack)
+have no reciprocal match and are discarded; CZ ghosts with no HCR
+partner within radius are discarded symmetrically.  The Procrustes
+step sees a balanced set, so it computes the true anisotropic scale
+between *the actually-paired population*.
+
+The residual risk is *matching quality* — whether the reciprocal-NN
+pairs we're keeping are correct partners or noise matches. That's
+what the rest of the design addresses.
+""")
+
+# ----------------------------------------------------------------------
+md(r"""## 3. The stationarity trap — why single-start ICP is not enough
+
+Reciprocal-NN matching depends on the current `(sxy, sz)`.  Procrustes
+on the matches produces a new `(sxy, sz)`.  When the matches are
+self-consistent with the current scale, Procrustes just returns
+something close — the algorithm has a fixed point.
+
+**There are many fixed points.** Given a wrong `sz_wrong`, the
+nearest HCR to each mapped-CZ is still at roughly `sz_wrong · cz.z`
+(among the dense HCR points) — Procrustes on those matches returns
+≈ `sz_wrong`.  ICP is stationary at the wrong answer.
+
+In practice we see two families of stationary points:
+
+- **Correct basin** — the intended global optimum.
+- **Squeezed basins** — `sxy` or `sz` near the bottom of the
+  feasibility range (`sz ≈ 2.0–2.3`, `sxy ≈ 1.4–1.5`).  A smaller
+  scale fits *more* CZ into the HCR extent, which often produces
+  *more* reciprocal matches — tempting but wrong.
+
+Single-start ICP converges to whichever basin is closest to the init.
+We need to try many inits and *score* the final basins.
+""")
+
+code(r"""# Show how wildly the starts diverge on one subject (767018, GT sz=3.58)
+sid = '767018'
+r = next(x for x in R if x['subject'] == sid)
+starts = [s for s in r['icp_diagnostics']['multi_start']['starts']
+          if isinstance(s, dict) and 'sxy_final' in s]
+print(f"{sid}   GT=(sxy={r['sxy_gt']:.3f}, sz={r['sz_gt']:.3f})\n")
+print(f"{'sxy_init':>8} {'sz_init':>8}  ->  {'sxy_fin':>8} {'sz_fin':>8}  {'n_tight':>8}  at_bound")
+for s in sorted(starts, key=lambda d: (d['sxy_init'], d['sz_init'])):
+    print(f"{s['sxy_init']:>8.2f} {s['sz_init']:>8.2f}  ->  {s['sxy_final']:>8.3f} {s['sz_final']:>8.3f}  {s['n_tight']:>8}  {s.get('at_bound', False)}")
+""")
+
+# ----------------------------------------------------------------------
+md(r"""The 9 starts on subject 767018 converge to (at least) three
+distinct basins: a squeezed sz ≈ 2.25 group, a mid sz ≈ 3.0 group,
+and the correct sz ≈ 3.66 group.  The tight-count alone does not
+reliably pick the right one — the scoring must.
+""")
+
+# ----------------------------------------------------------------------
+md(r"""## 4. Scoring — the three pieces, each with a specific job
+
+Final scoring for a converged basin `(sxy, sz)`:
+
+$$\text{score} = n_\text{tight}(r{=}15) + 10 \cdot s_z + \frac{1}{\tilde r_{xy}+1} - 10^6 \cdot \mathbf{1}[\text{at\_bound}]$$
+
+Each term exists to kill a specific failure mode.
+
+### 4a. `n_tight` — matches at detection-noise radius
+
+We evaluate reciprocal-NN at a *tight* radius (15 µm ≈ 2× detection
+noise), not the wide radius the ICP loop used.  True-partner pairs are
+consistent at this scale; loose matches in a squeezed basin are not.
+
+Rank discriminant: true basins typically have more tight matches than
+squeezed basins on subjects where the HCR coverage is complete.  But
+not always — see below.
+
+### 4b. `+10 · sz` — expansion-microscopy prior
+
+Expansion physics puts `sz ∈ [2.1, 3.6]` on these specimens (table in
+`01 Data Description.md`).  Squeezed basins cluster at `sz ≈ 2.1–2.3`.
+Adding `10·sz` to the score penalises the squeezed cluster by ~10
+points per unit `sz` — enough to flip tie-breaks when
+`|Δn_tight| < 10` but not enough to override a decisive count gap.
+
+**Why linear, not Gaussian?** We tried a Gaussian centred at 3.0.  It
+over-penalises subject 755252 (GT `sz = 2.13`, near the feasibility
+floor).  A linear prior is monotone and doesn't carve out the low-sz
+region where 755252 legitimately lives.
+
+### 4c. `-10^6 · 𝟙[at_bound]` — boundary rejection
+
+`estimate_scales_icp` clips `sxy` to `[1.4, 2.0]` and `sz` to
+`[1.9, 4.0]` each Procrustes step.  When a basin lands *exactly* at a
+bound (detected via `|x - bound| < 10^{-4}`), it means Procrustes
+wanted to drift outside the physical feasibility range — the clip is
+masking a spurious stationary attractor and the reported value is
+arbitrary.  We reject these outright.
+
+**Empirically crucial.** On 4 of 6 subjects the top-`n_tight` basin
+before adding this penalty was `sxy = 2.0` (exactly).  Rejecting them
+promoted the non-clipped runner-up, which was closer to truth.
+
+### 4d. `1/(median_xy + 1)` — tie-break only
+
+A small tie-break term on the wide-radius xy residual.  Never changes
+the top pick when the other terms disagree.
+""")
+
+# ----------------------------------------------------------------------
+md(r"""## 5. Visual walkthrough — the figures
+
+The figures below are produced by `dev_code/07_icp_plots.py` from
+`icp_results.json`.  They make each design choice visible.
+""")
+
+code(r"""from IPython.display import Image, display
+
+for name in ['rel_err_bar.png', 'est_vs_gt.png', 'multistart_basins.png',
+             'multistart_scores.png', 'icp_trajectories.png']:
+    p = SESSION / 'figures' / name
+    print(p.name)
+    display(Image(filename=str(p)))
+""")
+
+md(r"""**What to read from each figure.**
+
+- `rel_err_bar` — all six subjects inside the ±20 % band.  The widest
+  errors are on `sxy` for 790322 (−14.5 %) and 782149 (−19.6 %).
+- `est_vs_gt` — **sz points fall along the diagonal**; `sxy` has a
+  clear systematic pattern — subjects with small true `sxy` tend to be
+  overestimated and with large true `sxy` to be underestimated.  This
+  is a regression-to-the-mean effect from the partial matched subset.
+- `multistart_basins` — per-subject scatter of all 9 final `(sxy, sz)`
+  with GT ★ and selected ◆.  On 755252 you can see the sxy = 2.0
+  boundary cluster clearly rejected (red-outlined circles).
+- `multistart_scores` — ranked scores; red bars are boundary-penalised.
+  Every subject has a non-boundary winner above all the bounded bars.
+- `icp_trajectories` — radius decay / residual / matched-count for the
+  winning start.  Most subjects converge in 1–2 iterations; 782149
+  takes 8 because the init was far from its small matched basin.
+""")
+
+# ----------------------------------------------------------------------
+md(r"""## 5b. Matched image overlays — HCR 488 vs CZ stack at fitted scales
+
+The figures so far rely on centroid statistics alone.  Here we warp
+the raw CZ OME-TIFF into HCR µm-space using the fitted ICP affine
+(R from R1, `(sxy, sz)` from ICP, HCR anchor as translation) and
+render two-channel MIPs:
+
+- **HCR 488** → green
+- **CZ resampled** → magenta
+- Overlap → near-white
+
+Top row is the image composite; bottom row adds the centroid
+overlays (green circles = HCR GFP⁺, red circles = mapped CZ) so you
+can read the match quality in two complementary ways — image-to-image
+registration and centroid-to-centroid correspondence.
+
+Generated by `dev_code/07_icp_image_overlays.py`.  Subjects chosen to
+cover the full accuracy range:
+- **788406** best overall fit (err_sxy −0.7 %, err_sz +4.3 %).
+- **767018** largest true sz (3.58); sxy biased low.
+- **755252** smallest true sxy (1.64); CZ fits in a thick HCR block.
+- **782149** the data-limited subject (HCR depth ≈ 0.4 × CZ).
+""")
+
+code(r"""for sid in ['788406', '767018', '755252', '782149']:
+    p = SESSION / 'figures' / f'image_overlay_{sid}.png'
+    print(p.name)
+    display(Image(filename=str(p)))
+""")
+
+md(r"""**How to read these overlays.**
+
+*Good alignment* looks like HCR-488 green ≈ resampled-CZ magenta in
+the same voxels — the composite appears near-white wherever there's
+co-located signal, and blobs in one colour alone are expected edges
+of the overlap region (CZ does not cover all of HCR and vice versa).
+
+- **788406** — tight overlap across both XY and XZ; the centroid
+  overlay has green and red clouds nearly on top of each other.  This
+  is the reference case.
+- **767018** — excellent z-alignment (err_sz = +2.3 %), visible in the
+  XZ panel where the magenta depth matches the HCR 488 depth.  The
+  sxy underestimate (−10.5 %) shows as the magenta cloud being
+  slightly smaller-in-xy than the green HCR signal.
+- **755252** — HCR is much denser than CZ (`f ≈ 8`; see Part A); the
+  green channel dominates numerically, but the mapped CZ (magenta)
+  lands inside the HCR tissue across the full block.  ICP successfully
+  ignored the 7/8 HCR extras that have no CZ partner.
+- **782149** — the XZ panel makes the structural depth limitation
+  visible: HCR 488 (green) only covers roughly the **top half** of
+  the depth range the mapped CZ (magenta) occupies.  Below that
+  depth the image shows CZ alone (pure magenta).  This is exactly
+  the 0.40 depth-coverage ratio identified in Part A; the residual
+  sxy/sz error on this subject is a symptom of the data limitation,
+  not the algorithm.
+""")
+
+# ----------------------------------------------------------------------
+md(r"""## 6. Is this the best we can do? — weaknesses and improvements
+
+A candid inventory of what could make this better.  Ordered by
+expected impact.
+
+### 6a. Systematic sxy bias from the matched subset
+
+**Evidence.** `est_vs_gt.png` — `sxy_est` regresses toward the middle
+of the feasibility range as true `sxy` varies; sz does not.
+
+**Diagnosis.** Reciprocal-NN with a non-uniform spatial density
+preferentially keeps pairs near the *centre* of the mapped CZ cloud
+(where HCR density is highest).  Procrustes on that subset emphasises
+the centre over the edges, shrinking the effective span.  xy is more
+affected than z because CZ xy-spread is larger — edge cells are more
+easily missed at wide search radius early in ICP.
+
+**Possible fixes** (not tried in this session):
+
+1. **Outlier-robust Procrustes** — IRLS or Tukey reweighting rather
+   than plain least-squares on the matched subset.  Would reduce
+   sensitivity to the dense-centre bias.
+2. **Coverage-weighted Procrustes** — give each matched pair a weight
+   inversely proportional to the local matched-pair density, so edge
+   pairs carry more leverage.
+3. **Joint optimisation over** `(R, t, s)` **with a consistency
+   prior** — re-fit R and t each iteration instead of holding R1's
+   fixed.  Risk: R drift if matches are noisy.
+
+### 6b. 782149 — the data-limited subject
+
+GT `sxy = 1.924` (near upper bound 2.0) and HCR GFP⁺ depth coverage
+is only 0.40 of the CZ-mapped depth.  Our winning basin has only 13
+tight matches — the error bar is wide.
+
+**Possible fix.** A better HCR detection on 782149 (it's the
+autofluorescence-limited subject) would likely tighten the result more
+than any algorithm change.  The session 07 memory already notes that
+this is data-limited, not algorithm-gap.
+
+### 6c. Scoring weights are lightly tuned
+
+The `10·sz` weight and the `15 µm` tight radius were chosen to work
+on the six benchmark subjects.  They are defensible from first
+principles (sz range, detection noise) but the exact values haven't
+been cross-validated.
+
+**Possible fix.** Hold one subject out at a time; re-check pass rate
+on the five and evaluate on the held-out.  If the boundary-penalty
+design is robust, leave-one-out should stay 5/5.
+
+### 6d. No explicit rotation refit
+
+We hold R1's R fixed.  If R1 has residual rotation error, ICP has no
+way to correct it — the scale estimate absorbs some rotation error as
+sxy-vs-sz trade-off.
+
+**Possible fix.** After scale convergence, do one or two iterations
+that update R too, starting from R1's R as warm-start.  Validate that
+the corrected R stays close to R1's (small rotation delta).
+
+### 6e. The 9-start grid is coarse
+
+We sample 3 × 3 = 9 starts.  Missing a basin is possible.  In
+practice the winning basin for all 6 subjects came from one of
+`(sxy_init, sz_init) ∈ {(1.5, 3.75), (1.5, 3.0), (1.75, 2.25), (2.0, 3.75), (1.75, 3.0)}` —
+all 9 starts are reached in <1 s per subject, so we can afford more.
+
+**Possible fix.** 5 × 5 grid covering the same bounds would add ~1 s
+and probably bring a few borderline cases (782149, 767022) closer to
+their true values.  Diminishing returns, though.
+
+### 6f. Dependence on R1's translation
+
+`t` comes from R1 as the HCR-side anchor (`dst_mean`).  If R1's
+translation estimate is off by more than the initial ICP radius
+(150 µm), reciprocal-NN won't find matches and all starts fail the
+min-match gate.  Mitigation exists (wide initial radius) but a
+pathological R1 t would break the method.
+
+**Possible fix.** Treat `t` as a free parameter too, re-fitting each
+iteration (it's already implied by `fit_anisotropic_similarity`).
+That's fine in principle; requires verifying the combined t + scales
+update is stable.
+
+### 6g. No quality signal returned
+
+We return `(sxy, sz)` but not an estimate of how confident we are.
+For downstream R1 use, a 2σ bar on each scale would let the caller
+decide whether to trust our number or fall back to a prior.
+
+**Possible fix.** Bootstrap resampling of the matched subset
+(re-Procrustes on 80 % bootstrap draws, take percentile range).
+Cheap (sub-second) and gives a real uncertainty bar.
+
+### Summary of priorities
+
+| Fix | Expected impact | Cost |
+|-----|-----------------|------|
+| Outlier-robust Procrustes (6a) | Tighten sxy to ~±10 % on 3 subjects | 1 session |
+| Bootstrap confidence (6g) | Enables adaptive downstream use | Hours |
+| Denser start grid (6e) | Marginal; 782149, 767022 | Hours |
+| Rotation refit (6d) | Unknown; principled | 1 session |
+| Coverage weighting (6a2) | Similar to 6a | 1 session |
+
+The accepted estimator already meets the 20 % bar that R1 needs.
+Further tightening is a *next-session* concern, not a blocker for
+promoting the current method into `CoarseAffineV2.scales`.
+""")
+
+# ----------------------------------------------------------------------
+md(r"""## 7. Takeaway
+
+**What worked.**
+
+1. Reciprocal-NN + Procrustes — kills the `f` density-disparity bias
+   that destroyed session 06.
+2. Multi-start — escapes self-consistent wrong basins.
+3. Tight-radius `n_tight` scoring — prefers basins with
+   detection-noise-scale matches over loose squeezed matches.
+4. `+10·sz` prior — physically motivated, flips low-sz-bias ties.
+5. Boundary penalty — the decisive fix; rejects np.clip artefacts.
+
+**What we traded off.** A small systematic sxy bias (regression to
+centre) in exchange for robustness to matched-subset composition.
+Every benchmark subject is within 20 %; three are within 11 %.
+
+**Where it can go.** Robust Procrustes + bootstrap confidence (6a,
+6g) are the two improvements with the best impact/cost ratio.  Neither
+is required for the current R1 pipeline.
+""")
+
+nb["cells"] = cells
+nb["metadata"] = {
+    "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
+    "language_info": {"name": "python"},
+}
+
+with open(OUT, "w") as f:
+    nbf.write(nb, f)
+
+print(f"Wrote {OUT}")

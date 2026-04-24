@@ -1,0 +1,3 @@
+- [HCR surface fitter default](surface_fitter_choice.md) — `analyze_subject` now defaults to `quantile_ceiling` (N22); treat the returned surface as a feature, not a diagnostic.
+- [Threshold methods must be distribution-driven](feedback_threshold_generalisability.md) — never default to a fixed percentile/fraction; coreg table is validation-only.
+- [Subgoal 04/R1 01+02 GFP+ thresholds landed](project_subgoal_01_02_gfp_thresholds.md) — v2.2 defaults: `peakgauss3_density_p0.1` (spot) and `peakgauss3_mean_bg_p1` (intensity).

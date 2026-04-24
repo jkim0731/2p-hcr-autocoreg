@@ -1,0 +1,61 @@
+"""Test density-filtered anchor: remove spatially isolated shallow tops before plane fit.
+
+Hypothesis: AF above pia is patchy/isolated spatially. Real pia is a continuous sheet.
+A density filter (min neighbors within 30um) should remove isolated AF tops and
+leave pia tops intact. This gives a cleaner anchor plane, so the band around it
+covers real pia tops, and the final quantile IRLS fits correctly.
+"""
+from __future__ import annotations
+import sys, importlib.util, os
+from pathlib import Path
+import numpy as np
+os.environ["PYTHONUNBUFFERED"] = "1"
+
+sys.path.insert(0, "/root/capsule/code/dev_code")
+_spec = importlib.util.spec_from_file_location(
+    "img_surface_l2",
+    str(Path("/root/capsule/code/dev_code") / "03_image_based_surface.py"))
+_mod = importlib.util.module_from_spec(_spec); sys.modules["img_surface_l2"] = _mod
+_spec.loader.exec_module(_mod)
+
+from benchmark_analysis import load_hcr_combined
+from benchmark_data_loader import load_subject
+
+HCR = ["755252", "767018", "767022", "782149", "788406", "790322"]
+
+for sid in HCR:
+    s = load_subject(sid)
+    vol, xy_um, z_um, _ = load_hcr_combined(s, level=4)
+    sx = max(1, int(round(10.0 / xy_um)))
+    vol_sub = vol[:, ::sx, ::sx].astype(np.float32, copy=False)
+    _, Ys, Xs = vol_sub.shape
+    xs_col = np.arange(Xs, dtype=np.float32) * sx * xy_um
+    ys_col = np.arange(Ys, dtype=np.float32) * sx * xy_um
+    xx, yy = np.meshgrid(xs_col, ys_col)
+
+    a_top, _, _ = _mod._per_column_top_in_band(
+        vol_sub, z_um, None, None, relative_margin=0.05,
+        min_signal_abs_frac=0.20, min_thick_um=15.0)
+    mask_a = np.isfinite(a_top)
+    xa = xx[mask_a].ravel().astype(np.float64)
+    ya = yy[mask_a].ravel().astype(np.float64)
+    za = a_top[mask_a].ravel().astype(np.float64)
+
+    med = float(np.median(za))
+    mad = float(np.median(np.abs(za - med))) + 1e-6
+    keep_mad = np.abs(za - med) <= 6.0 * 1.4826 * mad
+
+    # Density filter variants
+    for radius, min_nb in [(20, 3), (30, 3), (30, 5), (30, 8), (40, 5), (50, 8)]:
+        keep_dens = _mod._filter_tops_by_density(xa, ya, za,
+                                                  radius_um=radius,
+                                                  min_neighbors=min_nb)
+        keep = keep_mad & keep_dens
+        if keep.sum() < 50:
+            continue
+        ac = _mod._robust_plane_fit(xa[keep], ya[keep], za[keep])
+        print(f"{sid}: r={radius} nb={min_nb}: "
+              f"n={keep.sum()}/{len(za)} ({100*keep.sum()/len(za):.1f}%) "
+              f"anchor_c={ac['c']:.1f}  "
+              f"med_keep={np.median(za[keep]):.1f}")
+    print()

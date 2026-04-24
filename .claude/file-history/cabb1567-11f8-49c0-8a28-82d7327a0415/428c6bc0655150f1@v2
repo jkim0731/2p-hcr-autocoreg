@@ -1,0 +1,69 @@
+"""Test raising column_margin + column_min_thick to suppress autofluorescence
+before the clamp even sees tops.  The hope is that tops become pia-aligned
+instead of autofluorescence-aligned, and the default maxlift clamp works.
+"""
+from __future__ import annotations
+import sys, importlib.util, os
+from pathlib import Path
+import numpy as np
+os.environ["PYTHONUNBUFFERED"] = "1"
+
+sys.path.insert(0, "/root/capsule/code/dev_code")
+_spec = importlib.util.spec_from_file_location(
+    "img_surface_l2",
+    str(Path("/root/capsule/code/dev_code") / "03_image_based_surface.py"))
+_mod = importlib.util.module_from_spec(_spec); sys.modules["img_surface_l2"] = _mod
+_spec.loader.exec_module(_mod)
+
+from benchmark_analysis import load_hcr_combined
+from benchmark_data_loader import hcr_px_to_um, load_subject
+
+
+def sz(s, x, y):
+    return (s["a"]*x + s["b"]*y + s["c"]
+            + s.get("p",0)*x*x + s.get("q",0)*x*y + s.get("r",0)*y*y)
+
+
+def eval_surf(s, pts):
+    zs = sz(s, pts[:,0], pts[:,1])
+    depth = pts[:,2] - zs
+    n = len(depth)
+    above = (depth < 0).sum() / n
+    edges = np.arange(-200, 404, 5.0)
+    h, _ = np.histogram(depth, bins=edges)
+    density = h / (5.0 * max(n, 1))
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    bulk = density[(centers >= 50) & (centers <= 200)].mean()
+    onset = np.nan
+    if bulk > 0:
+        for c, d in zip(centers, density):
+            if c >= 0 and d >= 0.5 * bulk:
+                onset = float(c); break
+    return above, onset
+
+
+SUBJECTS = ["755252", "767018", "767022", "782149", "788406", "790322"]
+for sid in SUBJECTS:
+    print(f"=== {sid} ===", flush=True)
+    s = load_subject(sid)
+    vol, xy_um, z_um, channels = load_hcr_combined(s, level=4)
+    pts = hcr_px_to_um(s.hcr_centroids[["z_px","y_px","x_px"]].values, s)[:, [2,1,0]]
+
+    for c_marg in [0.25, 0.40, 0.55]:
+        for c_thick in [10.0, 20.0, 30.0]:
+            # Default clamp (maxlift); just change tops-detection params
+            res = _mod.estimate_surface_and_l2_image_based(
+                vol, z_um, xy_um,
+                target_quantile=0.70,
+                column_margin=c_marg,
+                column_min_thick_um=c_thick,
+                band_um=150.0,
+                # keep default clamp (within_tile_q=0.10, max lift)
+            )
+            if res.surface is None:
+                print(f"  cm={c_marg:.2f} ct={c_thick:.0f}: no surface", flush=True); continue
+            a, o = eval_surf(res.surface, pts)
+            pre = res.surface['c'] + res.clamp_lift_um + res.safety_offset_um
+            print(f"  cm={c_marg:.2f} ct={c_thick:.0f}: pre_c={pre:6.1f} "
+                  f"c={res.surface['c']:6.1f} lift={res.clamp_lift_um:5.1f} "
+                  f"n_tops={res.n_column_tops} above={a:.4f} onset={o}", flush=True)

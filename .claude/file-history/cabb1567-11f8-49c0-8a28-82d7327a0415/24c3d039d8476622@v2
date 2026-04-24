@@ -1,0 +1,118 @@
+"""Deep diagnostic on 755252: understand where anchor, tops, and tile
+z-quantiles sit relative to real pia (from centroids).
+
+Goal: identify whether raising within_tile_q or using a second-onset
+strategy would recover pia alignment.
+"""
+from __future__ import annotations
+import sys, importlib.util, os
+from pathlib import Path
+import numpy as np
+os.environ["PYTHONUNBUFFERED"] = "1"
+
+sys.path.insert(0, "/root/capsule/code/dev_code")
+_spec = importlib.util.spec_from_file_location(
+    "img_surface_l2",
+    str(Path("/root/capsule/code/dev_code") / "03_image_based_surface.py"))
+_mod = importlib.util.module_from_spec(_spec); sys.modules["img_surface_l2"] = _mod
+_spec.loader.exec_module(_mod)
+
+from benchmark_analysis import load_hcr_combined
+from benchmark_data_loader import hcr_px_to_um, load_subject
+import pandas as pd
+
+
+def sz(s, x, y):
+    return (s["a"]*x + s["b"]*y + s["c"]
+            + s.get("p",0)*x*x + s.get("q",0)*x*y + s.get("r",0)*y*y)
+
+
+s = load_subject("755252")
+vol, xy_um, z_um, channels = load_hcr_combined(s, level=4)
+pts = hcr_px_to_um(s.hcr_centroids[["z_px","y_px","x_px"]].values, s)[:, [2,1,0]]
+
+# Run production code and keep intermediates
+res = _mod.estimate_surface_and_l2_image_based(vol, z_um, xy_um)
+
+# Real pia proxy: 5th percentile of centroid z per-column
+print(f"Centroid z stats: min={pts[:,2].min():.1f}, p5={np.percentile(pts[:,2],5):.1f}, p50={np.percentile(pts[:,2],50):.1f}")
+
+# Anchor plane stats
+anchor = res.anchor
+print(f"\nAnchor: a={anchor['a']:.3f}, b={anchor['b']:.3f}, c={anchor['c']:.1f}, tilt={anchor['tilt_deg']:.2f}")
+print(f"Anchor z at center: {sz(anchor, pts[:,0].mean(), pts[:,1].mean()):.1f}")
+
+# Surface
+surf = res.surface
+print(f"\nFinal surface: c={surf['c']:.1f}, lift={res.clamp_lift_um:.1f}")
+print(f"Final surface z at center: {sz(surf, pts[:,0].mean(), pts[:,1].mean()):.1f}")
+
+# Pre-clamp surface (reverse the lift)
+pre_c = surf['c'] + res.clamp_lift_um + res.safety_offset_um
+pre_surf = dict(surf); pre_surf['c'] = pre_c
+print(f"Pre-clamp surface c={pre_c:.1f}, z at center: {sz(pre_surf, pts[:,0].mean(), pts[:,1].mean()):.1f}")
+
+# Column tops distribution
+tile_records = res.tile_records
+print(f"\nColumn tops (n={len(tile_records)}):")
+print(f"  z min={tile_records['z_onset_um'].min():.1f}, p5={np.percentile(tile_records['z_onset_um'],5):.1f}, p25={np.percentile(tile_records['z_onset_um'],25):.1f}, p50={np.percentile(tile_records['z_onset_um'],50):.1f}, p75={np.percentile(tile_records['z_onset_um'],75):.1f}, p95={np.percentile(tile_records['z_onset_um'],95):.1f}")
+
+# What's the real pia per tile?
+# For each 120µm tile, what's the 5% quantile of CENTROID z in that tile?
+xb = (pts[:,0] // 120).astype(int)
+yb = (pts[:,1] // 120).astype(int)
+key = yb * 100000 + xb
+dfp = pd.DataFrame({"k": key, "x": pts[:,0], "y": pts[:,1], "z": pts[:,2]})
+pia_by_tile = dfp.groupby("k").agg(x=("x","median"), y=("y","median"), z=("z", lambda v: float(np.percentile(v, 5))), n=("z","size"))
+pia_by_tile = pia_by_tile[pia_by_tile["n"] >= 5]
+print(f"\nReal pia by tile (p5 of centroids, n={len(pia_by_tile)}):")
+print(f"  z min={pia_by_tile['z'].min():.1f}, p5={np.percentile(pia_by_tile['z'],5):.1f}, p50={np.percentile(pia_by_tile['z'],50):.1f}, p95={np.percentile(pia_by_tile['z'],95):.1f}")
+
+# Now compute: for each top-tile, what's the per-tile z10, z30, z50, z70, z90?
+tops = tile_records.copy()
+xb_t = (tops["x_um"] // 120).astype(int)
+yb_t = (tops["y_um"] // 120).astype(int)
+key_t = yb_t * 100000 + xb_t
+tops["k"] = key_t
+def tile_quantiles(grp):
+    return pd.Series({
+        "x": grp["x_um"].median(), "y": grp["y_um"].median(),
+        "z10": np.percentile(grp["z_onset_um"], 10),
+        "z30": np.percentile(grp["z_onset_um"], 30),
+        "z50": np.percentile(grp["z_onset_um"], 50),
+        "z70": np.percentile(grp["z_onset_um"], 70),
+        "z90": np.percentile(grp["z_onset_um"], 90),
+        "n": len(grp),
+    })
+tops_by_tile = tops.groupby("k").apply(tile_quantiles, include_groups=False).reset_index()
+tops_by_tile = tops_by_tile[tops_by_tile["n"] >= 5]
+
+# Align real-pia tiles with tops tiles (by x,y)
+# Compute nearest real-pia z for each tops tile
+from scipy.spatial import cKDTree
+if len(pia_by_tile) >= 3:
+    pia_pts = pia_by_tile[["x","y"]].values
+    pia_z = pia_by_tile["z"].values
+    tree = cKDTree(pia_pts)
+    tops_xy = tops_by_tile[["x","y"]].values
+    d, idx = tree.query(tops_xy, k=1)
+    tops_by_tile["pia_z"] = pia_z[idx]
+    tops_by_tile["pia_dist"] = d
+    tops_by_tile = tops_by_tile[tops_by_tile["pia_dist"] < 100]
+    print(f"\nTile-aligned ({len(tops_by_tile)} tiles with real-pia match):")
+    for q in ["z10", "z30", "z50", "z70", "z90"]:
+        diffs = tops_by_tile[q] - tops_by_tile["pia_z"]
+        print(f"  {q} - pia_z: mean={diffs.mean():.1f}, median={diffs.median():.1f}, p25={np.percentile(diffs,25):.1f}, p75={np.percentile(diffs,75):.1f}")
+
+# How many tiles have z10 > real pia?
+print(f"\nTiles where z10 is ABOVE (shallower than) real pia:")
+tops_by_tile["above_pia_z10"] = tops_by_tile["z10"] < tops_by_tile["pia_z"]
+print(f"  {tops_by_tile['above_pia_z10'].sum()} / {len(tops_by_tile)} ({100*tops_by_tile['above_pia_z10'].mean():.1f}%)")
+
+print(f"\nTiles where z50 is ABOVE real pia:")
+above50 = (tops_by_tile["z50"] < tops_by_tile["pia_z"]).sum()
+print(f"  {above50} / {len(tops_by_tile)} ({100*above50/len(tops_by_tile):.1f}%)")
+
+print(f"\nTiles where z70 is ABOVE real pia:")
+above70 = (tops_by_tile["z70"] < tops_by_tile["pia_z"]).sum()
+print(f"  {above70} / {len(tops_by_tile)} ({100*above70/len(tops_by_tile):.1f}%)")

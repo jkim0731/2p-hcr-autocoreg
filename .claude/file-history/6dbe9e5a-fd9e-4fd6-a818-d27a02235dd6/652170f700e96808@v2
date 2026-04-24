@@ -1,0 +1,135 @@
+"""MAD-based outlier rejection + maxlift clamp.
+
+For each subject, compute per-tile z_q. Across tiles, find robust lower bound
+on tile_z (median - k*MAD). Reject tiles whose z is below this bound (they're
+autofluorescence-contaminated). Then compute max lift over remaining tiles.
+"""
+from __future__ import annotations
+import sys, importlib.util, os
+from pathlib import Path
+import numpy as np
+import pandas as pd
+os.environ["PYTHONUNBUFFERED"] = "1"
+
+sys.path.insert(0, "/root/capsule/code/dev_code")
+_spec = importlib.util.spec_from_file_location(
+    "img_surface_l2",
+    str(Path("/root/capsule/code/dev_code") / "03_image_based_surface.py"))
+_mod = importlib.util.module_from_spec(_spec); sys.modules["img_surface_l2"] = _mod
+_spec.loader.exec_module(_mod)
+
+from benchmark_analysis import load_hcr_combined
+from benchmark_data_loader import hcr_px_to_um, load_subject
+
+
+def sz(s, x, y):
+    return (s["a"]*x + s["b"]*y + s["c"]
+            + s.get("p",0)*x*x + s.get("q",0)*x*y + s.get("r",0)*y*y)
+
+
+def eval_surf(s, pts):
+    zs = sz(s, pts[:,0], pts[:,1])
+    depth = pts[:,2] - zs
+    n = len(depth)
+    above = (depth < 0).sum() / n
+    edges = np.arange(-200, 404, 5.0)
+    h, _ = np.histogram(depth, bins=edges)
+    density = h / (5.0 * max(n, 1))
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    bulk = density[(centers >= 50) & (centers <= 200)].mean()
+    onset = np.nan
+    if bulk > 0:
+        for c, d in zip(centers, density):
+            if c >= 0 and d >= 0.5 * bulk:
+                onset = float(c); break
+    return above, onset
+
+
+def mad_clamp(surface, xs, ys, zs, *, tile_um=120.0, within_tile_q=0.10,
+              mad_k=3.0, safety_offset_um=3.0, min_per_tile=5, residual_space=True):
+    """Two modes:
+    - residual_space=True: compute per-tile DEFICIT (plane_z - tile_z), then
+      MAD-reject extreme deficits, take max of remaining.
+    - residual_space=False: MAD-filter tile_z values directly to reject
+      autofluorescence-contaminated tiles (anomalously shallow), then take
+      max deficit over surviving tiles.
+    """
+    xb = (xs // tile_um).astype(int)
+    yb = (ys // tile_um).astype(int)
+    key = yb * 100000 + xb
+    df = pd.DataFrame({"k": key, "x": xs, "y": ys, "z": zs})
+    agg = df.groupby("k").agg(
+        x=("x", "median"), y=("y", "median"),
+        z=("z", lambda v: float(np.quantile(v, within_tile_q))),
+        n=("z", "size"))
+    agg = agg[agg["n"] >= int(min_per_tile)]
+    if agg.empty:
+        return surface, 0.0, 0, 0
+    tx, ty, tz = agg["x"].values, agg["y"].values, agg["z"].values
+    plane_z = sz(surface, tx, ty)
+    deficit = plane_z - tz
+    n_total = len(agg)
+
+    if residual_space:
+        pos = deficit[deficit > 0]
+        if len(pos) == 0:
+            return surface, 0.0, n_total, 0
+        m = float(np.median(pos))
+        mad = float(1.4826 * np.median(np.abs(pos - m)))
+        if mad < 1e-6:
+            lift = float(pos.max())
+            n_kept = len(pos)
+        else:
+            keep = pos <= m + mad_k * mad
+            n_kept = int(keep.sum())
+            lift = float(pos[keep].max()) if n_kept > 0 else 0.0
+    else:
+        # Filter tz directly: reject tiles whose z is anomalously LOW
+        m = float(np.median(tz))
+        mad = float(1.4826 * np.median(np.abs(tz - m)))
+        if mad < 1e-6:
+            keep = np.ones_like(tz, bool)
+        else:
+            keep = tz >= m - mad_k * mad
+        tz_kept = tz[keep]
+        plane_kept = plane_z[keep]
+        deficit_kept = plane_kept - tz_kept
+        pos = deficit_kept[deficit_kept > 0]
+        n_kept = int(keep.sum())
+        lift = float(pos.max()) if len(pos) > 0 else 0.0
+
+    out = dict(surface)
+    out["c"] = float(out["c"] - lift - safety_offset_um)
+    return out, lift, n_total, n_kept
+
+
+SUBJECTS = ["755252", "767018", "767022", "782149", "788406", "790322"]
+for sid in SUBJECTS:
+    print(f"=== {sid} ===", flush=True)
+    s = load_subject(sid)
+    vol, xy_um, z_um, channels = load_hcr_combined(s, level=4)
+    pts = hcr_px_to_um(s.hcr_centroids[["z_px","y_px","x_px"]].values, s)[:, [2,1,0]]
+
+    res = _mod.estimate_surface_and_l2_image_based(
+        vol, z_um, xy_um,
+        target_quantile=0.70,
+        column_margin=0.25,
+        band_um=150.0,
+        clamp_min_per_tile=100000,
+    )
+    if res.surface is None:
+        continue
+    tr = res.tile_records
+    xs, ys, zs = tr.x_um.values, tr.y_um.values, tr.z_onset_um.values
+    a0, o0 = eval_surf(res.surface, pts)
+    print(f"  pre-clamp: c={res.surface['c']:6.1f} above={a0:.4f} onset={o0}", flush=True)
+
+    for wtq in [0.10, 0.30]:
+        for mad_k in [1.5, 2.5, 3.0]:
+            for rs_label, rs in [("resid", True), ("tile", False)]:
+                s2, lift, nt, nk = mad_clamp(
+                    res.surface, xs, ys, zs,
+                    within_tile_q=wtq, mad_k=mad_k, residual_space=rs)
+                a, o = eval_surf(s2, pts)
+                print(f"  wtq={wtq:.2f} k={mad_k:.1f} {rs_label}: c={s2['c']:6.1f} "
+                      f"lift={lift:5.1f} nkept={nk}/{nt} above={a:.4f} onset={o}", flush=True)

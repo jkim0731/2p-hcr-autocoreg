@@ -1,0 +1,23 @@
+{
+  "788406": {
+    "sid": "788406",
+    "n_cz_total": 932,
+    "n_cz_used": 650,
+    "n_hcr_strict_total": 3185,
+    "n_hcr_used": 3031,
+    "bic_cutoff_density": 0.0013757035085830125,
+    "bic_n_components": 6,
+    "cz_span": 380.80488977007167,
+    "hcr_span": 1123.772052077384,
+    "cz_area_med": 208.07280000000003,
+    "hcr_area_med": 636.3447367576233,
+    "cz_area_mean": 215.77514400000004,
+    "hcr_area_mean": 654.6626410064039,
+    "sxy_from_median": 1.7487936694177912,
+    "sxy_from_mean": 1.7418392458362681,
+    "sxy_gt": 1.7776323333286204,
+    "err_med_pct": -1.6223075700265117,
+    "err_mean_pct": -2.0135259030380923,
+    "figure": "/root/capsule/code/sessions/07e_sz_from_zvar_profile/figures_roi_area/roi_area_788406.png"
+  }
+}

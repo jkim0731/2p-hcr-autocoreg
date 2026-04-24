@@ -1,0 +1,51 @@
+"""Sample per-column profiles where first BRIGHT peak appears (vs
+median-across-columns) for 755252 + 790322."""
+import sys
+sys.path.insert(0, '/root/capsule/code/dev_code')
+from benchmark_analysis import load_hcr_combined
+from benchmark_data_loader import load_subject
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.ndimage import gaussian_filter1d
+
+EPS = 1e-3
+
+for sid in ['755252', '790322']:
+    s = load_subject(sid)
+    v, xy_um, z_um, _ = load_hcr_combined(s, level=4)
+    Z, Y, X = v.shape; zs = np.arange(Z) * z_um
+    log_v = np.log(v + EPS)
+
+    # 5x5 grid of cols in inner 15%-padded region
+    y_ps = np.linspace(Y * 0.2, Y * 0.8, 5).astype(int)
+    x_ps = np.linspace(X * 0.2, X * 0.8, 5).astype(int)
+
+    fig, axs = plt.subplots(5, 5, figsize=(15, 12), sharex=True, sharey=True)
+    sigma_v = max(1.0, 5.0 / z_um)
+    thrs = [-4, -2, 0]
+    clrs = ['tab:green', 'tab:orange', 'tab:red']
+    for i, iy in enumerate(y_ps):
+        for j, ix in enumerate(x_ps):
+            smooth = gaussian_filter1d(log_v[:, iy, ix], sigma=sigma_v)
+            axs[i, j].plot(smooth, zs, lw=0.8, color='k')
+            for t, c in zip(thrs, clrs):
+                axs[i, j].axvline(t, color=c, lw=0.5, ls=':')
+                # first sustained crossing
+                sustain = max(1, int(15 / z_um))
+                above = smooth > t
+                for z in range(len(smooth) - sustain):
+                    if above[z:z + sustain].all():
+                        axs[i, j].axhline(z * z_um, color=c, lw=0.4)
+                        break
+            axs[i, j].set_title(f'y={iy*xy_um:.0f},x={ix*xy_um:.0f}', fontsize=7)
+    for a in axs[-1, :]:
+        a.set_xlabel('log(comb+ε)')
+    for a in axs[:, 0]:
+        a.set_ylabel('z (µm)')
+    axs[0, 0].invert_yaxis()
+    fig.suptitle(f'{sid} — column log-combined profiles, thrs=-4/-2/0')
+    plt.tight_layout()
+    p = f'/tmp/iter07_cols_{sid}.png'
+    plt.savefig(p, dpi=100)
+    plt.close(fig)
+    print(f'wrote {p}')

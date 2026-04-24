@@ -1,0 +1,9 @@
+{
+  "id": "3",
+  "subject": "Phase 3: Clarify open questions with user",
+  "description": "Use AskUserQuestion to resolve the 1-2 highest-impact open choices (e.g. viewer stack, candidate-source for review since R1 is paused, R1 status label)",
+  "activeForm": "Clarifying open questions",
+  "status": "pending",
+  "blocks": [],
+  "blockedBy": []
+}

@@ -1,0 +1,224 @@
+---
+name: 03 image-based surface (curved)
+description: Session 03 — image-only curved pia surface. v2.1 single-fit + v2.2 auto-select + iter07 TPS/patch-MAX (session 03c) close every known failure; iter07 lands 4–29 µm below N22 on 6/6 HCR.
+type: project
+originSessionId: cabb1567-11f8-49c0-8a28-82d7327a0415
+---
+Session `03_image_based_surface_estimation` implements
+`estimate_surface_and_l2_image_based()` in
+`code/dev_code/03_image_based_surface.py`.  Five-stage pipeline:
+
+1. **Global baseline** from the top 1–2 z-planes (median + 1.4826·MAD;
+   skip planes ≥ 95 % zero; HCR pure-padding top → fallback
+   `σ = 0.02 · percentile(vol, 99)`).  Used as diagnostic only.
+2. **Stage-2 anchor** — per-column first-sustained-above-thr over the
+   whole z on a sparse grid (`column_stride_um = 10`), fit quadratic
+   IRLS-Huber to get a rough pia plane.
+3. **Stage-3 per-column tops in a ±150 µm band** around the anchor
+   (`column_margin = 0.25`, `min_signal_abs_frac = 0.20`,
+   `column_min_thick_um = 10`).
+4. **Stage-4 quadratic quantile-regression IRLS** at
+   `target_quantile = 0.85` on stage-3 tops (module default; CZ
+   driver opts down to 0.70 — see v2.1 below).
+5. **Stage-5 column-top clamp** (image-only analogue of N22's ROI
+   envelope clamp): 120-µm tiles, 10 % quantile of z per tile,
+   `lift = max(positive_deficits) − safety_offset`.
+
+Driver + figures in `03_image_based_surface_run.py` /
+`03_image_based_surface_figs.py`; results + log in
+`sessions/03_image_based_surface_estimation/`.
+
+**v2 fix (2026-04-18):** max-lift over-lifts on HCR 755252/767022
+because column tops are contaminated by shallow autofluorescence
+(e.g. 755252 has 63 % of tiles with z10 above the real pia).  Added
+two knobs to `_clamp_to_column_tops`:
+* `lift_q` (default 1.0) — use `quantile(pos_deficits, q)` instead
+  of max
+* `lift_iqr_k` (default 1.5) — cap lift at Tukey fence
+  `Q75 + k·IQR`, but only when `len(pos_deficits) ≥ 50`
+  (gates out CZ's ~25 tiles where IQR is too noisy)
+
+**v2.1 fix (2026-04-18):** raised the HCR `target_quantile` default
+from 0.70 → 0.85.  Closed the 790322 above_frac gap (1.13 % → 0.06 %)
+without regressing any other subject by more than a single onset bin.
+755252 onset improved 72.5 → 62.5 µm but remains AF-limited.
+CZ driver keeps `target_quantile = 0.70` (no AF issue; v2 CZ metrics
+are already clean).
+
+**How to apply:** Five of six HCR subjects now match N22 quality
+(above_frac ≤ 0.35 %, onset ≤ 12.5 µm).  Only remaining stubborn
+case: **755252 onset = 62.5 µm** — autofluorescence on 63 % of tiles
+is irreducible without centroid data or a soma-level image primitive
+(ruled out: 3-D peak detection / first_substantial / deeper anchor /
+narrower band / per-column thick filter — every parameter that helps
+755252 breaks ≥ 2 clean subjects).
+
+**Do NOT** expect image-only to ever fully match N22 on every subject
+— image-only cannot distinguish soma from autofluorescence the way
+centroid positions do.  Treat as a complementary image-driven
+cross-check for pia, not a replacement for N22.
+
+**Future-work lead: per-subject channel selection.** On 755252,
+`load_hcr_combined(channels=["488","514"])` followed by the normal
+v2.1 pipeline yields surface c=153.9, onset=2.5 µm, above 0.51 %
+— i.e. the pia IS recoverable when the AF-carrying channels (405,
+594) are dropped. But the "good subset" is subject-specific: the
+same `488+514` subset is catastrophic on 767018 (above 10 %),
+782149 (above 13 %), etc.  An auto-channel-selection rule using a
+confidence metric (e.g. below-vs-above-surface contrast ratio)
+could close 755252's gap without regressing the others.  Out of
+scope for v2.1 — genuine structural change.
+
+**v2.2 (session 03c, 2026-04-19):** implemented the above future-work
+lead.  Two new pure public functions in `03_image_based_surface.py`:
+- `score_surface_quality(surface, vol, z_um, xy_um, ...) -> dict`
+  with `Q = median(below_near)`, `Qabove = median(above_near)`,
+  `Qcon_n = median((b-a)/(b+a+ε))` in windows [10,50] µm below and
+  [-50,-10] µm above the candidate surface.
+- `auto_select_surface(candidates, ref_vol, z_um, xy_um, *,
+  qcon_n_threshold=0.9) -> (name, result, scores_df)`: argmax Q among
+  candidates with `Qcon_n ≥ 0.9`.  The contrast gate separates three
+  regimes — pia (Qcon_n ≈ 1), gap/AF-top (≈ 0), deep-in-tissue
+  (0.1–0.55) — and correctly rejects both failure modes.
+
+Convenience wrapper `estimate_pia_surface_image_autoselect(s, *,
+level=4, qcon_n_threshold=0.9)` in `benchmark_analysis.py` builds the
+per-subject channel-subset bank (`all_tq{0.70,0.85,0.95}`, `no405`,
+`mid488` with per-subject 514/561 pick, `only488`, `only594`) and
+returns `(surface, info, scores)`.
+
+**Result.**  On the 6-subject HCR benchmark, auto-select matches N22
+onset quality (`onset ≤ 2.5 µm`, `above_frac ≤ 1.13 %`) on **all**
+subjects including 755252 — the fix the "do NOT expect" paragraph
+above ruled out with v2.1 alone is now achievable via candidate-bank
+selection rather than a single parameter choice.  Per-subject picks:
+755252→`mid488_tq0.85`, 767018→`only594_tq0.85`, 767022→`all_tq0.70`,
+782149→`no405_tq0.85`, 788406→`no405_tq0.85`, 790322→`all_tq0.70`.
+
+Caveat: `argmax Q` is slightly deep-biased (deeper = brighter tissue),
+so selected `c` values are within ~30 µm of N22's but can overshoot
+(790322: +16 µm; above_frac 1.13 %).  All still within the onset/above
+gates.  If tighter control is needed later (e.g. GFP surfaces), add
+a shallow-bias term or weight Q by Qcon_n.
+
+**Iter 5–6 (2026-04-20) — OOT-aware scoring.**  Added
+`min_col_max_frac` (default 0.05) + optional shared
+`global_max` / `global_max_percentile` kwargs to
+`score_surface_quality`.  Columns whose column-max is below
+`min_col_max_frac × global_max` are dropped before Q / Qabove / Qcon
+/ Qcon_n medians; scoring dict exposes `n_oot`.  `auto_select_surface`
+computes `global_max = np.percentile(ref_vol.max(axis=0), 99.5)`
+once and shares it across the bank so every candidate uses the
+same mask.
+
+**Reference-choice design (critical).**  Under `vol.max()` as the
+global-max reference, a handful of saturated voxels on
+`load_hcr_combined` output (`vol.max()` = 32–253 × a typical tissue
+column) inflate the 5 % threshold above most real columns — 100 %
+OOT on 788406, 99.75 % on 790322; the scoring raises
+`All-NaN slice encountered`.  Under `np.percentile(vol, 99.5)` the
+reference is a typical bright *voxel* (~0.3) rather than a typical
+bright *column* (~1.0) over the >1 B voxels of a level-4 HCR volume,
+so 5 % of it passes every column including truly empty ones.
+`np.percentile(colmax, 99.5)` is robust to single-voxel saturation
+(each column contributes at most one bright-pixel's worth to
+`colmax`) and samples the correct scale.  **Always use this form**
+when adding OOT masks downstream.
+
+**How to apply.**  On the 6-subject HCR benchmark the mask drops
+0–9 of 400 grid columns per subject (15 %-padded interior grid is
+mostly all-tissue).  Iter 5's widely-quoted "52–94 % OOT" was a
+reference-inflation artefact from using `vol.max()`; the OOT
+*loophole* that iter 3/4 failed to close was never the real issue on
+this benchmark — but the mask is still worth keeping as (i) a
+safety net against saturated-voxel crashes, (ii) a principled tissue
+gate for future narrow-FOV or partial-crop data, and (iii) it
+handles bottom-OOT implicitly via the downstream `Qcon_n ≥ 0.9`
+gate (below-tissue surfaces read `Qcon_n ≈ -1`).  Selections under
+the new scoring are unchanged on 6/6 subjects vs iter 4.
+
+Session artefacts: `code/sessions/03c_onset_features/` — iterations
+01–07 with logs, notebooks, figures, and CSV data.
+
+**Iter 7 (2026-04-20) — curvature-capable image-only pia (TPS + patch-MAX).**
+Motivation: user audit of iter 6 auto showed v2.1/v2.2 are planar
+quadratics, and the real pia is curved.  Specifically (a) **755252**
+N22 *under-estimates* the pia (real surface deeper); quadratics can't
+track the curvature, (b) **790322** iter-6 auto sits too deep.  Both
+failures point at the IRLS-quadratic fit, not at candidate-bank
+scoring.
+
+**Final detector (v6 after six sub-iterations):**
+1. Log of the combined `load_hcr_combined` volume, offset by `EPS = 1e-3`.
+2. Per grid point, take the **log-MAX over a 15 × 15 xy patch**
+   (`PATCH_W = 7` half-width ≈ 60 µm at level 4).  *Not* mean — mean
+   smears sparse L1 cells; max preserves them, which is what closes
+   the 790322 gap.
+3. Smooth the resulting column with `gaussian_filter1d`
+   (`SMOOTH_Z_UM = 5.0`).
+4. Column-adaptive threshold:
+   `thr = max(THR_FLOOR = -6.3, col_p90_log − DELTA_LOG = 3.0)`.
+   Cliff columns (755252, col_p90 ≈ -1) → thr ≈ -4 at cliff bottom;
+   gradient columns (790322, col_p90 ≈ -3) → thr ≈ -6 at rise start.
+5. First z where smoothed column stays above `thr` for
+   `SUSTAIN_Z_UM = 15` → transition z for that column.
+6. Fit **bivariate cubic polynomial** (`POLY_DEGREE = 3`, 10
+   coefficients) via IRLS-Huber (`HUBER_K = 1.5`, 8 iterations) on
+   the 400 transition points.  Coordinates normalised to
+   `[-1, 1]` over the data range so extrapolation to the full FOV
+   stays in `[-1.43, 1.43]` — bounded for degree ≤ 3.
+   Implementation: `fit_polysurf` / `eval_polysurf` in
+   `iter07_compute.py` (duplicated in `iter07_multiy.py` for the
+   verification render).
+
+   **Model evolution on this grid.**  TPS via
+   `scipy.interpolate.RBFInterpolator(smoothing=200 → 10000)` was
+   the first try; user review flagged the TPS surface as
+   intensity-sensitive and wiggly even at smoothing=10000.  Switched
+   to a 10-parameter cubic polynomial on 2026-04-21 because (a) 10
+   degrees of freedom vs 400 points is strongly under-parameterised,
+   so high-frequency wiggles are forbidden by construction, (b) IRLS
+   downweights outlier transition z's (AF-latched columns, noise)
+   without a hard cut, (c) boundary extrapolation for a low-degree
+   polynomial is stable and monotonic.  Degree 2 is also viable if
+   degree 3 is still too flexible on future data.
+
+**Why patch-MAX (not patch-mean, not single-voxel):** log of the mean
+dilutes isolated bright cells; max preserves them.  For cliff
+subjects the max ≡ mean once tissue is dense, so the result is
+unchanged.  Single-voxel columns are dominated by whichever voxel
+happens to land at the grid point and miss sparse L1 cells entirely.
+
+**Why column-adaptive threshold (not absolute):**  v3 absolute thr =
+−4 worked on 755252 (+28 µm vs N22 ✓) but failed on 790322 (+94 µm
+vs auto ✗).  Both cliff and gradient column profiles now fire at
+"first meaningful signal above the column's own OOT noise".
+
+**6-subject HCR bench (`iter07_summary.csv`, cubic poly IRLS-Huber):**
+
+| subject | median_z_um | Δ vs N22 | Δ vs auto | note |
+|---|---:|---:|---:|---|
+| 755252 | 400.0 | +26.5 | +27.8 | x-slope preserved at all y |
+| 767018 | 276.0 | +11.7 | +12.2 |  |
+| 767022 | 256.0 |  +4.1 | +26.3 |  |
+| 782149 | 308.0 | +21.2 | +14.0 | diagonal tilt captured |
+| 788406 | 112.0 | +24.8 | +30.9 | thinnest subject |
+| 790322 | 152.0 | +29.5 |  +8.4 | mild bow preserved |
+
+All 6 subjects land 4–30 µm below N22 consistently — N22 is a
+slightly-shallow estimator on this bench.  Valid-transition count is
+400/400 per subject; no OOT drops or detector failures.  Median
+transition z unchanged from the TPS pass (detector is identical);
+surface-model change only affects the TPS→poly evaluation step.
+
+**Status.**  Iter 7 is a standalone detector in `iter07_compute.py`,
+not yet promoted into the public `benchmark_analysis` API.  Before
+promoting:
+- validate patch-MAX on subjects outside the 6-subject HCR bench
+  (mouse GFP+, E15.5 cortex, non-HCR modalities).
+- decide whether iter07 replaces the quadratic candidate bank
+  entirely or becomes a parallel `_tps` entry point.
+- the iter-6 auto path is still correct for centroid-comparable
+  outputs (iter07 is systematically 4–29 µm deeper, so applications
+  expecting "onset near N22" should keep using auto until iter07's
+  deeper bias is characterised against external truth).

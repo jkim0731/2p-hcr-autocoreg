@@ -1,0 +1,50 @@
+"""Test N22's estimate_pia_surface_from_image directly."""
+from __future__ import annotations
+import sys
+from pathlib import Path
+import numpy as np
+
+sys.path.insert(0, "/root/capsule/code/dev_code")
+from benchmark_analysis import (
+    estimate_pia_surface_from_image, load_hcr_combined)
+from benchmark_data_loader import hcr_px_to_um, load_subject
+
+def sz(surf, x, y):
+    return (surf["a"]*x + surf["b"]*y + surf["c"] +
+            surf.get("p",0)*x*x + surf.get("q",0)*x*y + surf.get("r",0)*y*y)
+
+def eval_surf(surf, pts):
+    z_surf = sz(surf, pts[:,0], pts[:,1])
+    depth = pts[:,2] - z_surf
+    n = len(depth)
+    above = (depth < 0).sum() / n
+    above5 = (depth < -5).sum() / n
+    edges = np.arange(-200, 404, 5.0)
+    h, _ = np.histogram(depth, bins=edges)
+    density = h / (5.0 * max(n, 1))
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    bulk = density[(centers >= 50) & (centers <= 200)].mean()
+    onset = np.nan
+    if bulk > 0:
+        halfmax = 0.5 * bulk
+        for c, d in zip(centers, density):
+            if c >= 0 and d >= halfmax:
+                onset = float(c); break
+    return above, above5, onset
+
+for sid in ["755252", "767018", "767022", "782149", "788406", "790322"]:
+    s = load_subject(sid)
+    vol, xy_um, z_um, channels = load_hcr_combined(s, level=4)
+    pts = hcr_px_to_um(s.hcr_centroids[["z_px","y_px","x_px"]].values, s)[:, [2,1,0]]
+    for margin in [0.005, 0.02, 0.05]:
+        surf = estimate_pia_surface_from_image(
+            vol, z_um, xy_um,
+            relative_margin=margin, min_signal_abs=0.05,
+            min_thick_um=15.0, xy_stride_um=10.0, tile_um=150.0,
+            mad_cut=3.0,
+        )
+        if surf is None:
+            print(f"{sid} m={margin}: NONE"); continue
+        above, a5, onset = eval_surf(surf, pts)
+        print(f"{sid} m={margin:.3f}: c={surf['c']:.1f} tilt={surf.get('tilt_angle_deg',surf.get('tilt_deg',0)):.1f} "
+              f"n_cols={surf.get('n_columns','?')} above={above:.4f} a5={a5:.4f} onset={onset:.1f}")

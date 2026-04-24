@@ -1,0 +1,571 @@
+"""Session 03 — image-based surface + L2 estimator.
+
+New approach: tile the volume in XY; for each tile, compute a 1-D median
+intensity profile along z; the top N slices of the volume give a
+baseline (mean + sigma) from which the FIRST robust upward jump within
+the top 25 % of the volume is called the pia surface and the SECOND
+upward jump deeper in the volume is called the L2 boundary.
+
+The algorithm is deliberately distribution-driven — the only per-subject
+priors are the top-25 % search window (justified by cortex/microscopy
+geometry) and the minimum L1 thickness (biological prior).  No
+hand-tuned thresholds: surface / L2 detection uses baseline mean + k *
+MAD-robust sigma with k = 6 by default (clear separation from the
+blank-region noise floor).
+
+HCR: intensity-combined HCR image is used as-is (all voxels).
+CZ: for the L2 search, only background voxels (segmentation mask == 0)
+    are used, since GFP+ cell bodies mask the underlying layer signal.
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Optional
+
+import numpy as np
+import pandas as pd
+from scipy.ndimage import gaussian_filter1d
+
+
+# ---------------------------------------------------------------------
+# Core 1-D profile primitives
+# ---------------------------------------------------------------------
+
+def _tile_profile_median(
+    vol: np.ndarray,
+    mask_bg: Optional[np.ndarray],
+    iy: int, ix: int, tile_py: int, tile_px: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per-z median intensity within a tile window.
+
+    If ``mask_bg`` is given, compute the median only over voxels where
+    ``mask_bg`` is True (background voxels) — voxels with no background
+    (whole tile is cell) contribute NaN at that z.
+
+    Returns (profile, n_valid) — both (Z,).
+    """
+    tile = vol[:, iy:iy + tile_py, ix:ix + tile_px]
+    Z = tile.shape[0]
+    if mask_bg is None:
+        prof = np.median(tile.reshape(Z, -1), axis=1)
+        nval = np.full(Z, tile.shape[1] * tile.shape[2], dtype=np.int32)
+        return prof, nval
+    mb = mask_bg[:, iy:iy + tile_py, ix:ix + tile_px]
+    prof = np.full(Z, np.nan, dtype=np.float32)
+    nval = np.zeros(Z, dtype=np.int32)
+    for z_i in range(Z):
+        vals = tile[z_i][mb[z_i]]
+        if vals.size:
+            prof[z_i] = np.median(vals)
+            nval[z_i] = vals.size
+    return prof, nval
+
+
+def _first_sustained_above(
+    profile: np.ndarray,
+    thr: float,
+    min_thick_px: int,
+    z_lo: int = 0,
+    z_hi: Optional[int] = None,
+) -> Optional[int]:
+    """Return the first z in [z_lo, z_hi) where ``profile`` stays above
+    ``thr`` for at least ``min_thick_px`` consecutive samples (NaNs
+    count as not-above).  Returns None if no such z exists.
+    """
+    Z = len(profile)
+    if z_hi is None or z_hi > Z:
+        z_hi = Z
+    if z_hi - z_lo < min_thick_px:
+        return None
+    above = np.zeros(Z, dtype=bool)
+    good = np.isfinite(profile)
+    above[good] = profile[good] > thr
+    # cumulative sum of consecutive True
+    run = 0
+    for z_i in range(z_lo, z_hi):
+        if above[z_i]:
+            run += 1
+            if run >= min_thick_px:
+                return z_i - min_thick_px + 1  # start of the run
+        else:
+            run = 0
+    return None
+
+
+def _baseline_from_top(
+    profiles: list[np.ndarray],
+    top_px: int,
+    dynamic_range_hint: float = 0.0,
+) -> tuple[float, float]:
+    """Aggregate baseline mean (median) and robust sigma from the TRULY
+    blank slices at the top of each tile profile.
+
+    Strategy:
+
+    1. Look at the top-``top_px`` slab of every tile.
+    2. Within that slab, keep only slices whose value is ≤ 5 % of the
+       global dynamic-range hint — these are the "truly blank" slices.
+       This filters out the case where the top slab contains 1 blank
+       slice and then buffer signal (common in CZ: z=0 is padded zero
+       but z≥1 already shows 400-700 counts of buffer fluorescence).
+    3. If fewer than ~3 blank samples are found across all tiles, fall
+       back entirely to the dynamic-range heuristic:
+       ``bg_mean = 0``, ``sigma = 0.02 * dyn_hint``.
+    4. Otherwise, compute median + 1.4826 * MAD.  If MAD collapses
+       (literally-flat padding), back off to the dynamic-range sigma.
+
+    The 5 % cutoff is distribution-driven (relative to the data's own
+    peak) — no hand-tuned absolute intensities.
+    """
+    dyn_hint = float(max(dynamic_range_hint, 0.0))
+    blank_cut = 0.05 * dyn_hint if dyn_hint > 0 else None
+
+    pooled_blank: list[np.ndarray] = []
+    pooled_all: list[np.ndarray] = []
+    for p in profiles:
+        if p is None or len(p) < 2:
+            continue
+        chunk = p[:min(top_px, len(p))]
+        chunk = chunk[np.isfinite(chunk)]
+        if not chunk.size:
+            continue
+        pooled_all.append(chunk)
+        if blank_cut is not None:
+            blank = chunk[chunk <= blank_cut]
+            if blank.size:
+                pooled_blank.append(blank)
+
+    # Prefer the filtered blank pool, fall back to the full top slab.
+    if pooled_blank and sum(b.size for b in pooled_blank) >= 3:
+        vals = np.concatenate(pooled_blank)
+    elif pooled_all:
+        vals = np.concatenate(pooled_all)
+    else:
+        return 0.0, max(dyn_hint, 1e-6)
+
+    med = float(np.median(vals))
+    mad = float(np.median(np.abs(vals - med)))
+    sigma = 1.4826 * mad
+    std_fallback = float(np.std(vals))
+    sigma = max(sigma, std_fallback)
+    if sigma < 1e-6 and dyn_hint > 0:
+        sigma = max(1e-6, 0.02 * dyn_hint)
+    elif sigma < 1e-6:
+        sigma = 1e-6
+
+    # If the filtered blank pool was tiny (1-2 samples) and we fell
+    # through to the full top slab (which may contain buffer signal on
+    # CZ), drive the baseline to the dynamic-range floor instead of
+    # letting an inflated buffer-contaminated mean set the threshold.
+    if (blank_cut is not None
+            and pooled_blank
+            and sum(b.size for b in pooled_blank) < 3
+            and dyn_hint > 0):
+        med = 0.0
+        sigma = max(sigma, 0.02 * dyn_hint)
+
+    return med, sigma
+
+
+# ---------------------------------------------------------------------
+# Robust plane fitting helpers
+# ---------------------------------------------------------------------
+
+def _robust_plane_fit(xs: np.ndarray, ys: np.ndarray, zs: np.ndarray,
+                     max_iter: int = 10) -> dict:
+    """IRLS-Huber plane fit z = a*x + b*y + c."""
+    xs = np.asarray(xs, dtype=float)
+    ys = np.asarray(ys, dtype=float)
+    zs = np.asarray(zs, dtype=float)
+    A = np.column_stack([xs, ys, np.ones_like(xs)])
+    w = np.ones_like(zs)
+    coef = np.array([0.0, 0.0, float(np.median(zs))])
+    for _ in range(max_iter):
+        W = np.sqrt(w)
+        A_w = A * W[:, None]
+        z_w = zs * W
+        coef_new, *_ = np.linalg.lstsq(A_w, z_w, rcond=None)
+        r = zs - A @ coef_new
+        sig = 1.4826 * np.median(np.abs(r - np.median(r))) + 1e-6
+        c_tune = 1.345 * sig
+        w = np.where(np.abs(r) <= c_tune, 1.0, c_tune / np.abs(r) + 1e-9)
+        if np.linalg.norm(coef_new - coef) < 1e-4:
+            coef = coef_new
+            break
+        coef = coef_new
+    a, b, c = coef
+    tilt = math.degrees(math.atan(math.hypot(a, b)))
+    r = zs - (a * xs + b * ys + c)
+    return {
+        "a": float(a), "b": float(b), "c": float(c),
+        "tilt_deg": float(tilt),
+        "n_points": int(len(zs)),
+        "resid_rms_um": float(np.sqrt(np.mean(r * r))),
+        "resid_mad_um": float(1.4826 * np.median(np.abs(r))),
+    }
+
+
+def _parallel_plane_fit(xs, ys, zs, parent: dict) -> dict:
+    """Enforce the (a, b) slope of ``parent`` — only refit the intercept
+    c with IRLS-Huber.  Keeps L2 parallel to the surface even when the
+    L2 detection is noisy."""
+    xs = np.asarray(xs, dtype=float)
+    ys = np.asarray(ys, dtype=float)
+    zs = np.asarray(zs, dtype=float)
+    a = float(parent["a"])
+    b = float(parent["b"])
+    resid = zs - (a * xs + b * ys)
+    w = np.ones_like(resid)
+    c = float(np.median(resid))
+    for _ in range(10):
+        r = resid - c
+        sig = 1.4826 * np.median(np.abs(r - np.median(r))) + 1e-6
+        ctune = 1.345 * sig
+        w = np.where(np.abs(r) <= ctune, 1.0, ctune / (np.abs(r) + 1e-9))
+        c_new = float(np.sum(w * resid) / max(np.sum(w), 1e-6))
+        if abs(c_new - c) < 1e-4:
+            c = c_new
+            break
+        c = c_new
+    r = zs - (a * xs + b * ys + c)
+    tilt = math.degrees(math.atan(math.hypot(a, b)))
+    return {
+        "a": a, "b": b, "c": c,
+        "tilt_deg": float(tilt),
+        "n_points": int(len(zs)),
+        "resid_rms_um": float(np.sqrt(np.mean(r * r))),
+        "resid_mad_um": float(1.4826 * np.median(np.abs(r))),
+    }
+
+
+# ---------------------------------------------------------------------
+# Main entry point
+# ---------------------------------------------------------------------
+
+@dataclass
+class SurfaceL2Result:
+    surface: Optional[dict]
+    l2: Optional[dict]
+    baseline_mean: float
+    baseline_sigma: float
+    surf_thr: float
+    l2_thr: float
+    n_tiles_total: int
+    n_surface_tiles: int
+    n_l2_tiles: int
+    tile_records: pd.DataFrame  # per-tile diagnostics
+    z_um: float
+    xy_um: float
+
+
+def estimate_surface_and_l2_image_based(
+    vol: np.ndarray,
+    z_um: float,
+    xy_um: float,
+    *,
+    mask_bg_for_l2: Optional[np.ndarray] = None,
+    xy_tile_um: float = 150.0,
+    top_blank_frac: float = 0.05,
+    top_blank_min_um: float = 20.0,
+    surface_search_frac: float = 0.25,
+    k_surface: float = 3.0,
+    relative_margin_min: float = 0.01,
+    k_l2_factor: float = 1.5,
+    l2_local_k: float = 2.5,
+    min_thick_surface_um: float = 12.0,
+    min_thick_l2_um: float = 12.0,
+    min_l1_um: float = 40.0,
+    max_l1_um: float = 180.0,
+    smooth_sigma_um: float = 6.0,
+    xy_stride_um: float = 4.0,
+) -> SurfaceL2Result:
+    """Tile-wise intensity-jump surface + L2 estimator.
+
+    Parameters
+    ----------
+    vol : (Z, Y, X)
+        Image volume, z increasing from top (outside tissue) into cortex.
+    z_um, xy_um : float
+        Voxel spacing in microns.
+    mask_bg_for_l2 : (Z, Y, X) bool, optional
+        If given, the L2 search uses **only** voxels where
+        ``mask_bg_for_l2 == True``.  Intended use: for CZ, pass
+        ``segmentation_mask == 0`` so the L2 jump tracks the background
+        neuropil/autofluorescence rather than cell bodies.  The
+        surface search always uses the raw volume because the
+        tissue-vs-buffer transition is the dominant signal there.
+    xy_tile_um : float
+        Tile size for per-column profiles.  150 um roughly corresponds
+        to one manual landmark cluster.
+    top_blank_frac, top_blank_min_um : float
+        The baseline is measured from the top ``max(top_blank_frac * Z,
+        top_blank_min_um)`` of every tile.
+    surface_search_frac : float
+        The surface must lie within the top fraction of the volume.
+    k_surface : float
+        ``surf_thr = baseline_mean + k_surface * baseline_sigma``.
+    k_l2_factor : float
+        The L2 threshold is the surface threshold multiplied by this
+        factor — we look for a second, stronger intensity plateau.
+    min_thick_surface_um, min_thick_l2_um : float
+        Minimum contiguous thickness (µm) required before a jump is
+        accepted.  Rejects thin debris flakes.
+    min_l1_um, max_l1_um : float
+        Prior on L1 thickness: the L2 jump must lie between
+        ``surface_z + min_l1_um`` and ``surface_z + max_l1_um``.
+    smooth_sigma_um : float
+        Per-column z smoothing before jump detection.
+    xy_stride_um : float
+        Sub-sample XY to speed up profile aggregation; does not affect
+        tile edges.
+    """
+    Z, Y, X = vol.shape
+    z_max_search = int(round(Z * surface_search_frac))
+    top_px = max(int(round(top_blank_min_um / z_um)),
+                 int(round(top_blank_frac * Z)))
+    top_px = max(top_px, 3)
+    min_thick_s_px = max(1, int(round(min_thick_surface_um / z_um)))
+    min_thick_l2_px = max(1, int(round(min_thick_l2_um / z_um)))
+    min_l1_px = max(1, int(round(min_l1_um / z_um)))
+    max_l1_px = max(min_l1_px + 1, int(round(max_l1_um / z_um)))
+    sigma_px = max(0.5, smooth_sigma_um / z_um)
+
+    tile_py = max(4, int(round(xy_tile_um / xy_um)))
+    tile_px = tile_py
+
+    # Pre-subsample XY (only for profile extraction speed; tile edges
+    # computed on the full grid).
+    stride_y = max(1, int(round(xy_stride_um / xy_um)))
+    stride_x = max(1, int(round(xy_stride_um / xy_um)))
+
+    profiles: dict[tuple[int, int], np.ndarray] = {}
+    tile_records: list[dict] = []
+
+    for iy in range(0, Y, tile_py):
+        for ix in range(0, X, tile_px):
+            sub = vol[:, iy:iy + tile_py:stride_y, ix:ix + tile_px:stride_x]
+            if sub.size == 0:
+                continue
+            if mask_bg_for_l2 is None:
+                prof = np.median(
+                    sub.reshape(Z, -1).astype(np.float32, copy=False),
+                    axis=1,
+                )
+                bg_prof = None
+            else:
+                mb = mask_bg_for_l2[:, iy:iy + tile_py:stride_y,
+                                       ix:ix + tile_px:stride_x]
+                # Raw (all voxels) for surface detection
+                prof = np.median(
+                    sub.reshape(Z, -1).astype(np.float32, copy=False),
+                    axis=1,
+                )
+                # Background-only median for L2
+                bg_prof = np.full(Z, np.nan, dtype=np.float32)
+                for z_i in range(Z):
+                    vals = sub[z_i][mb[z_i]]
+                    if vals.size >= 8:
+                        bg_prof[z_i] = np.median(vals)
+            profiles[(iy, ix)] = (prof, bg_prof)
+
+    # Baseline from top of every (raw) profile — robust to debris.
+    # Dynamic-range hint = 99th-percentile of the per-tile peak across
+    # all tiles; used only when the top is so flat (padded zeros) that
+    # MAD collapses — then sigma = 2 % of dynamic range as a backup
+    # noise estimate.
+    all_profs = [p[0] for p in profiles.values()]
+    if all_profs:
+        tile_peaks = np.array([
+            float(np.nanmax(p)) if np.any(np.isfinite(p)) else np.nan
+            for p in all_profs
+        ])
+        tile_peaks = tile_peaks[np.isfinite(tile_peaks)]
+        dyn_hint = float(np.percentile(tile_peaks, 99)) if tile_peaks.size else 0.0
+    else:
+        dyn_hint = 0.0
+    bg_mean, bg_sigma = _baseline_from_top(all_profs, top_px, dyn_hint)
+    # Use the max of (i) noise-driven threshold and (ii) a small
+    # fraction of the dynamic range.  The first dominates for signals
+    # where the top slab is true-noise; the second dominates when the
+    # top is flat/padded and the noise estimate collapses.  Both are
+    # distribution-driven (no hand-tuned absolute intensities).
+    thr_noise = bg_mean + k_surface * bg_sigma
+    thr_rel = bg_mean + relative_margin_min * dyn_hint
+    surf_thr = max(thr_noise, thr_rel)
+
+    # Smooth then find first-sustained-above threshold for SURFACE
+    surface_tiles = []
+    for (iy, ix), (prof_raw, bg_prof) in profiles.items():
+        prof = gaussian_filter1d(prof_raw, sigma=sigma_px, mode="nearest")
+        z_surf = _first_sustained_above(
+            prof, surf_thr, min_thick_s_px,
+            z_lo=0, z_hi=z_max_search,
+        )
+        if z_surf is None:
+            tile_records.append({
+                "iy": iy, "ix": ix,
+                "z_surface_px": np.nan, "z_l2_px": np.nan,
+                "prof_peak": float(np.nanmax(prof)) if np.isfinite(
+                    np.nanmax(prof)) else np.nan,
+                "status": "no_surface",
+            })
+            continue
+        # Surface tile: convert to um and XY center
+        x_c = (ix + tile_px / 2.0) * xy_um
+        y_c = (iy + tile_py / 2.0) * xy_um
+        z_surf_um = z_surf * z_um
+        surface_tiles.append((x_c, y_c, z_surf_um, iy, ix, prof_raw, bg_prof))
+        tile_records.append({
+            "iy": iy, "ix": ix,
+            "z_surface_px": int(z_surf), "z_l2_px": np.nan,
+            "prof_peak": float(np.nanmax(prof)),
+            "status": "surface_only",
+        })
+
+    if len(surface_tiles) < 5:
+        return SurfaceL2Result(
+            surface=None, l2=None,
+            baseline_mean=bg_mean, baseline_sigma=bg_sigma,
+            surf_thr=surf_thr, l2_thr=np.nan,
+            n_tiles_total=len(profiles),
+            n_surface_tiles=len(surface_tiles),
+            n_l2_tiles=0,
+            tile_records=pd.DataFrame(tile_records),
+            z_um=z_um, xy_um=xy_um,
+        )
+
+    xs = np.array([t[0] for t in surface_tiles])
+    ys = np.array([t[1] for t in surface_tiles])
+    zs_s = np.array([t[2] for t in surface_tiles])
+    surface_fit = _robust_plane_fit(xs, ys, zs_s)
+
+    # ---- L2 detection -----------------------------------------------
+    # For each surface tile find the next jump that sustains a local
+    # threshold ``l1_mean + max(k*σ_L1, margin * dyn_hint)`` starting at
+    # least ``min_l1_um`` below the detected surface.  The dyn_hint
+    # floor prevents the local σ from collapsing and letting a trivial
+    # first-sample-above register as L2 (the minimum-L1 floor artefact).
+    # L2 should roughly parallel the surface — keep only tiles whose L2
+    # Z sits within [surf+min_l1, surf+max_l1].  For CZ the L2 profile
+    # comes from ``bg_prof`` rather than ``prof_raw``.
+    l2_thr = bg_mean + k_surface * k_l2_factor * bg_sigma
+    # Margin for the local L2 threshold — a meaningful jump above the
+    # L1 neuropil baseline, scaled to the volume's own dynamic range.
+    l2_relative_margin = 0.05 * dyn_hint
+    l2_tiles = []
+    for (x_c, y_c, z_surf_um, iy, ix, prof_raw, bg_prof) in surface_tiles:
+        z_surf_px = int(round(z_surf_um / z_um))
+        z_lo_px = z_surf_px + min_l1_px
+        z_hi_px = min(Z, z_surf_px + max_l1_px)
+        if z_hi_px - z_lo_px < min_thick_l2_px:
+            continue
+
+        base_prof = prof_raw if bg_prof is None else bg_prof
+        l1_window = base_prof[z_surf_px:z_lo_px]
+        l1_window = l1_window[np.isfinite(l1_window)]
+        if l1_window.size < 3:
+            continue
+        l1_mean = float(np.median(l1_window))
+        l1_mad = float(np.median(np.abs(l1_window - l1_mean)))
+        l1_sigma = 1.4826 * l1_mad + 1e-6
+        l2_local_thr = l1_mean + max(
+            l2_local_k * l1_sigma,
+            l2_relative_margin,
+        )
+
+        prof_s = gaussian_filter1d(base_prof, sigma=sigma_px, mode="nearest")
+        z_l2 = _first_sustained_above(
+            prof_s, l2_local_thr, min_thick_l2_px,
+            z_lo=z_lo_px, z_hi=z_hi_px,
+        )
+        if z_l2 is None:
+            continue
+        z_l2_um = z_l2 * z_um
+        l2_tiles.append((x_c, y_c, z_l2_um))
+        # update tile record
+        for rec in tile_records:
+            if rec["iy"] == iy and rec["ix"] == ix:
+                rec["z_l2_px"] = int(z_l2)
+                rec["status"] = "surface_and_l2"
+                break
+
+    if len(l2_tiles) >= 5:
+        xs2 = np.array([t[0] for t in l2_tiles])
+        ys2 = np.array([t[1] for t in l2_tiles])
+        zs2 = np.array([t[2] for t in l2_tiles])
+        # Parallel-constrained L2 fit
+        l2_fit = _parallel_plane_fit(xs2, ys2, zs2, surface_fit)
+        # also record free-fit tilt for diagnostic
+        free_l2 = _robust_plane_fit(xs2, ys2, zs2)
+        l2_fit["free_tilt_deg"] = free_l2["tilt_deg"]
+        l2_fit["l1_thick_um"] = float(l2_fit["c"] - surface_fit["c"])
+    else:
+        l2_fit = None
+
+    return SurfaceL2Result(
+        surface=surface_fit,
+        l2=l2_fit,
+        baseline_mean=bg_mean,
+        baseline_sigma=bg_sigma,
+        surf_thr=surf_thr,
+        l2_thr=l2_thr,
+        n_tiles_total=len(profiles),
+        n_surface_tiles=len(surface_tiles),
+        n_l2_tiles=len(l2_tiles),
+        tile_records=pd.DataFrame(tile_records),
+        z_um=z_um,
+        xy_um=xy_um,
+    )
+
+
+# ---------------------------------------------------------------------
+# Metrics (mirrors session v2)
+# ---------------------------------------------------------------------
+
+def _surface_z(surface: dict, x, y):
+    return surface["a"] * x + surface["b"] * y + surface["c"]
+
+
+def depth_profile_stats(
+    pts_xyz_um: np.ndarray,
+    surface: dict,
+    *,
+    depth_min: float = -200.0,
+    depth_max: float = 400.0,
+    bin_um: float = 5.0,
+) -> dict:
+    """Above-frac / onset / cum-ratio metrics used in session 03 v2."""
+    if surface is None or len(pts_xyz_um) == 0:
+        return {}
+    z_surf = _surface_z(surface, pts_xyz_um[:, 0], pts_xyz_um[:, 1])
+    depth = pts_xyz_um[:, 2] - z_surf
+    n = len(depth)
+    above = (depth < 0).sum() / n
+    above5 = (depth < -5.0).sum() / n
+    edges = np.arange(depth_min, depth_max + bin_um, bin_um)
+    h, _ = np.histogram(depth, bins=edges)
+    density = h / (bin_um * max(n, 1))
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    bulk = density[(centers >= 50) & (centers <= 200)].mean()
+    above_dens = density[(centers >= -200) & (centers < 0)].mean()
+    cum_above = above_dens / max(bulk, 1e-9)
+    onset = np.nan
+    if bulk > 0:
+        halfmax = 0.5 * bulk
+        deeper = (centers >= 0)
+        if deeper.any():
+            prof = density * deeper
+            for c, d in zip(centers, density):
+                if c >= 0 and d >= halfmax:
+                    onset = float(c)
+                    break
+    return {
+        "above_frac": float(above),
+        "above_frac_5um": float(above5),
+        "cum_above_ratio": float(cum_above),
+        "onset_depth_um": onset,
+        "n_points": int(n),
+    }

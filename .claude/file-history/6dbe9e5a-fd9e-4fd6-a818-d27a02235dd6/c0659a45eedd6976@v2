@@ -1,0 +1,55 @@
+"""Quick peak test on ONE subject."""
+from __future__ import annotations
+import sys, importlib.util
+from pathlib import Path
+import numpy as np
+from scipy.ndimage import maximum_filter, gaussian_filter
+from scipy.spatial import cKDTree
+
+sys.path.insert(0, "/root/capsule/code/dev_code")
+from benchmark_analysis import load_hcr_combined
+from benchmark_data_loader import hcr_px_to_um, load_subject
+
+sid = "755252"
+s = load_subject(sid)
+vol, xy_um, z_um, channels = load_hcr_combined(s, level=4)
+pts = hcr_px_to_um(s.hcr_centroids[["z_px","y_px","x_px"]].values, s)[:, [2,1,0]]
+print(f"vol {vol.shape} z_um={z_um:.2f} xy_um={xy_um:.2f} n_real_cells={len(pts)}")
+
+smoothed = gaussian_filter(vol.astype(np.float32),
+                           (max(1, int(5.0/z_um)),
+                            max(1, int(5.0/xy_um)),
+                            max(1, int(5.0/xy_um))))
+print(f"smoothed min/p50/p95/p99 = {smoothed.min():.3f} "
+      f"{np.percentile(smoothed, 50):.3f} "
+      f"{np.percentile(smoothed, 95):.3f} "
+      f"{np.percentile(smoothed, 99):.3f}")
+
+nz = max(1, int(8.0/z_um)); nxy = max(1, int(8.0/xy_um))
+lm = maximum_filter(smoothed, size=(2*nz+1, 2*nxy+1, 2*nxy+1))
+is_peak = (smoothed == lm) & (smoothed > 0)
+print(f"initial peaks: {is_peak.sum()}")
+
+for qth in [0.95, 0.98, 0.99, 0.995]:
+    thr = float(np.quantile(smoothed[smoothed > 0], qth))
+    n = int((is_peak & (smoothed >= thr)).sum())
+    print(f"  q={qth:.3f} thr={thr:.3f} n_peaks={n}")
+
+# Take q=0.98
+thr = float(np.quantile(smoothed[smoothed > 0], 0.98))
+mask = is_peak & (smoothed >= thr)
+zi, yi, xi = np.where(mask)
+peaks = np.column_stack([xi*xy_um, yi*xy_um, zi*z_um])
+print(f"peaks before density filter: {len(peaks)}")
+
+tree = cKDTree(peaks)
+counts = tree.query_ball_point(peaks, r=30.0, return_length=True)
+keep = np.asarray(counts) >= 4
+peaks = peaks[keep]
+print(f"peaks after density: {len(peaks)}")
+
+# Compare z distributions
+print(f"real cell z:  p1={np.percentile(pts[:,2],1):.1f} p5={np.percentile(pts[:,2],5):.1f} "
+      f"p50={np.percentile(pts[:,2],50):.1f} p95={np.percentile(pts[:,2],95):.1f}")
+print(f"peak z:       p1={np.percentile(peaks[:,2],1):.1f} p5={np.percentile(peaks[:,2],5):.1f} "
+      f"p50={np.percentile(peaks[:,2],50):.1f} p95={np.percentile(peaks[:,2],95):.1f}")

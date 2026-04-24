@@ -1,0 +1,63 @@
+"""Tune 3D peak detection to match real cell distribution.
+
+Goal: peaks should have p1/p5 close to real cell p1/p5 (so their
+shallow tail lies just below pia, like centroids).  Then they can be
+used as pseudo-centroids in the clamp.
+"""
+from __future__ import annotations
+import sys, importlib.util, os
+from pathlib import Path
+import numpy as np
+from scipy.ndimage import maximum_filter, gaussian_filter
+from scipy.spatial import cKDTree
+os.environ["PYTHONUNBUFFERED"] = "1"
+
+sys.path.insert(0, "/root/capsule/code/dev_code")
+from benchmark_analysis import load_hcr_combined
+from benchmark_data_loader import hcr_px_to_um, load_subject
+
+
+def detect_peaks(vol, z_um, xy_um, *, smooth_um, nbh_um, intensity_q,
+                 min_neighbors=3, density_radius_um=30.0):
+    sz = max(1, int(round(smooth_um / z_um)))
+    sxy = max(1, int(round(smooth_um / xy_um)))
+    smoothed = gaussian_filter(vol.astype(np.float32), (sz, sxy, sxy))
+    nz = max(1, int(round(nbh_um / z_um)))
+    nxy = max(1, int(round(nbh_um / xy_um)))
+    lm = maximum_filter(smoothed, size=(2*nz+1, 2*nxy+1, 2*nxy+1))
+    is_peak = (smoothed == lm) & (smoothed > 0)
+    nonzero = smoothed[smoothed > 0]
+    thr = float(np.quantile(nonzero, intensity_q))
+    is_peak &= smoothed >= thr
+    zi, yi, xi = np.where(is_peak)
+    if len(zi) == 0:
+        return np.empty((0, 3))
+    pts = np.column_stack([xi * xy_um, yi * xy_um, zi * z_um])
+    tree = cKDTree(pts)
+    counts = tree.query_ball_point(pts, r=float(density_radius_um),
+                                   return_length=True)
+    return pts[np.asarray(counts) >= (int(min_neighbors) + 1)]
+
+
+for sid in ["755252", "767018"]:
+    print(f"=== {sid} ===", flush=True)
+    s = load_subject(sid)
+    vol, xy_um, z_um, channels = load_hcr_combined(s, level=4)
+    pts = hcr_px_to_um(s.hcr_centroids[["z_px","y_px","x_px"]].values, s)[:, [2,1,0]]
+    print(f"  real cells:   n={len(pts)} p1={np.percentile(pts[:,2],1):.0f} "
+          f"p5={np.percentile(pts[:,2],5):.0f} p50={np.percentile(pts[:,2],50):.0f}", flush=True)
+
+    for smooth in [3.0, 5.0]:
+        for nbh in [4.0, 6.0, 8.0]:
+            for q in [0.90, 0.95, 0.98]:
+                peaks = detect_peaks(vol, z_um, xy_um,
+                                     smooth_um=smooth, nbh_um=nbh,
+                                     intensity_q=q)
+                if len(peaks) < 100:
+                    print(f"  sm={smooth} nb={nbh} q={q}: too few peaks ({len(peaks)})",
+                          flush=True); continue
+                p1 = np.percentile(peaks[:,2], 1)
+                p5 = np.percentile(peaks[:,2], 5)
+                p50 = np.percentile(peaks[:,2], 50)
+                print(f"  sm={smooth:.1f} nb={nbh:.1f} q={q:.2f}: n={len(peaks):5d} "
+                      f"p1={p1:.0f} p5={p5:.0f} p50={p50:.0f}", flush=True)

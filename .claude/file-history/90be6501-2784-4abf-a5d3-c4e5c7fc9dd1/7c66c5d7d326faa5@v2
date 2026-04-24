@@ -1,0 +1,263 @@
+"""G1 — hand-feature GNN matcher (pure torch, CPU).
+
+Self-supervised cross-graph attention matcher with Sinkhorn+dustbin head.
+
+Because `torch_geometric` is not available in this environment, the graph
+conv is implemented as a pure torch `scatter_add` aggregator over the
+explicit edge index.
+
+Training:
+  Stage 1 — self-supervised on F8 synthetic warps of the current subject's
+            HCR GFP+ cloud. Warps emulate the CZ side by subsampling +
+            applying the random anisotropic + TPS transform. This is the
+            only training data used; no benchmark coreg tables are seen at
+            training time.
+
+Inference:
+  Build both graphs, cross-attention, Sinkhorn+dustbin; output one-to-one
+  assignments plus a per-pair matchability probability.
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+import numpy as np
+import pandas as pd
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+_THIS = Path(__file__).resolve().parent
+_ROOT = _THIS.parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+if str(_ROOT.parent / "dev_code") not in sys.path:
+    sys.path.insert(0, str(_ROOT.parent / "dev_code"))
+
+from bench.harness import register_candidate, CoregResult, TransformDescriptor
+from lib.cell_features import extract_cell_features, invariant_feature_mask
+from lib.synthetic_warps import sample_warped_pair
+from lib.centroid_helpers import centroids_um
+
+
+def _build_knn_graph(pts_um: np.ndarray, k: int = 8) -> np.ndarray:
+    from sklearn.neighbors import NearestNeighbors
+    nn = NearestNeighbors(n_neighbors=k + 1).fit(pts_um)
+    _, idx = nn.kneighbors(pts_um)
+    idx = idx[:, 1:]  # drop self
+    # Return edge index (src, dst) flattened
+    src = np.repeat(np.arange(len(pts_um)), k)
+    dst = idx.flatten()
+    return np.stack([src, dst], axis=0)  # (2, E)
+
+
+class GNNMatcher(nn.Module):
+    def __init__(self, in_dim: int, hidden: int = 64, n_layers: int = 3,
+                 cross_layers: int = 2):
+        super().__init__()
+        self.enc = nn.Sequential(
+            nn.Linear(in_dim, hidden), nn.GELU(),
+            nn.Linear(hidden, hidden), nn.GELU(),
+        )
+        self.msg = nn.ModuleList([
+            nn.Sequential(nn.Linear(hidden * 2, hidden), nn.GELU(),
+                          nn.Linear(hidden, hidden))
+            for _ in range(n_layers)
+        ])
+        self.cross_q = nn.ModuleList([nn.Linear(hidden, hidden)
+                                       for _ in range(cross_layers)])
+        self.cross_k = nn.ModuleList([nn.Linear(hidden, hidden)
+                                       for _ in range(cross_layers)])
+        self.cross_v = nn.ModuleList([nn.Linear(hidden, hidden)
+                                       for _ in range(cross_layers)])
+        self.norm = nn.ModuleList([nn.LayerNorm(hidden)
+                                    for _ in range(n_layers + cross_layers)])
+        self.match_head = nn.Linear(hidden, 1)
+        self.dustbin = nn.Parameter(torch.tensor(1.0))
+        self.hidden = hidden
+
+    def _graph_step(self, x, edge_index, layer_idx):
+        src, dst = edge_index[0], edge_index[1]
+        pair = torch.cat([x[src], x[dst]], dim=-1)
+        m = self.msg[layer_idx](pair)
+        agg = torch.zeros_like(x)
+        agg.index_add_(0, dst, m)
+        x = x + agg
+        x = self.norm[layer_idx](x)
+        return x
+
+    def _cross(self, x_a, x_b, li):
+        q = self.cross_q[li](x_a); k = self.cross_k[li](x_b); v = self.cross_v[li](x_b)
+        att = (q @ k.T) / (self.hidden ** 0.5)
+        att = F.softmax(att, dim=-1)
+        return x_a + att @ v
+
+    def forward(self, f_a, e_a, f_b, e_b):
+        x_a = self.enc(f_a); x_b = self.enc(f_b)
+        for li in range(len(self.msg)):
+            x_a = self._graph_step(x_a, e_a, li)
+            x_b = self._graph_step(x_b, e_b, li)
+        for li in range(len(self.cross_q)):
+            x_a_new = self._cross(x_a, x_b, li)
+            x_b_new = self._cross(x_b, x_a, li)
+            x_a = self.norm[len(self.msg) + li](x_a_new)
+            x_b = self.norm[len(self.msg) + li](x_b_new)
+        match_a = torch.sigmoid(self.match_head(x_a)).squeeze(-1)
+        match_b = torch.sigmoid(self.match_head(x_b)).squeeze(-1)
+        sim = (x_a @ x_b.T) / (self.hidden ** 0.5)
+        return sim, match_a, match_b
+
+
+def _log_sinkhorn(log_M, n_iter: int = 20):
+    for _ in range(n_iter):
+        log_M = log_M - torch.logsumexp(log_M, dim=1, keepdim=True)
+        log_M = log_M - torch.logsumexp(log_M, dim=0, keepdim=True)
+    return log_M
+
+
+def _assignment(sim, dustbin, n_iter=20):
+    Na, Nb = sim.shape
+    db_row = dustbin.expand(Na, 1)
+    db_col = dustbin.expand(1, Nb + 1)
+    aug = torch.cat([torch.cat([sim, db_row], dim=1), db_col], dim=0)
+    log_M = _log_sinkhorn(aug, n_iter=n_iter)
+    return log_M.exp()
+
+
+def _pair_loss(sim, dustbin, corr_idx, n_a, n_b):
+    P = _assignment(sim, dustbin)
+    loss = 0.0
+    n_matched = corr_idx.shape[0]
+    for i, j in corr_idx:
+        loss = loss - torch.log(P[i, j] + 1e-9)
+    # dustbin loss for unmatched
+    matched_a = set(int(i) for i, _ in corr_idx.tolist())
+    matched_b = set(int(j) for _, j in corr_idx.tolist())
+    for i in range(n_a):
+        if i not in matched_a:
+            loss = loss - torch.log(P[i, -1] + 1e-9)
+    for j in range(n_b):
+        if j not in matched_b:
+            loss = loss - torch.log(P[-1, j] + 1e-9)
+    return loss / max(1, (n_a + n_b))
+
+
+def _train_self_supervised(pts_hcr_um, feat_fn, n_iter=150, cube_um=400.0,
+                           k_neighbours=8, rng_seed=0):
+    rng = np.random.default_rng(rng_seed)
+    torch.manual_seed(rng_seed)
+    # Build the first sample to infer dims
+    w = sample_warped_pair(pts_hcr_um, rng=rng, cube_um=cube_um)
+    f_src = feat_fn(w.source_um, pts_hcr_um)
+    f_dst = feat_fn(w.warped_um, pts_hcr_um)
+    in_dim = f_src.shape[1]
+    model = GNNMatcher(in_dim=in_dim, hidden=48, n_layers=3, cross_layers=2)
+    opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+    losses = []
+    for it in range(n_iter):
+        w = sample_warped_pair(pts_hcr_um, rng=rng, cube_um=cube_um)
+        if len(w.correspondence) < 5:
+            continue
+        f_src = feat_fn(w.source_um, pts_hcr_um)
+        f_dst = feat_fn(w.warped_um, pts_hcr_um)
+        e_src = _build_knn_graph(w.source_um, k=k_neighbours)
+        e_dst = _build_knn_graph(w.warped_um, k=k_neighbours)
+        f_src_t = torch.as_tensor(f_src, dtype=torch.float32)
+        f_dst_t = torch.as_tensor(f_dst, dtype=torch.float32)
+        e_src_t = torch.as_tensor(e_src, dtype=torch.long)
+        e_dst_t = torch.as_tensor(e_dst, dtype=torch.long)
+        corr_t = torch.as_tensor(w.correspondence, dtype=torch.long)
+        sim, _, _ = model(f_src_t, e_src_t, f_dst_t, e_dst_t)
+        loss = _pair_loss(sim, model.dustbin, corr_t, len(w.source_um), len(w.warped_um))
+        opt.zero_grad(); loss.backward(); opt.step()
+        losses.append(float(loss.item()))
+    return model, losses
+
+
+def _simple_features(pts_um, ref_pts_um=None, k=8):
+    """Very simple F6-like features computed locally per-sample for the warp
+    pairs (does not call the full F6 extractor because each synthetic warp
+    has no surface fit).  Uses k-NN distances + angles.
+    """
+    from sklearn.neighbors import NearestNeighbors
+    n = len(pts_um)
+    knn = NearestNeighbors(n_neighbors=min(k + 1, n)).fit(pts_um)
+    dists, idx = knn.kneighbors(pts_um)
+    dists = dists[:, 1:]; idx = idx[:, 1:]
+    # median spacing for normalisation
+    med = float(np.median(dists[:, 0])) + 1e-9
+    norm_d = dists / med
+    # sorted elevation angles (using a fixed "up" as +z axis of ptsu_m)
+    up = np.array([1.0, 0.0, 0.0])  # (z,y,x) →  +z means toward pia opposite
+    vec = pts_um[idx] - pts_um[:, None, :]  # (N, k, 3)
+    vec_n = vec / (np.linalg.norm(vec, axis=-1, keepdims=True) + 1e-9)
+    elev = np.arcsin(np.clip(vec_n @ up, -1, 1))  # (N, k)
+    elev_sorted = np.sort(elev, axis=1)
+    # inter-ROI distance ranks
+    F = np.concatenate([norm_d, elev_sorted], axis=1)
+    return F.astype(np.float32)
+
+
+@register_candidate("G1")
+def run_g1(s, *, n_train_iter=120, k=8, use_f6=True) -> CoregResult:
+    cz_um, cz_ids = centroids_um(s, "cz")
+    hcr_um, hcr_ids = centroids_um(s, "hcr_gfp")
+
+    # Self-supervised train on synthetic warps of HCR GFP+ cloud.
+    model, losses = _train_self_supervised(hcr_um, _simple_features,
+                                            n_iter=n_train_iter, k_neighbours=k)
+
+    # Inference — run model on actual (cz_init, hcr) with F6 features.
+    if use_f6:
+        Fc, names, _ = extract_cell_features(s, "cz")
+        Fg, _, _ = extract_cell_features(s, "hcr_gfp")
+        inv = invariant_feature_mask(names)
+        keep = inv & ~np.isnan(Fc).any(0) & ~np.isnan(Fg).any(0)
+        mu = np.nanmean(Fg[:, keep], 0); sd = np.nanstd(Fg[:, keep], 0) + 1e-6
+        fc = (Fc[:, keep] - mu) / sd
+        fg = (Fg[:, keep] - mu) / sd
+        # Project down to the training dim by taking the first few columns so shapes match
+        target_dim = model.enc[0].in_features
+        fc_d = fc[:, :target_dim] if fc.shape[1] >= target_dim else np.pad(fc, ((0, 0), (0, target_dim - fc.shape[1])))
+        fg_d = fg[:, :target_dim] if fg.shape[1] >= target_dim else np.pad(fg, ((0, 0), (0, target_dim - fg.shape[1])))
+    else:
+        fc_d = _simple_features(cz_um)
+        fg_d = _simple_features(hcr_um)
+
+    e_cz = _build_knn_graph(cz_um, k=k)
+    e_hcr = _build_knn_graph(hcr_um, k=k)
+    with torch.no_grad():
+        sim, mat_a, mat_b = model(
+            torch.as_tensor(fc_d, dtype=torch.float32),
+            torch.as_tensor(e_cz, dtype=torch.long),
+            torch.as_tensor(fg_d, dtype=torch.float32),
+            torch.as_tensor(e_hcr, dtype=torch.long),
+        )
+        P = _assignment(sim, model.dustbin, n_iter=30)
+
+    P_core = P[:-1, :-1].numpy()
+    rows = []
+    for i in range(len(cz_ids)):
+        j = int(np.argmax(P_core[i]))
+        mass = float(P_core[i, j])
+        dustmass = float(P[i, -1].item())
+        if mass < dustmass or mass < 1e-4:
+            continue
+        conf = mass / (mass + dustmass)
+        rows.append(dict(
+            cz_id=int(cz_ids[i]), hcr_id=int(hcr_ids[j]),
+            confidence=float(conf),
+            cz_x_um=float(cz_um[i, 2]), cz_y_um=float(cz_um[i, 1]), cz_z_um=float(cz_um[i, 0]),
+            hcr_x_um=float(hcr_um[j, 2]), hcr_y_um=float(hcr_um[j, 1]), hcr_z_um=float(hcr_um[j, 0]),
+        ))
+    df = pd.DataFrame(rows)
+    if len(df):
+        df = df.sort_values("confidence", ascending=False).drop_duplicates("hcr_id", keep="first")
+        df = df.sort_values("cz_id").reset_index(drop=True)
+    return CoregResult(
+        pairs_df=df, confidence=float(df["confidence"].median()) if len(df) else 0.0,
+        transform=None,
+        diagnostics=dict(train_loss_final=(losses[-1] if losses else None),
+                         n_train_iter=n_train_iter, k=k),
+    )

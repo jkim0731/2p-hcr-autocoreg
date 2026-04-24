@@ -1,0 +1,72 @@
+"""Investigate column-top z distribution for 755252 and 767022 (the
+subjects where the clamp over-lifts).  Compare with 767018 (where
+clamp works well).
+"""
+from __future__ import annotations
+import sys, importlib.util
+from pathlib import Path
+import numpy as np
+import pandas as pd
+
+sys.path.insert(0, "/root/capsule/code/dev_code")
+
+_spec = importlib.util.spec_from_file_location(
+    "img_surface_l2",
+    str(Path("/root/capsule/code/dev_code") / "03_image_based_surface.py"))
+_mod = importlib.util.module_from_spec(_spec); sys.modules["img_surface_l2"] = _mod
+_spec.loader.exec_module(_mod)
+
+from benchmark_analysis import load_hcr_combined
+from benchmark_data_loader import hcr_px_to_um, load_subject
+
+for sid in ["755252", "767018", "767022"]:
+    print(f"=== {sid} ===", flush=True)
+    s = load_subject(sid)
+    vol, xy_um, z_um, channels = load_hcr_combined(s, level=4)
+    pts = hcr_px_to_um(s.hcr_centroids[["z_px","y_px","x_px"]].values, s)[:, [2,1,0]]
+
+    # Get column tops via the default pipeline (anchor→tops)
+    res = _mod.estimate_surface_and_l2_image_based(
+        vol, z_um, xy_um,
+        target_quantile=0.70,
+        column_margin=0.25,
+        anchor_margin=0.05,
+        band_um=150.0,
+        clamp_min_per_tile=100000,  # disable clamp (we just need tops)
+    )
+    if res.surface is None or res.tile_records is None:
+        print("  no surface"); continue
+    tr = res.tile_records
+    xs, ys, zs = tr.x_um.values, tr.y_um.values, tr.z_onset_um.values
+
+    # Histogram of z
+    cells_z = pts[:, 2]
+    pia_est = np.percentile(cells_z, 1) - 3.0
+    print(f"  n_tops={len(xs)} cell_p1={np.percentile(cells_z,1):.0f} pia_est={pia_est:.0f}")
+    print(f"  tops z quartiles: p1={np.percentile(zs,1):.0f} p5={np.percentile(zs,5):.0f} "
+          f"p25={np.percentile(zs,25):.0f} p50={np.percentile(zs,50):.0f} "
+          f"p75={np.percentile(zs,75):.0f} p95={np.percentile(zs,95):.0f}")
+
+    # Per-tile 10%-ile analysis
+    xb = (xs // 120.0).astype(int); yb = (ys // 120.0).astype(int)
+    key = yb * 100000 + xb
+    df = pd.DataFrame({"k": key, "z": zs})
+    agg = df.groupby("k").agg(z10=("z", lambda v: float(np.quantile(v, 0.1))),
+                              z50=("z", "median"),
+                              z90=("z", lambda v: float(np.quantile(v, 0.9))),
+                              n=("z", "size"))
+    agg = agg[agg["n"] >= 5]
+    print(f"  n_tiles={len(agg)}")
+    print(f"  tile z10: min={agg['z10'].min():.0f} p5={np.percentile(agg['z10'],5):.0f} "
+          f"p50={agg['z10'].median():.0f} p95={np.percentile(agg['z10'],95):.0f}")
+    print(f"  tile z50: min={agg['z50'].min():.0f} p5={np.percentile(agg['z50'],5):.0f} "
+          f"p50={agg['z50'].median():.0f} p95={np.percentile(agg['z50'],95):.0f}")
+
+    # Count tiles where z10 << z50 (outlier-driven low z10)
+    spread = agg['z50'] - agg['z10']
+    print(f"  z50-z10 spread: p50={spread.median():.0f} p95={spread.quantile(0.95):.0f} "
+          f"max={spread.max():.0f}")
+
+    # Per-tile spread > 50 µm (autofluorescence-dominated)
+    autofl_tiles = spread > 50
+    print(f"  tiles with spread>50: {autofl_tiles.sum()}/{len(agg)}")

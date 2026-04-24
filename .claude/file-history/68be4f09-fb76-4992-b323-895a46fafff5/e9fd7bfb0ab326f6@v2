@@ -1,0 +1,179 @@
+"""Smart clamp: detect bimodal tops in each tile, use deep cluster's p10.
+
+For each tile:
+- Sort tops by z
+- Find largest gap between consecutive z values
+- If gap > GAP_TH (e.g., 60µm) AND deep cluster has enough points (>= MIN_DEEP),
+  take p10 of the DEEP cluster only; else p10 of all tops.
+
+This should:
+- Keep clean subjects intact (unimodal → no change)
+- Fix 755252 (AF vs pia are separated, reject AF cluster)
+"""
+from __future__ import annotations
+import sys, importlib.util, os
+from pathlib import Path
+import numpy as np
+import pandas as pd
+os.environ["PYTHONUNBUFFERED"] = "1"
+
+sys.path.insert(0, "/root/capsule/code/dev_code")
+_spec = importlib.util.spec_from_file_location(
+    "img_surface_l2",
+    str(Path("/root/capsule/code/dev_code") / "03_image_based_surface.py"))
+_mod = importlib.util.module_from_spec(_spec); sys.modules["img_surface_l2"] = _mod
+_spec.loader.exec_module(_mod)
+
+from benchmark_analysis import load_hcr_combined
+from benchmark_data_loader import hcr_px_to_um, load_subject
+
+
+def sz(s, x, y):
+    return (s["a"]*x + s["b"]*y + s["c"]
+            + s.get("p",0)*x*x + s.get("q",0)*x*y + s.get("r",0)*y*y)
+
+
+def eval_surf(s, pts):
+    if s is None: return np.nan, np.nan, np.nan
+    zs = sz(s, pts[:,0], pts[:,1])
+    depth = pts[:,2] - zs
+    n = len(depth); above = (depth < 0).sum() / n
+    edges = np.arange(-200, 404, 5.0)
+    h, _ = np.histogram(depth, bins=edges)
+    density = h / (5.0 * max(n, 1))
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    bulk = density[(centers >= 50) & (centers <= 200)].mean()
+    onset = np.nan
+    if bulk > 0:
+        for c, d in zip(centers, density):
+            if c >= 0 and d >= 0.5 * bulk:
+                onset = float(c); break
+    return s["c"], above, onset
+
+
+HCR = ["755252", "767018", "767022", "782149", "788406", "790322"]
+
+
+def smart_tile_p10(zs_in_tile, gap_th_um=60.0, min_deep_frac=0.20, p=0.10):
+    """Return p10 of the deep cluster if gap found, else global p10."""
+    if len(zs_in_tile) < 5:
+        return float(np.quantile(zs_in_tile, p)) if len(zs_in_tile) else np.nan
+    z_sorted = np.sort(zs_in_tile)
+    diffs = np.diff(z_sorted)
+    max_gap_idx = int(np.argmax(diffs))
+    max_gap = diffs[max_gap_idx]
+    if max_gap > gap_th_um:
+        # Split into shallow [:max_gap_idx+1] and deep [max_gap_idx+1:]
+        deep = z_sorted[max_gap_idx + 1:]
+        if len(deep) >= max(3, int(min_deep_frac * len(z_sorted))):
+            return float(np.quantile(deep, p))
+    return float(np.quantile(z_sorted, p))
+
+
+def smart_clamp(surface, xs, ys, zs, tile_um=120.0, gap_th_um=60.0,
+                min_deep_frac=0.20, within_q=0.10, safety=3.0,
+                min_per_tile=5, lift_iqr_k=1.5):
+    if len(xs) < 50:
+        return surface, 0.0, 0
+    # density filter using the module's helper
+    keep = _mod._filter_tops_by_density(xs, ys, zs, radius_um=30.0,
+                                        min_neighbors=3)
+    if keep.sum() < 50:
+        return surface, 0.0, 0
+    xs_f, ys_f, zs_f = xs[keep], ys[keep], zs[keep]
+    xb = (xs_f // tile_um).astype(int)
+    yb = (ys_f // tile_um).astype(int)
+    key = yb * 100000 + xb
+    df = pd.DataFrame({"k": key, "x": xs_f, "y": ys_f, "z": zs_f})
+    tiles = []
+    for k, sub in df.groupby("k"):
+        if len(sub) < min_per_tile: continue
+        tz = smart_tile_p10(sub["z"].values, gap_th_um=gap_th_um,
+                            min_deep_frac=min_deep_frac, p=within_q)
+        tx = float(sub["x"].median()); ty = float(sub["y"].median())
+        tiles.append((tx, ty, tz))
+    if not tiles:
+        return surface, 0.0, 0
+    tx = np.array([t[0] for t in tiles])
+    ty = np.array([t[1] for t in tiles])
+    tz = np.array([t[2] for t in tiles])
+    plane_z = _mod._surface_z(surface, tx, ty)
+    deficit = plane_z - tz
+    pos = deficit[deficit > 0]
+    if len(pos) == 0:
+        lift = 0.0
+    else:
+        q_lift = float(pos.max())
+        if lift_iqr_k > 0 and len(pos) >= 50:
+            q25, q75 = np.quantile(pos, [0.25, 0.75])
+            fence = float(q75 + float(lift_iqr_k) * (q75 - q25))
+            lift = min(q_lift, fence)
+        else:
+            lift = q_lift
+    out = dict(surface)
+    out["c"] = float(out["c"] - lift - safety)
+    return out, lift, len(tiles)
+
+
+def run_with_smart_clamp(vol, z_um, xy_um, gap_th=60.0, tq=0.85):
+    # Replicate pipeline up to end of Stage 4, then apply smart clamp.
+    sx = max(1, int(round(10.0 / xy_um)))
+    vol_sub = vol[:, ::sx, ::sx].astype(np.float32, copy=False)
+    _, Ys, Xs = vol_sub.shape
+    xs_col = np.arange(Xs, dtype=np.float32) * sx * xy_um
+    ys_col = np.arange(Ys, dtype=np.float32) * sx * xy_um
+    xx, yy = np.meshgrid(xs_col, ys_col)
+
+    anchor_top, _, _ = _mod._per_column_top_in_band(
+        vol_sub, z_um, None, None,
+        relative_margin=0.05, min_signal_abs_frac=0.20, min_thick_um=15.0)
+    mask_a = np.isfinite(anchor_top)
+    if mask_a.sum() < 50:
+        anchor = {"a": 0.0, "b": 0.0, "c": float(vol.shape[0]) * z_um * 0.5,
+                  "p": 0.0, "q": 0.0, "r": 0.0, "tilt_deg": 0.0, "n_points": 0}
+    else:
+        za = anchor_top[mask_a].ravel().astype(np.float64)
+        med_z = float(np.median(za))
+        mad_z = float(np.median(np.abs(za - med_z))) + 1e-6
+        keep = np.abs(za - med_z) <= 6.0 * 1.4826 * mad_z
+        xa = xx[mask_a].ravel().astype(np.float64)[keep]
+        ya = yy[mask_a].ravel().astype(np.float64)[keep]
+        zat = za[keep]
+        anchor = _mod._robust_plane_fit(xa, ya, zat)
+        if abs(anchor["tilt_deg"]) > 25.0:
+            anchor = {"a": 0.0, "b": 0.0, "c": float(np.median(zat)),
+                      "p": 0.0, "q": 0.0, "r": 0.0, "tilt_deg": 0.0,
+                      "n_points": int(len(zat))}
+
+    anchor_zz = _mod._surface_z(anchor, xx, yy).astype(np.float32)
+    z_low = anchor_zz - 150.0; z_high = anchor_zz + 150.0
+    top_z, _, _ = _mod._per_column_top_in_band(
+        vol_sub, z_um, z_low, z_high,
+        relative_margin=0.25, min_signal_abs_frac=0.20, min_thick_um=10.0)
+
+    mask = np.isfinite(top_z)
+    if mask.sum() < 50:
+        return None, 0
+    xs_fit = xx[mask].ravel().astype(np.float64)
+    ys_fit = yy[mask].ravel().astype(np.float64)
+    zs_fit = top_z[mask].ravel().astype(np.float64)
+    surface = _mod._quadratic_quantile_fit(xs_fit, ys_fit, zs_fit,
+                                           target_quantile=tq)
+    surface, lift, n_tiles = smart_clamp(
+        surface, xs_fit, ys_fit, zs_fit,
+        tile_um=120.0, gap_th_um=gap_th,
+        min_deep_frac=0.20, within_q=0.10)
+    surface["clamp_lift_um"] = float(lift)
+    return surface, n_tiles
+
+
+for sid in HCR:
+    print(f"=== {sid} ===", flush=True)
+    s = load_subject(sid)
+    vol, xy_um, z_um, channels = load_hcr_combined(s, level=4)
+    pts = hcr_px_to_um(s.hcr_centroids[["z_px","y_px","x_px"]].values, s)[:, [2,1,0]]
+    for gap_th in [40, 60, 80, 100, 150]:
+        surf, nt = run_with_smart_clamp(vol, z_um, xy_um, gap_th=gap_th, tq=0.85)
+        c, a, o = eval_surf(surf, pts)
+        lift = surf.get("clamp_lift_um", 0) if surf else 0
+        print(f"  smart clamp gap={gap_th} tq=0.85: c={c:6.1f} lift={lift:5.1f} above={a:.4f} onset={o} (n_tiles={nt})", flush=True)

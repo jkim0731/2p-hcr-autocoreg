@@ -1,0 +1,19 @@
+  load z-stack: (450, 512, 512) float32 in 1.0s  range=[0,16118]
+  gaussian smooth (1, 1.5, 1.5): 4.2s
+  seeded 932 markers
+  bg_thresh=635  mask voxels=112,066,558 (95.0%)
+  watershed: 117.1s  uniq_labels=933
+  cells_labeled: 932 / 932
+  vol_px: median=84320  p10=5  p90=300245
+  vol_um3: median=51301  p10=3  p90=182669
+  wrote /root/capsule/code/full_automatic_execution_01/sessions/48_cz_watershed/cz_labels_788406.tif
+  cz_id=326: n_vox=222350  bbox_um=(162.0, 92.8, 64.0)
+  cz_id=248: n_vox=132126  bbox_um=(124.0, 60.8, 60.8)
+  cz_id=877: n_vox=107530  bbox_um=(96.0, 67.9, 49.1)
+  cz_id=205: n_vox=113315  bbox_um=(118.0, 44.5, 50.7)
+  cz_id=859: n_vox=75635  bbox_um=(94.0, 46.8, 39.8)
+  cz_id=284: n_vox=30  bbox_um=(12.0, 1.6, 3.1)
+  cz_id=652: n_vox=54467  bbox_um=(88.0, 42.1, 38.2)
+  cz_id=15: n_vox=520570  bbox_um=(149.0, 86.6, 154.4)
+  cz_id=333: n_vox=236222  bbox_um=(167.0, 59.3, 82.7)
+  cz_id=32: n_vox=93859  bbox_um=(95.0, 49.1, 52.3)

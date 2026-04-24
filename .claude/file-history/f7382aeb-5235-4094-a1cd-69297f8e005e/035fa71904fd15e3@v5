@@ -1,0 +1,293 @@
+{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "id": "35c039dc",
+   "metadata": {},
+   "source": [
+    "# Session 04 / R1 / Subgoal 01 (v2) — GFP+ threshold\n",
+    "\n",
+    "**Goal.** Replace the hard `counts ≥ 5` GFP+ cutoff with a principled, **distribution-only** threshold. The legacy cutoff is both arbitrary and too low (54–68 % GFP+ on the four spot-data subjects), so R1's downstream estimators see far too many candidates.\n",
+    "\n",
+    "**Constraints (from the user).**\n",
+    "1. The method must derive the threshold from the per-subject distribution alone. *No fixed percentile or fraction* — future subjects without a coreg table must inherit the same rule.\n",
+    "2. Among distribution-driven methods, prefer the one producing the **highest** threshold while still covering ≥ 95% of the subject's `coreg_table.csv` HCR IDs.\n",
+    "3. The `coreg_table` is used *only* to validate. No method consults it when picking the threshold.\n",
+    "\n",
+    "**Scope.** Four spot-data subjects `788406, 790322, 767018, 782149`. Intensity-only subjects `755252, 767022` are out-of-scope — they carry no spot counts.\n",
+    "\n",
+    "**Sources.** Driver `dev_code/04_r1_subgoal_01_gfp_threshold.py`, metrics `sessions/04_R1_coarse_align/subgoal_01_gfp_threshold_results.json`, figures `sessions/04_R1_coarse_align/subgoal_01_figures/`."
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "d883a736",
+   "metadata": {},
+   "source": [
+    "## 1. Why the baseline fails\n",
+    "\n",
+    "`benchmark_data_loader._load_gfp()` applies `counts >= DEFAULT_GFP_MIN_SPOTS (=5)`, which sits at roughly the 25th percentile of spot-bearing cells. That puts **54–68 %** of *all* HCR cells into the GFP+ set — orders of magnitude above the expected sparse-label fraction and the main reason R1's 2-D GFP-density xcorr underperformed on XY translation (cf. `sessions/04_R1_coarse_align/log.md`).\n",
+    "\n",
+    "The manual pipeline's heuristic (`min_counts = matched_cells.counts.min() * 1.2`) is circular at R1 (no matches exist yet) and cannot be reused."
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "1eafada2",
+   "metadata": {},
+   "source": [
+    "## 2. Data characterisation"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "db83dfd3",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "from pathlib import Path\n",
+    "import json\n",
+    "import pandas as pd\n",
+    "from IPython.display import Image, Markdown, display\n",
+    "\n",
+    "SESSION = Path('/root/capsule/code/sessions/04_R1_coarse_align')\n",
+    "FIG = SESSION / 'subgoal_01_figures'\n",
+    "with open(SESSION / 'subgoal_01_gfp_threshold_results.json') as f:\n",
+    "    res = json.load(f)\n",
+    "per_subj = res['per_subject']\n",
+    "SUBJECTS = ['788406','790322','767018','782149']\n",
+    "pd.set_option('display.float_format', lambda v: f'{v:.3f}')\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "2bb676a3",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "rows = []\n",
+    "for sid in SUBJECTS:\n",
+    "    d = per_subj[sid]\n",
+    "    row = {\n",
+    "        'subject': sid,\n",
+    "        'n_hcr_total': d['n_hcr_total'],\n",
+    "        'n_spot_bearing': d['n_spot_bearing_cells'],\n",
+    "        'spot_bearing_frac': d['n_spot_bearing_cells']/d['n_hcr_total'],\n",
+    "        'n_coreg_rows': d['n_coreg_rows'],\n",
+    "    }\n",
+    "    row.update({f'count_{k}': v for k, v in d['raw_counts_percentiles'].items()})\n",
+    "    if d.get('coreg_counts_percentiles'):\n",
+    "        row.update({f'coreg_{k}': v for k, v in d['coreg_counts_percentiles'].items()})\n",
+    "    rows.append(row)\n",
+    "pd.DataFrame(rows).set_index('subject')"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "a320566a",
+   "metadata": {},
+   "source": [
+    "**Observations.**\n",
+    "- Spot-bearing cells are **70–80 %** of all HCR cells — there is no clean noise-floor below `counts=1` because cells with 0 spots are not written to the CSV at all.\n",
+    "- The `coreg_table.csv` HCR IDs are the most trustworthy reference we have. Their count distribution has `p1` in the **tens** and `p5`/`p10` well into the hundreds, so any threshold up to ~100 is expected to preserve ≥95 % coverage.\n",
+    "- This means a distribution-based method can aim quite high (≥ 80 counts) before it starts dropping canonical pairs."
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "859732b3",
+   "metadata": {},
+   "source": [
+    "## 3. Candidate strategies (all distribution-only)\n",
+    "\n",
+    "| ID | Description |\n",
+    "|---|---|\n",
+    "| baseline | `counts >= 5` (current default — reference only, not a candidate). |\n",
+    "| **A** | 2-component GMM on `log(counts ≥ 1)`, posterior crossover at P=0.5. |\n",
+    "| **A3** | 3-component GMM on `log(counts)` with 0-count cells encoded as `log(0.5)` to admit a background mode. |\n",
+    "| **B** | Otsu's between-class variance on `log(counts ≥ 1)`. |\n",
+    "| **C** | Kneedle elbow of sorted-descending counts (below-chord maximum). |\n",
+    "| **D** | Kittler–Illingworth min-error on `log(counts ≥ 1)`. |\n",
+    "| **Triangle** | Zack's triangle method on `log(counts ≥ 1)`. |\n",
+    "| **Yen** | Yen's maximum-entropy threshold on `log(counts ≥ 1)`. |\n",
+    "| **ISODATA** | Iterative-mean (Ridler–Calvard) on `log(counts ≥ 1)`. |\n",
+    "\n",
+    "**Deliberately excluded:** fixed-fraction / fixed-percentile strategies (\"top 15 %\", \"top 20 %\", etc.). They require a hand-picked value that cannot be generalised to future subjects without a coreg table."
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "0696032b",
+   "metadata": {},
+   "source": [
+    "## 4. Per-strategy metrics\n",
+    "\n",
+    "For each subject × strategy we record:\n",
+    "- `threshold_counts`: the integer cutoff the method picked.\n",
+    "- `gfp_frac`: fraction of all HCR cells that pass (informational).\n",
+    "- `coreg_coverage`: fraction of coreg-table HCR IDs that pass — the primary quality metric. Target ≥ 0.95."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "b7afad4b",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "def strategy_table(metric):\n",
+    "    rows = []\n",
+    "    names = list(per_subj[SUBJECTS[0]]['strategies'].keys())\n",
+    "    for name in names:\n",
+    "        row = {'strategy': name}\n",
+    "        for sid in SUBJECTS:\n",
+    "            row[sid] = per_subj[sid]['strategies'][name].get(metric)\n",
+    "        rows.append(row)\n",
+    "    return pd.DataFrame(rows).set_index('strategy')\n",
+    "\n",
+    "display(Markdown('**threshold_counts** — per-subject integer cutoff'))\n",
+    "display(strategy_table('threshold_counts'))\n",
+    "display(Markdown('**gfp_frac** — |GFP+| / n_hcr_total'))\n",
+    "display(strategy_table('gfp_frac'))\n",
+    "display(Markdown(f'**coreg_coverage** — target ≥ {res[\"coverage_target\"]:.2f}'))\n",
+    "display(strategy_table('coreg_coverage'))"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "0e177e9e",
+   "metadata": {},
+   "source": [
+    "## 5. Log-count histograms\n",
+    "\n",
+    "Grey bars = all spot-bearing cells (log-count axis). Blue bars = the subset that appears in `coreg_table.csv`. Vertical lines mark each strategy's chosen threshold."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "c8494067",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "display(Image(str(FIG / 'log_count_histograms.png')))"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "caf4feb9",
+   "metadata": {},
+   "source": [
+    "## 6. Winner selection\n",
+    "\n",
+    "Rule: of the distribution-driven strategies whose coreg coverage is ≥ 0.95 on **every** subject, pick the one with the highest `threshold_min` across subjects (tie-break by `threshold_mean`). Baseline is excluded from the ranking (kept as a reference only)."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "42630469",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "winners = res['winners_detail']\n",
+    "pd.DataFrame(winners).set_index('name')"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "db15bfe2",
+   "metadata": {},
+   "source": [
+    "### Verdict: **Joint_MirrorGauss_p0.1**\n",
+    "\n",
+    "The Yen max-entropy threshold on `log(counts ≥ 1)` produces a per-subject cutoff in the **84–156 counts** range. On every subject it retains ≥ 96 % of the coreg-table HCR IDs while cutting the GFP+ fraction to roughly **10–16 %** of all HCR cells — a ~4–6× reduction vs the baseline.\n",
+    "\n",
+    "The other passing strategies (A3, B, Isodata, A, Triangle) land much lower — 15–23 counts — and still admit 30–50 % of HCR cells. They pass the coverage bar only because they are permissive, and they leave the downstream R1 estimators in essentially the same regime as the baseline. Yen is the only method that translates the coreg-cell count distribution's natural separation into a high cutoff.\n",
+    "\n",
+    "Kneedle (C) and Kittler–Illingworth (D) are unstable on this histogram shape and are disqualified by coverage (C: min 0.944) or outright divergence (D flips between count=2 and count=1262 across subjects)."
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "2eaf9bc7",
+   "metadata": {},
+   "source": [
+    "### Why GMM/Otsu/Triangle under-cut\n",
+    "\n",
+    "The log-count distribution does not have two clean modes. The zero-count population is *absent* from the CSV (it's implicit), so methods that assume two populations **inside the spot-bearing data** find a split between weakly- and strongly-labelled cells — not between background and signal. That split sits at ~15–25 counts and is biologically too low. Triangle collapses to `counts = 2` because the histogram is monotonically decreasing. Yen works here because it maximises entropy across the log-count range, which on a heavy-tailed distribution naturally lands in the tail."
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "d698e067",
+   "metadata": {},
+   "source": [
+    "## 7. API wiring\n",
+    "\n",
+    "`benchmark_data_loader` now accepts:\n",
+    "\n",
+    "```python\n",
+    "load_subject(sid, gfp_threshold_method='yen_log')      # new default\n",
+    "load_subject(sid, gfp_threshold_method='counts_min',   # legacy\n",
+    "                  gfp_min_spots=5)\n",
+    "```\n",
+    "\n",
+    "The returned `SubjectData.gfp_min_spots` reflects the derived integer threshold (per subject), and `gfp_threshold_method` records the method used. The `fixed_frac` helper remains in the module for diagnostics only — it is no longer the default and is not used by the R1 benchmark."
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "da9af00d",
+   "metadata": {},
+   "source": [
+    "## 8. Validation & follow-ups\n",
+    "\n",
+    "1. **R1 re-validation.** `dev_code/04_r1_benchmark.py` was rerun with the new default; results land in `sessions/04_R1_coarse_align/r1_results.json` (see `log.md` for the before/after summary).\n",
+    "2. **Intensity-only subjects (755252, 767022).** Not affected by this change — they carry no spot counts. A parallel \"Yen on log(mean intensity)\" check is a follow-up subgoal.\n",
+    "3. **Cross-subject stability.** Yen's per-subject threshold range (84–156) is wider than A3's (21–31), but *proportionally* the resulting GFP+ fractions are much more consistent (10–16 % vs 31–54 %) — which is what the downstream estimators care about."
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "8a7b178f",
+   "metadata": {},
+   "source": [
+    "## 9. v2.2 addendum (2026-04-17) — Peak-Gauss p0.1 on log(density) supersedes yen_log_joint\n",
+    "\n",
+    "A further iteration (see `log.md` §Subgoal 01 + 02 v2.2) replaced the density leg of the joint Yen rule with a **rightmost-GMM-component lower-tail** estimator on `log(density>0)`:\n",
+    "\n",
+    "```python\n",
+    "# new loader default, see benchmark_data_loader._apply_count_threshold\n",
+    "load_subject(sid, gfp_threshold_method='peakgauss3_density_p0.1')\n",
+    "```\n",
+    "\n",
+    "Mechanism: fit 3-component GMM to `log(density>0)`, pick the rightmost component (signal peak, μ_max), threshold at `exp(μ + z_{0.001} · σ)` ≈ μ − 3.09 σ in log-space. No explicit count threshold (`>= 1` spot is required by definition of the CSV).\n",
+    "\n",
+    "**Before/after (spot subjects, v2.1 yen_log_joint → v2.2 peakgauss3_density_p0.1):**\n",
+    "\n",
+    "| subject | n_gfp v2.1 | n_gfp v2.2 | gfp_frac v2.1 | gfp_frac v2.2 | origin µm v2.1 | origin µm v2.2 |\n",
+    "|---|---|---|---|---|---|---|\n",
+    "| 788406 | 20 464 | **17 427** | 16.1 % | 13.7 % | 124.2 | **58.1** |\n",
+    "| 790322 | 14 907 | **10 131** | 14.0 %  | 9.5 % |  82.5 | **74.3** |\n",
+    "| 767018 | 10 322 |  **9 161** |  9.5 %  | 8.4 % | 133.4 | **127.0** |\n",
+    "| 782149 |  4 556 |  **3 831** | 11.6 %  | 9.8 % | 348.2 | **334.8** |\n",
+    "\n",
+    "Tighter on every subject while raising `coreg_cov_min` from 0.96 (yen_log_joint) to 0.99 (peakgauss3_density_p0.1). The rule is still distribution-only — `p=0.1` is a lower bound on the fitted signal Gaussian, not a percentile of the full population. See the updated subgoal-01 driver (`dev_code/04_r1_subgoal_01_gfp_threshold.py`) for Peak-Gauss and Mirror-Gauss variants, and `sessions/04_R1_coarse_align/subgoal_01_figures/` for the updated histograms with Gaussian-fit overlays.\n",
+    "\n",
+    "Subgoal 02 (intensity subjects 755252 / 767022) was addressed in parallel — see `notebooks/04_R1_subgoal_02_intensity_threshold.ipynb`."
+   ]
+  }
+ ],
+ "metadata": {
+  "kernelspec": {
+   "display_name": "Python 3",
+   "language": "python",
+   "name": "python3"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 5
+}

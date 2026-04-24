@@ -1,0 +1,108 @@
+"""Test auto-detection of bimodal tops + switch to first_substantial.
+
+Approach:
+1. Run anchor with `first` method → get anchor_first_tops, plane_first
+2. Run anchor with `first_substantial` → get anchor_sub_tops, plane_sub
+3. Compute diff = median(anchor_sub) - median(anchor_first)
+   This measures how far `first_substantial` pushes onset deeper than `first`.
+   Large diff → bimodal (short shallow runs exist that get filtered out).
+   Small diff → unimodal.
+4. Threshold diff > T → use first_substantial for everything. Else first.
+
+Goal: fix 755252 (where first picks AF, first_sub picks pia) without
+breaking clean subjects (where the two agree).
+"""
+from __future__ import annotations
+import sys, importlib.util, os
+from pathlib import Path
+import numpy as np
+os.environ["PYTHONUNBUFFERED"] = "1"
+
+sys.path.insert(0, "/root/capsule/code/dev_code")
+_spec = importlib.util.spec_from_file_location(
+    "img_surface_l2",
+    str(Path("/root/capsule/code/dev_code") / "03_image_based_surface.py"))
+_mod = importlib.util.module_from_spec(_spec); sys.modules["img_surface_l2"] = _mod
+_spec.loader.exec_module(_mod)
+
+from benchmark_analysis import load_hcr_combined
+from benchmark_data_loader import hcr_px_to_um, load_subject
+
+
+def sz(s, x, y):
+    return (s["a"]*x + s["b"]*y + s["c"]
+            + s.get("p",0)*x*x + s.get("q",0)*x*y + s.get("r",0)*y*y)
+
+
+def eval_surf(s, pts):
+    if s is None: return np.nan, np.nan, np.nan
+    zs = sz(s, pts[:,0], pts[:,1])
+    depth = pts[:,2] - zs
+    n = len(depth)
+    above = (depth < 0).sum() / n
+    edges = np.arange(-200, 404, 5.0)
+    h, _ = np.histogram(depth, bins=edges)
+    density = h / (5.0 * max(n, 1))
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    bulk = density[(centers >= 50) & (centers <= 200)].mean()
+    onset = np.nan
+    if bulk > 0:
+        for c, d in zip(centers, density):
+            if c >= 0 and d >= 0.5 * bulk:
+                onset = float(c); break
+    return s["c"], above, onset
+
+
+HCR_SUBJECTS = ["755252", "767018", "767022", "782149", "788406", "790322"]
+
+# Directly compute anchor_top with both methods to measure contamination gap
+def measure_contamination_gap(vol, z_um, xy_um, column_stride_um=10.0):
+    sx = max(1, int(round(column_stride_um / xy_um)))
+    vol_sub = vol[:, ::sx, ::sx].astype(np.float32, copy=False)
+    top_first, _, _ = _mod._per_column_top_in_band(
+        vol_sub, z_um, None, None,
+        relative_margin=0.05, min_signal_abs_frac=0.20,
+        min_thick_um=15.0, top_method="first")
+    top_sub, _, _ = _mod._per_column_top_in_band(
+        vol_sub, z_um, None, None,
+        relative_margin=0.05, min_signal_abs_frac=0.20,
+        min_thick_um=15.0, top_method="first_substantial",
+        top_substantial_frac=0.5)
+    first_valid = np.isfinite(top_first) if top_first is not None else np.zeros(0, dtype=bool)
+    sub_valid = np.isfinite(top_sub) if top_sub is not None else np.zeros(0, dtype=bool)
+    both = first_valid & sub_valid
+    if both.sum() < 50:
+        return 0.0, 0.0, 0, 0
+    # Compute diff only on matched columns
+    diff = top_sub[both] - top_first[both]
+    gap_med = float(np.median(diff))
+    gap_p90 = float(np.percentile(diff, 90))
+    return gap_med, gap_p90, int(first_valid.sum()), int(sub_valid.sum())
+
+
+for sid in HCR_SUBJECTS:
+    print(f"=== {sid} ===", flush=True)
+    s = load_subject(sid)
+    vol, xy_um, z_um, channels = load_hcr_combined(s, level=4)
+    pts = hcr_px_to_um(s.hcr_centroids[["z_px","y_px","x_px"]].values, s)[:, [2,1,0]]
+
+    gap_med, gap_p90, n_first, n_sub = measure_contamination_gap(vol, z_um, xy_um)
+    print(f"  contamination gap: median={gap_med:.1f}µm p90={gap_p90:.1f}µm "
+          f"(n_first={n_first}, n_sub={n_sub})", flush=True)
+
+    # Test: baseline vs first_substantial surf-only (at tq=0.85 for 790322 fix)
+    for name, kw in [
+        ("baseline (first, tq=0.70)", {}),
+        ("tq=0.85", {"target_quantile": 0.85}),
+        ("sub0.5 surf + tq=0.85", {"column_top_method": "first_substantial",
+                                   "column_top_substantial_frac": 0.5,
+                                   "target_quantile": 0.85}),
+        ("sub0.5 all + tq=0.85", {"column_top_method": "first_substantial",
+                                  "anchor_top_method": "first_substantial",
+                                  "column_top_substantial_frac": 0.5,
+                                  "anchor_top_substantial_frac": 0.5,
+                                  "target_quantile": 0.85}),
+    ]:
+        res = _mod.estimate_surface_and_l2_image_based(vol, z_um, xy_um, **kw)
+        c, a, o = eval_surf(res.surface, pts)
+        print(f"  {name:<30}: c={c:6.1f} lift={res.clamp_lift_um:5.1f} above={a:.4f} onset={o}", flush=True)

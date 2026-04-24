@@ -1,0 +1,253 @@
+"""Generate summary comparison plots for subgoal 01 & 02 notebooks.
+
+Produces four PNGs and one frontier scatter:
+
+  subgoal_01_figures/
+    gfp_frac_comparison.png       # per-subject GFP+ frac pre / v2.1 / v2.2 (spot)
+    origin_error_comparison.png   # per-subject R1 origin err pre / v2.1 / v2.2 (spot)
+
+  subgoal_02_figures/
+    gfp_frac_comparison.png       # intensity subjects pre / v2.2 + cov overlay
+    origin_error_comparison.png   # intensity subjects pre / v2.2 + pass bar
+    strategy_frontier.png         # frac_max vs cov_min over 17 strategies, winner highlighted
+
+All numbers match the v2.2 addendum table in
+``sessions/04_R1_coarse_align/log.md``. Anchored on the committed R1
+results JSON where possible (v2.2 origin errors) and on hard-coded
+historical values for the pre and v2.1 rows — those JSONs are either
+archived under other filenames or overwritten, and the tabulated values
+in `log.md` are the canonical record.
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+
+ROOT = Path("/root/capsule/code")
+SESS = ROOT / "sessions" / "04_R1_coarse_align"
+FIG_01 = SESS / "subgoal_01_figures"
+FIG_02 = SESS / "subgoal_02_figures"
+R1_JSON = SESS / "r1_results.json"
+SUBGOAL_02_JSON = SESS / "subgoal_02_intensity_threshold_results.json"
+
+
+SPOT_SUBJECTS = ["788406", "790322", "767018", "782149"]
+INTENSITY_SUBJECTS = ["755252", "767022"]
+
+# Per-subject GFP+ counts and R1 origin errors (µm) across threshold versions.
+# pre  = counts>=5 / no threshold (legacy)  (log.md §"Benchmark results (final R1)")
+# v2.1 = yen_log_joint (spot) / none (intensity)  (log.md §v2.1 addendum table)
+# v2.2 = peakgauss3_density_p0.1 / peakgauss3_mean_bg_p1  (log.md §v2.2 table)
+N_GFP = {
+    "788406": {"pre": 69680, "v2.1": 20464, "v2.2": 17427, "n_hcr": 127275},
+    "790322": {"pre": 72532, "v2.1": 14907, "v2.2": 10131, "n_hcr": 106379},
+    "767018": {"pre": 58959, "v2.1": 10322, "v2.2":  9161, "n_hcr": 108506},
+    "782149": {"pre": 25251, "v2.1":  4556, "v2.2":  3831, "n_hcr": 39291},
+    "755252": {"pre": 77785, "v2.1": 77785, "v2.2": 30804, "n_hcr": 84233},
+    "767022": {"pre": 72213, "v2.1": 72213, "v2.2": 14239, "n_hcr": 76336},
+}
+ORIGIN_ERR = {
+    "788406": {"pre":  98.2, "v2.1": 124.2, "v2.2":  58.1},
+    "790322": {"pre":  89.8, "v2.1":  82.5, "v2.2":  74.3},
+    "767018": {"pre": 135.6, "v2.1": 133.4, "v2.2": 127.0},
+    "782149": {"pre": 371.7, "v2.1": 348.2, "v2.2": 334.8},
+    "755252": {"pre":  71.5, "v2.1":  71.5, "v2.2": 123.6},
+    "767022": {"pre": 157.9, "v2.1": 157.9, "v2.2": 181.0},
+}
+
+
+def _verify_v2p2_origin_from_json() -> None:
+    """Cross-check hard-coded v2.2 origin errors vs the committed results JSON."""
+    if not R1_JSON.exists():
+        return
+    with open(R1_JSON) as f:
+        rows = json.load(f)
+    for row in rows:
+        sid = str(row["subject"])
+        expected = ORIGIN_ERR[sid]["v2.2"]
+        got = float(row["origin_err_um"])
+        if abs(got - expected) > 0.5:
+            raise AssertionError(
+                f"v2.2 origin_err mismatch for {sid}: json={got:.2f}, "
+                f"constant={expected:.2f}"
+            )
+
+
+def _bar_group(ax, subjects, series, colors, labels, ylabel, title,
+                   hline=None, hline_label=None):
+    n_series = len(series)
+    x = np.arange(len(subjects))
+    width = 0.8 / n_series
+    for i, (vals, col, lab) in enumerate(zip(series, colors, labels)):
+        offs = (i - (n_series - 1) / 2) * width
+        ax.bar(x + offs, vals, width=width, color=col, edgecolor="k",
+               linewidth=0.3, label=lab)
+    ax.set_xticks(x)
+    ax.set_xticklabels(subjects)
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    if hline is not None:
+        ax.axhline(hline, color="red", ls="--", lw=1.0,
+                   label=hline_label or f"target = {hline}")
+    ax.legend(fontsize=8)
+    ax.grid(axis="y", alpha=0.3)
+
+
+def plot_subgoal_01_gfp_frac() -> None:
+    FIG_01.mkdir(parents=True, exist_ok=True)
+    fig, ax = plt.subplots(figsize=(8.5, 4.0))
+    subjects = SPOT_SUBJECTS
+    pre = [100 * N_GFP[s]["pre"] / N_GFP[s]["n_hcr"] for s in subjects]
+    v21 = [100 * N_GFP[s]["v2.1"] / N_GFP[s]["n_hcr"] for s in subjects]
+    v22 = [100 * N_GFP[s]["v2.2"] / N_GFP[s]["n_hcr"] for s in subjects]
+    _bar_group(
+        ax, subjects,
+        series=[pre, v21, v22],
+        colors=["0.7", "C0", "C2"],
+        labels=["pre (counts≥5)", "v2.1 (yen_log_joint)",
+                "v2.2 (peakgauss3_density_p0.1)"],
+        ylabel="GFP+ % of HCR cells",
+        title="Subgoal 01 — GFP+ fraction per spot subject across threshold versions",
+    )
+    fig.tight_layout()
+    out = FIG_01 / "gfp_frac_comparison.png"
+    fig.savefig(out, dpi=130)
+    plt.close(fig)
+    print(f"wrote {out}")
+
+
+def plot_subgoal_01_origin_error() -> None:
+    fig, ax = plt.subplots(figsize=(8.5, 4.0))
+    subjects = SPOT_SUBJECTS
+    pre = [ORIGIN_ERR[s]["pre"] for s in subjects]
+    v21 = [ORIGIN_ERR[s]["v2.1"] for s in subjects]
+    v22 = [ORIGIN_ERR[s]["v2.2"] for s in subjects]
+    _bar_group(
+        ax, subjects,
+        series=[pre, v21, v22],
+        colors=["0.7", "C0", "C2"],
+        labels=["pre", "v2.1", "v2.2"],
+        ylabel="R1 origin error (µm)",
+        title="Subgoal 01 — R1 origin error per spot subject",
+        hline=100, hline_label="target ≤ 100 µm",
+    )
+    fig.tight_layout()
+    out = FIG_01 / "origin_error_comparison.png"
+    fig.savefig(out, dpi=130)
+    plt.close(fig)
+    print(f"wrote {out}")
+
+
+def plot_subgoal_02_gfp_frac() -> None:
+    FIG_02.mkdir(parents=True, exist_ok=True)
+    fig, ax = plt.subplots(figsize=(6.5, 4.0))
+    subjects = INTENSITY_SUBJECTS
+    pre = [100 * N_GFP[s]["pre"] / N_GFP[s]["n_hcr"] for s in subjects]
+    v22 = [100 * N_GFP[s]["v2.2"] / N_GFP[s]["n_hcr"] for s in subjects]
+    _bar_group(
+        ax, subjects,
+        series=[pre, v22],
+        colors=["0.7", "C2"],
+        labels=["pre (no threshold, 100 %)",
+                "v2.2 (peakgauss3_mean_bg_p1)"],
+        ylabel="GFP+ % of HCR cells",
+        title="Subgoal 02 — GFP+ fraction per intensity subject",
+    )
+    # Annotate each v2.2 bar with coreg coverage
+    cov_by_sid = {"755252": 0.933, "767022": 0.946}
+    x = np.arange(len(subjects))
+    width = 0.4
+    for i, s in enumerate(subjects):
+        ax.text(x[i] + width / 2, v22[i] + 1.0,
+                f"cov={cov_by_sid[s]:.3f}",
+                ha="center", va="bottom", fontsize=8, color="C2")
+    ax.set_ylim(0, 110)
+    fig.tight_layout()
+    out = FIG_02 / "gfp_frac_comparison.png"
+    fig.savefig(out, dpi=130)
+    plt.close(fig)
+    print(f"wrote {out}")
+
+
+def plot_subgoal_02_origin_error() -> None:
+    fig, ax = plt.subplots(figsize=(6.5, 4.0))
+    subjects = INTENSITY_SUBJECTS
+    pre = [ORIGIN_ERR[s]["pre"] for s in subjects]
+    v22 = [ORIGIN_ERR[s]["v2.2"] for s in subjects]
+    _bar_group(
+        ax, subjects,
+        series=[pre, v22],
+        colors=["0.7", "C2"],
+        labels=["pre (no threshold)", "v2.2 (peakgauss3_mean_bg_p1)"],
+        ylabel="R1 origin error (µm)",
+        title="Subgoal 02 — R1 origin error per intensity subject",
+        hline=100, hline_label="target ≤ 100 µm",
+    )
+    fig.tight_layout()
+    out = FIG_02 / "origin_error_comparison.png"
+    fig.savefig(out, dpi=130)
+    plt.close(fig)
+    print(f"wrote {out}")
+
+
+def plot_subgoal_02_frontier() -> None:
+    """Scatter of strategies on (coreg_cov_min, gfp_frac_max); winner starred."""
+    if not SUBGOAL_02_JSON.exists():
+        raise FileNotFoundError(SUBGOAL_02_JSON)
+    with open(SUBGOAL_02_JSON) as f:
+        res = json.load(f)
+    summary = res["cross_subject_summary"]
+
+    winner = "PeakGauss3_mean_bg_p1"  # v2.2 chosen, not the ranking-rule winner
+    rule_winner = "PeakGauss3_mean_bg_p0.1"  # subgoal-rule winner, for reference
+
+    fig, ax = plt.subplots(figsize=(8.0, 5.0))
+    for name, row in summary.items():
+        x = row["coreg_cov_min"]
+        y = row["gfp_frac_max"]
+        if x is None:
+            continue
+        is_winner = name == winner
+        is_rule = name == rule_winner
+        col = "C3" if is_winner else ("C1" if is_rule else "0.5")
+        size = 110 if is_winner or is_rule else 40
+        zorder = 5 if is_winner or is_rule else 2
+        ax.scatter(x, y, s=size, color=col, edgecolor="k", linewidth=0.6,
+                   zorder=zorder, label=None)
+        if is_winner or is_rule or name == "baseline_no_threshold":
+            ax.annotate(name, (x, y), xytext=(4, -4), textcoords="offset points",
+                        fontsize=7)
+
+    ax.axvline(0.95, color="red", ls="--", lw=1.0, label="cov_min target = 0.95")
+    ax.scatter([], [], s=110, color="C3", edgecolor="k", label=f"v2.2 chosen: {winner}")
+    ax.scatter([], [], s=110, color="C1", edgecolor="k",
+               label=f"subgoal-rule winner: {rule_winner}")
+    ax.scatter([], [], s=40, color="0.5", edgecolor="k", label="other strategies")
+    ax.set_xlabel("coreg_cov_min (min over 755252, 767022)")
+    ax.set_ylabel("gfp_frac_max (max over 755252, 767022)")
+    ax.set_title("Subgoal 02 — intensity strategies on the (coverage, stringency) frontier")
+    ax.legend(fontsize=8, loc="upper left")
+    ax.grid(alpha=0.3)
+    fig.tight_layout()
+    out = FIG_02 / "strategy_frontier.png"
+    fig.savefig(out, dpi=130)
+    plt.close(fig)
+    print(f"wrote {out}")
+
+
+def main() -> None:
+    _verify_v2p2_origin_from_json()
+    plot_subgoal_01_gfp_frac()
+    plot_subgoal_01_origin_error()
+    plot_subgoal_02_gfp_frac()
+    plot_subgoal_02_origin_error()
+    plot_subgoal_02_frontier()
+
+
+if __name__ == "__main__":
+    main()

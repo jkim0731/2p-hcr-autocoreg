@@ -1,0 +1,369 @@
+"""Session 03 — image-based curved surface estimator (simple).
+
+Two stages:
+
+  1. **Global baseline from the top 1–2 z-planes.**  The top slices
+     are always outside tissue.  Pool every voxel of those slices
+     across the entire image and compute a robust (median + 1.4826 ·
+     MAD) baseline.  That single threshold is used for every tile —
+     it's the image's own noise floor, not a per-tile or per-column
+     heuristic.
+
+  2. **Per-tile onset + quadratic fit.**  Tile the volume in XY; for
+     each tile compute a 1-D median intensity profile along z; find
+     the first z where the profile stays above
+     `baseline_mean + k · baseline_sigma` for at least
+     `min_thick_um` microns.  Fit a quadratic surface
+     ``z = a·x + b·y + c + p·x² + q·x·y + r·y²`` to the per-tile
+     onsets via IRLS-Huber (symmetric — the ROI clamp is out of
+     scope here).
+
+Rationale.  The previous iteration tried per-column percentile
+baselines inside an anchor band; the band runs into tissue, so the
+"baseline" percentile is contaminated and the threshold is wrong.
+Top-of-volume stats are always sampled from blank space, so the
+baseline is clean.
+
+No L2 estimation (dropped — CZ L2 was ambiguous in the side views).
+All thresholds distribution-driven.
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass, field
+from typing import Optional
+
+import numpy as np
+import pandas as pd
+from scipy.ndimage import gaussian_filter1d
+
+
+# ---------------------------------------------------------------------
+# Stage 1 — top-of-volume baseline
+# ---------------------------------------------------------------------
+
+def _global_top_baseline(
+    vol: np.ndarray,
+    *,
+    n_top_planes: int,
+    max_pad_frac: float = 0.95,
+) -> tuple[float, float, float]:
+    """Robust baseline (median, 1.4826·MAD) pooled over the top 1–2
+    z-slices across the whole image.
+
+    A slice whose fraction of exact-zero voxels exceeds
+    ``max_pad_frac`` is treated as pure padding and skipped.  After
+    that, exact-zero voxels (padding edges — e.g. half of the CZ z=0
+    slice is zero-padded around a non-rectangular ROI) are dropped
+    from the pool so the median reflects **the real blank region**,
+    not the padding:
+
+    * HCR combined volume — top slices are literally pure zero so we
+      fall back to ``sigma = 0.02·dyn_hint`` (dyn_hint = 99-th
+      percentile of the full volume).  Threshold then lives on the
+      volume's own dynamic range rather than on a noise estimate
+      that has collapsed.
+    * CZ volume — z = 0 is a half-padded slice of buffer + zeros;
+      z = 1 … onwards is the full buffer fluorescence ring above the
+      tissue.  Dropping the zeros yields a median at the buffer
+      intensity (∼400–2500 counts, subject-dependent) and a MAD
+      capturing the buffer's own pixel variability.
+
+    Returns (mean, sigma, dyn_hint).
+    """
+    Z = vol.shape[0]
+    n_top = max(1, min(n_top_planes, Z))
+    pool: list[np.ndarray] = []
+    for zi in range(n_top):
+        sl = vol[zi].astype(np.float32, copy=False).ravel()
+        if sl.size == 0:
+            continue
+        frac_zero = float(np.mean(sl == 0))
+        if frac_zero >= max_pad_frac:
+            continue  # pure padding plane — provides no information
+        nz = sl[sl > 0]
+        if nz.size:
+            pool.append(nz)
+
+    dyn_hint = float(np.percentile(vol, 99.0))
+    if not pool:
+        # Every top slice was pure padding — fall back entirely to
+        # the dynamic-range floor.
+        sigma = max(1e-6, 0.02 * dyn_hint) if dyn_hint > 0 else 1e-6
+        return 0.0, sigma, dyn_hint
+
+    vals = np.concatenate(pool)
+    med = float(np.median(vals))
+    mad = float(np.median(np.abs(vals - med)))
+    sigma = 1.4826 * mad
+    std_fallback = float(np.std(vals))
+    sigma = max(sigma, std_fallback)
+    if sigma < 1e-6 and dyn_hint > 0:
+        sigma = 0.02 * dyn_hint
+    elif sigma < 1e-6:
+        sigma = 1e-6
+    return med, sigma, dyn_hint
+
+
+# ---------------------------------------------------------------------
+# Stage 2 — per-tile onset
+# ---------------------------------------------------------------------
+
+def _first_sustained_above(
+    profile: np.ndarray, thr: float, min_thick_px: int,
+    z_hi: int,
+) -> Optional[int]:
+    run = 0
+    for zi in range(min(z_hi, len(profile))):
+        if np.isfinite(profile[zi]) and profile[zi] > thr:
+            run += 1
+            if run >= min_thick_px:
+                return zi - min_thick_px + 1
+        else:
+            run = 0
+    return None
+
+
+def _collect_tile_onsets(
+    vol: np.ndarray,
+    z_um: float,
+    xy_um: float,
+    *,
+    tile_py: int,
+    tile_px: int,
+    z_max_search: int,
+    thr: float,
+    min_thick_px: int,
+    sigma_px: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[dict]]:
+    Z, Y, X = vol.shape
+    xs, ys, zs = [], [], []
+    records = []
+    for iy in range(0, Y, tile_py):
+        for ix in range(0, X, tile_px):
+            sub = vol[:, iy:iy + tile_py, ix:ix + tile_px]
+            if sub.size == 0:
+                continue
+            prof = np.median(
+                sub.reshape(Z, -1).astype(np.float32, copy=False), axis=1)
+            prof_s = gaussian_filter1d(prof, sigma=sigma_px, mode="nearest")
+            z_hit = _first_sustained_above(prof_s, thr, min_thick_px,
+                                           z_hi=z_max_search)
+            rec = {
+                "iy": iy, "ix": ix,
+                "prof_peak": float(np.nanmax(prof_s)),
+                "z_onset_px": int(z_hit) if z_hit is not None else -1,
+            }
+            records.append(rec)
+            if z_hit is None:
+                continue
+            xs.append((ix + tile_px / 2.0) * xy_um)
+            ys.append((iy + tile_py / 2.0) * xy_um)
+            zs.append(z_hit * z_um)
+    return (np.asarray(xs), np.asarray(ys), np.asarray(zs), records)
+
+
+# ---------------------------------------------------------------------
+# Stage 3 — quadratic surface fit (IRLS-Huber)
+# ---------------------------------------------------------------------
+
+def _quadratic_huber_fit(
+    xs: np.ndarray, ys: np.ndarray, zs: np.ndarray,
+    n_iter: int = 12,
+) -> dict:
+    """Fit ``z = a·x + b·y + c + p·x² + q·x·y + r·y²`` with IRLS-Huber.
+
+    Centered for conditioning; coefficients returned in absolute frame.
+    """
+    x0 = float(xs.mean()); y0 = float(ys.mean())
+    u = xs - x0; v = ys - y0
+    X = np.column_stack([u, v, u * u, u * v, v * v, np.ones_like(u)])
+    beta = np.linalg.lstsq(X, zs, rcond=None)[0]
+    for _ in range(n_iter):
+        r = zs - X @ beta
+        sig = 1.4826 * np.median(np.abs(r - np.median(r))) + 1e-6
+        w = np.where(np.abs(r) <= 1.345 * sig, 1.0,
+                     1.345 * sig / (np.abs(r) + 1e-9))
+        sw = np.sqrt(w)
+        beta_new = np.linalg.lstsq(sw[:, None] * X, sw * zs, rcond=None)[0]
+        if np.linalg.norm(beta_new - beta) < 1e-6:
+            beta = beta_new
+            break
+        beta = beta_new
+    a_c, b_c, p, q_c, r_c, c_c = beta
+    a_abs = a_c - 2 * p * x0 - q_c * y0
+    b_abs = b_c - 2 * r_c * y0 - q_c * x0
+    c_abs = (c_c - a_c * x0 - b_c * y0
+             + p * x0 * x0 + q_c * x0 * y0 + r_c * y0 * y0)
+    tilt = math.degrees(math.atan(math.hypot(a_abs, b_abs)))
+    resid = zs - X @ beta
+    return {
+        "a": float(a_abs), "b": float(b_abs), "c": float(c_abs),
+        "p": float(p), "q": float(q_c), "r": float(r_c),
+        "tilt_deg": float(tilt),
+        "n_points": int(len(zs)),
+        "resid_rms_um": float(np.sqrt(np.mean(resid * resid))),
+        "resid_mad_um": float(1.4826 * np.median(np.abs(resid))),
+    }
+
+
+def _surface_z(surface: dict, x, y):
+    x = np.asarray(x, dtype=float); y = np.asarray(y, dtype=float)
+    return (surface["a"] * x + surface["b"] * y + surface["c"]
+            + surface.get("p", 0.0) * x * x
+            + surface.get("q", 0.0) * x * y
+            + surface.get("r", 0.0) * y * y)
+
+
+# ---------------------------------------------------------------------
+# Main entry
+# ---------------------------------------------------------------------
+
+@dataclass
+class SurfaceResult:
+    surface: Optional[dict]
+    baseline_mean: float
+    baseline_sigma: float
+    surf_thr: float
+    dyn_hint: float
+    n_tiles_total: int
+    n_surface_tiles: int
+    tile_records: pd.DataFrame
+    z_um: float
+    xy_um: float
+    # legacy / compatibility fields (L2 removed)
+    anchor_plane: Optional[dict] = None
+    l2: Optional[dict] = None
+    l2_thr: float = float("nan")
+    n_l2_tiles: int = 0
+    n_column_tops: int = 0
+    surf_thr_anchor: float = 0.0
+    target_quantile: float = float("nan")
+
+
+def estimate_surface_and_l2_image_based(
+    vol: np.ndarray,
+    z_um: float,
+    xy_um: float,
+    *,
+    # Baseline
+    n_top_planes: int = 2,
+    k_surface: float = 6.0,
+    relative_margin_min: float = 0.02,
+    max_pad_frac: float = 0.95,
+    # Per-tile onset
+    xy_tile_um: float = 80.0,
+    surface_search_frac: float = 0.30,
+    min_thick_surface_um: float = 12.0,
+    smooth_sigma_um: float = 6.0,
+    # Accepted-but-ignored (kept so old callers don't break)
+    mask_bg_for_l2=None,
+    **_ignored,
+) -> SurfaceResult:
+    """Image-only curved surface estimator.
+
+    Steps:
+    1. Compute a global baseline (mean, sigma) from the top
+       ``n_top_planes`` z-slices pooled across the whole image.
+    2. Threshold: ``max(baseline + k · sigma,
+                       baseline + relative_margin_min · dyn_hint)``.
+    3. Per tile (``xy_tile_um`` square): 1-D median profile, find the
+       first z staying above the threshold for ``min_thick_surface_um``
+       microns within the top ``surface_search_frac`` of the volume.
+    4. Fit a quadratic surface to the per-tile onsets via IRLS-Huber.
+    """
+    Z, Y, X = vol.shape
+
+    # --- Stage 1: global baseline ---
+    bg_mean, bg_sigma, dyn_hint = _global_top_baseline(
+        vol, n_top_planes=n_top_planes, max_pad_frac=max_pad_frac,
+    )
+    thr_noise = bg_mean + k_surface * bg_sigma
+    thr_rel = bg_mean + relative_margin_min * dyn_hint
+    surf_thr = max(thr_noise, thr_rel)
+
+    # --- Stage 2: per-tile onset ---
+    z_max_search = max(2, int(round(Z * surface_search_frac)))
+    min_thick_px = max(1, int(round(min_thick_surface_um / z_um)))
+    sigma_px = max(0.5, smooth_sigma_um / z_um)
+    tile_py = max(4, int(round(xy_tile_um / xy_um)))
+    tile_px = tile_py
+
+    xs, ys, zs, records = _collect_tile_onsets(
+        vol, z_um, xy_um,
+        tile_py=tile_py, tile_px=tile_px,
+        z_max_search=z_max_search,
+        thr=surf_thr,
+        min_thick_px=min_thick_px,
+        sigma_px=sigma_px,
+    )
+
+    tile_records = pd.DataFrame(records)
+    n_total = len(records)
+    n_surf = len(xs)
+
+    if n_surf < 10:
+        return SurfaceResult(
+            surface=None,
+            baseline_mean=bg_mean, baseline_sigma=bg_sigma,
+            surf_thr=surf_thr, dyn_hint=dyn_hint,
+            n_tiles_total=n_total, n_surface_tiles=n_surf,
+            tile_records=tile_records,
+            z_um=z_um, xy_um=xy_um,
+        )
+
+    # --- Stage 3: quadratic surface fit ---
+    surface = _quadratic_huber_fit(xs, ys, zs)
+    surface["method"] = f"image_global_baseline_k{int(k_surface)}"
+
+    return SurfaceResult(
+        surface=surface,
+        baseline_mean=bg_mean, baseline_sigma=bg_sigma,
+        surf_thr=surf_thr, dyn_hint=dyn_hint,
+        n_tiles_total=n_total, n_surface_tiles=n_surf,
+        tile_records=tile_records,
+        z_um=z_um, xy_um=xy_um,
+    )
+
+
+# ---------------------------------------------------------------------
+# Metrics (mirrors session v2/v3)
+# ---------------------------------------------------------------------
+
+def depth_profile_stats(
+    pts_xyz_um: np.ndarray,
+    surface: dict,
+    *,
+    depth_min: float = -200.0,
+    depth_max: float = 400.0,
+    bin_um: float = 5.0,
+) -> dict:
+    if surface is None or len(pts_xyz_um) == 0:
+        return {}
+    z_surf = _surface_z(surface, pts_xyz_um[:, 0], pts_xyz_um[:, 1])
+    depth = pts_xyz_um[:, 2] - z_surf
+    n = len(depth)
+    above = (depth < 0).sum() / n
+    above5 = (depth < -5.0).sum() / n
+    edges = np.arange(depth_min, depth_max + bin_um, bin_um)
+    h, _ = np.histogram(depth, bins=edges)
+    density = h / (bin_um * max(n, 1))
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    bulk = density[(centers >= 50) & (centers <= 200)].mean()
+    above_dens = density[(centers >= -200) & (centers < 0)].mean()
+    cum_above = above_dens / max(bulk, 1e-9)
+    onset = np.nan
+    if bulk > 0:
+        halfmax = 0.5 * bulk
+        for c, d in zip(centers, density):
+            if c >= 0 and d >= halfmax:
+                onset = float(c)
+                break
+    return {
+        "above_frac": float(above),
+        "above_frac_5um": float(above5),
+        "cum_above_ratio": float(cum_above),
+        "onset_depth_um": onset,
+        "n_points": int(n),
+    }

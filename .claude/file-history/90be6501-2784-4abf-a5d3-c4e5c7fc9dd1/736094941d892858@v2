@@ -1,0 +1,201 @@
+"""F5 — SimpleITK mutual-information / NCC wrappers.
+
+Thin wrapper that:
+  - takes np arrays + anisotropic voxel spacing,
+  - wraps them in `SimpleITK.Image`,
+  - runs an affine (rotation + anisotropic scale + translation) MI fit,
+  - optional B-spline deformable refinement.
+
+The caller is responsible for a sensible initial affine — for CZ↔HCR we
+typically seed with 180° XY rotation + centroid translation.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Optional
+
+import numpy as np
+
+try:
+    import SimpleITK as sitk
+except Exception as e:  # pragma: no cover
+    sitk = None
+    _SITK_ERR = e
+
+
+@dataclass
+class MIFitResult:
+    affine_matrix: np.ndarray       # (3,3) linear
+    translation: np.ndarray         # (3,) µm, matching (z,y,x) order
+    metric: float
+    iterations: int
+    converged: bool
+    bspline_grid_spacing_um: Optional[tuple] = None
+    bspline_params: Optional[np.ndarray] = None
+
+
+def _ensure_sitk():
+    if sitk is None:
+        raise RuntimeError(f"SimpleITK not available: {_SITK_ERR}")
+
+
+def _to_sitk(arr: np.ndarray, spacing_xyz_um: "tuple[float, float, float]") -> "sitk.Image":
+    _ensure_sitk()
+    arr = np.ascontiguousarray(arr.astype(np.float32))
+    img = sitk.GetImageFromArray(arr)  # SimpleITK is X-major in space
+    # spacing_xyz is (x, y, z) in SimpleITK's world order
+    img.SetSpacing(spacing_xyz_um)
+    return img
+
+
+def mi_affine(
+    cz_arr: np.ndarray,
+    hcr_arr: np.ndarray,
+    cz_xy_um: float,
+    cz_z_um: float,
+    hcr_xy_um: float,
+    hcr_z_um: float,
+    *,
+    init_rotation_deg_z: float = 180.0,
+    init_scale: "tuple[float, float, float]" = (1.8, 1.8, 2.8),
+    init_translation_um: "tuple[float, float, float]" = (0.0, 0.0, 0.0),
+    learning_rate: float = 1.0,
+    n_iterations: int = 200,
+    pyramid_levels: "tuple[int, ...]" = (4, 2, 1),
+    histogram_bins: int = 50,
+    sampling_fraction: float = 0.1,
+) -> MIFitResult:
+    """Register ``cz`` (moving) onto ``hcr`` (fixed) with Mattes MI and an affine
+    transform (rotation + anisotropic scale + translation).
+
+    Returns the linear (3,3) and translation in (z, y, x) order matching our
+    downstream centroid conventions.
+    """
+    _ensure_sitk()
+
+    cz_img = _to_sitk(cz_arr, (cz_xy_um, cz_xy_um, cz_z_um))
+    hcr_img = _to_sitk(hcr_arr, (hcr_xy_um, hcr_xy_um, hcr_z_um))
+
+    # Initial transform: centered on HCR, with 180° XY rotation + scale + t.
+    init = sitk.AffineTransform(3)
+    R = np.array([
+        [np.cos(np.deg2rad(init_rotation_deg_z)), -np.sin(np.deg2rad(init_rotation_deg_z)), 0.0],
+        [np.sin(np.deg2rad(init_rotation_deg_z)),  np.cos(np.deg2rad(init_rotation_deg_z)), 0.0],
+        [0.0, 0.0, 1.0],
+    ])
+    S = np.diag(init_scale)
+    RS = R @ S
+    init.SetMatrix(RS.flatten().tolist())
+    init.SetTranslation([float(t) for t in init_translation_um])
+    init.SetCenter([s * n / 2.0 for s, n in zip(hcr_img.GetSpacing(), hcr_img.GetSize())])
+
+    reg = sitk.ImageRegistrationMethod()
+    reg.SetMetricAsMattesMutualInformation(histogram_bins)
+    reg.SetMetricSamplingStrategy(reg.RANDOM)
+    reg.SetMetricSamplingPercentage(float(sampling_fraction))
+    reg.SetInterpolator(sitk.sitkLinear)
+    reg.SetOptimizerAsRegularStepGradientDescent(
+        learningRate=learning_rate,
+        minStep=1e-4,
+        numberOfIterations=n_iterations,
+        gradientMagnitudeTolerance=1e-6,
+    )
+    reg.SetOptimizerScalesFromPhysicalShift()
+    reg.SetInitialTransform(init, inPlace=False)
+    if pyramid_levels:
+        reg.SetShrinkFactorsPerLevel(list(pyramid_levels))
+        reg.SetSmoothingSigmasPerLevel([float(l) for l in pyramid_levels])
+        reg.SmoothingSigmasAreSpecifiedInPhysicalUnitsOn()
+
+    try:
+        out_tx = reg.Execute(hcr_img, cz_img)
+        converged = True
+    except RuntimeError as e:
+        out_tx = init
+        converged = False
+
+    # `out_tx` may be a CompositeTransform wrapping an AffineTransform.
+    if hasattr(out_tx, "GetNthTransform"):
+        aff = out_tx.GetNthTransform(0)
+    else:
+        aff = out_tx
+    aff = sitk.AffineTransform(aff)
+    A = np.array(aff.GetMatrix()).reshape(3, 3)
+    t_xyz = np.array(aff.GetTranslation())
+    # Permute (x,y,z) → (z,y,x) for our conventions.
+    P = np.array([[0, 0, 1], [0, 1, 0], [1, 0, 0]], dtype=float)
+    A_zyx = P @ A @ P.T
+    t_zyx = P @ t_xyz
+
+    return MIFitResult(
+        affine_matrix=A_zyx,
+        translation=t_zyx,
+        metric=float(reg.GetMetricValue()),
+        iterations=int(reg.GetOptimizerIteration()),
+        converged=converged,
+    )
+
+
+def mi_bspline(
+    cz_arr: np.ndarray,
+    hcr_arr: np.ndarray,
+    cz_xy_um: float,
+    cz_z_um: float,
+    hcr_xy_um: float,
+    hcr_z_um: float,
+    *,
+    initial_affine: Optional[np.ndarray] = None,
+    initial_translation: Optional[np.ndarray] = None,
+    grid_spacing_um: "tuple[float, float, float]" = (30.0, 30.0, 60.0),
+    n_iterations: int = 100,
+) -> MIFitResult:
+    """MI + B-spline deformable refinement on top of an affine initial."""
+    _ensure_sitk()
+
+    cz_img = _to_sitk(cz_arr, (cz_xy_um, cz_xy_um, cz_z_um))
+    hcr_img = _to_sitk(hcr_arr, (hcr_xy_um, hcr_xy_um, hcr_z_um))
+
+    mesh_size = [
+        max(1, int(round(hcr_img.GetSize()[i] * hcr_img.GetSpacing()[i] / grid_spacing_um[i])))
+        for i in range(3)
+    ]
+    bspline = sitk.BSplineTransformInitializer(hcr_img, mesh_size, order=3)
+
+    reg = sitk.ImageRegistrationMethod()
+    reg.SetMetricAsMattesMutualInformation(50)
+    reg.SetInterpolator(sitk.sitkLinear)
+    reg.SetOptimizerAsLBFGSB(
+        gradientConvergenceTolerance=1e-5,
+        numberOfIterations=n_iterations,
+    )
+    reg.SetInitialTransform(bspline, inPlace=False)
+
+    try:
+        out_tx = reg.Execute(hcr_img, cz_img)
+        converged = True
+    except RuntimeError:
+        out_tx = bspline
+        converged = False
+
+    return MIFitResult(
+        affine_matrix=np.eye(3) if initial_affine is None else initial_affine,
+        translation=np.zeros(3) if initial_translation is None else initial_translation,
+        metric=float(reg.GetMetricValue()),
+        iterations=int(reg.GetOptimizerIteration()),
+        converged=converged,
+        bspline_grid_spacing_um=tuple(grid_spacing_um),
+        bspline_params=np.asarray(out_tx.GetParameters()),
+    )
+
+
+def _selftest():
+    rng = np.random.default_rng(0)
+    vol = rng.random((20, 30, 30)).astype(np.float32)
+    r = mi_affine(vol, vol, 1.0, 1.0, 1.0, 1.0,
+                   init_rotation_deg_z=0.0, init_scale=(1.0, 1.0, 1.0),
+                   n_iterations=20, pyramid_levels=(2, 1))
+    print("F5 selftest metric:", r.metric, "converged:", r.converged)
+
+
+if __name__ == "__main__":
+    _selftest()

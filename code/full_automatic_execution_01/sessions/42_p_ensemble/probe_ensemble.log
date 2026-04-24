@@ -1,0 +1,42 @@
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  788406 P1   ss_n= 263/718  ss_med=  35.1 rec_id=0.202 r@20=0.210 med=  81.1 wall=55.9s
+  788406 P4   ss_n= 207/887  ss_med=  45.0 rec_id=0.146 r@20=0.159 med=  91.5 wall=77.2s
+  788406 P14  ss_n= 262/703  ss_med=  34.5 rec_id=0.203 r@20=0.211 med=  79.3 wall=13.0s
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  755252 P1   ss_n= 472/688  ss_med=  25.5 rec_id=0.033 r@20=0.044 med= 102.7 wall=54.0s
+  755252 P4   ss_n= 455/815  ss_med=  28.0 rec_id=0.045 r@20=0.058 med= 100.1 wall=88.1s
+  755252 P14  ss_n= 455/719  ss_med=  26.4 rec_id=0.050 r@20=0.058 med= 104.5 wall=23.5s
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  767022 P1   ss_n= 230/736  ss_med=  39.1 rec_id=0.081 r@20=0.108 med= 107.3 wall=36.5s
+  767022 P4   ss_n= 130/808  ss_med=  51.6 rec_id=0.039 r@20=0.048 med= 135.6 wall=74.0s
+  767022 P14  ss_n= 246/532  ss_med=  31.1 rec_id=0.039 r@20=0.053 med= 122.2 wall=9.8s
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  782149 P1   ss_n= 108/423  ss_med=  43.5 rec_id=0.000 r@20=0.000 med=1135.5 wall=34.8s
+  782149 P4   ss_n=  64/550  ss_med=  56.2 rec_id=0.000 r@20=0.000 med=1140.5 wall=69.9s
+  782149 P14  ss_n=  88/156  ss_med=  28.0 rec_id=0.000 r@20=0.000 med=1141.5 wall=5.9s
+
+=== SS-PICKER vs ORACLE (r@20) ===
+subj      ss-pick  ss@20  oracle oracle@20  P1@20  P4@20  P14@20  match?
+788406         P1  0.210     P14     0.211  0.210  0.159   0.211   
+755252         P1  0.044      P4     0.058  0.044  0.058   0.058   
+767022        P14  0.053      P1     0.108  0.108  0.048   0.053   
+782149         P1  0.000      P1     0.000  0.000  0.000   0.000  *
+
+Totals (sum across 4 subjects):
+  SS-pick r@20 total: 0.306
+  Oracle r@20 total:  0.377
+  P1-only r@20 total: 0.362
+  SS lift over P1:    -0.055
+  Oracle lift / P1:   +0.015

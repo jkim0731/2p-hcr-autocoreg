@@ -1,0 +1,140 @@
+"""F8 — Synthetic warp pipeline.
+
+Generate paired (source, warped, correspondence) samples from an HCR GFP+
+centroid point cloud by applying a random anisotropic-scale + rigid rotation +
+per-axis TPS warp to a sub-cube.  Used to train G-series matchers and other
+learned methods without ground-truth labels.
+
+Sampling bounds (benchmark-informed, for sampling only — not used as model
+parameters):
+
+- XY scale ∈ [1.5, 2.0]
+- Z scale  ∈ [2.0, 3.5]
+- XY rotation drawn in {0°, 180°} ± 10° jitter (reflects the structural prior)
+- Z-axis jitter ±5°
+- TPS: 6–10 control points, per-axis jitter 10–40 µm
+- Drop rate 10–30 % to simulate partial overlap / segmentation error
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Optional
+
+import numpy as np
+from scipy.interpolate import Rbf
+
+
+@dataclass
+class WarpSample:
+    source_um: np.ndarray          # (Ns, 3), (z,y,x)
+    warped_um: np.ndarray          # (Nw, 3)
+    correspondence: np.ndarray     # (N_match, 2) int — indices into (source, warped)
+    R: np.ndarray
+    scales: np.ndarray
+    translation: np.ndarray
+    tps_metadata: dict = field(default_factory=dict)
+
+
+def _rot_xy(deg: float) -> np.ndarray:
+    c, s = np.cos(np.deg2rad(deg)), np.sin(np.deg2rad(deg))
+    return np.array([[1, 0, 0], [0, c, -s], [0, s, c]])  # R in (z,y,x)
+
+
+def sample_warped_pair(
+    points_um: np.ndarray,          # (N, 3) in (z,y,x)
+    rng: Optional[np.random.Generator] = None,
+    cube_um: float = 400.0,
+    *,
+    xy_scale_range: "tuple[float, float]" = (1.5, 2.0),
+    z_scale_range: "tuple[float, float]" = (2.0, 3.5),
+    rot_jitter_xy_deg: float = 10.0,
+    rot_jitter_z_deg: float = 5.0,
+    tps_n_cp: int = 8,
+    tps_jitter_um: float = 25.0,
+    drop_rate: float = 0.2,
+    always_180: bool = True,
+) -> WarpSample:
+    """Return a random source cube + warped version + GT correspondences."""
+    rng = rng or np.random.default_rng()
+
+    # 1) Choose centre so that the cube is inside the bbox (with margin).
+    pmin = points_um.min(0) + cube_um / 2
+    pmax = points_um.max(0) - cube_um / 2
+    centre = rng.uniform(pmin, pmax)
+    sel = np.all(np.abs(points_um - centre) < cube_um / 2, axis=1)
+    src = points_um[sel]
+    if len(src) < 10:
+        return WarpSample(src, src.copy(), np.empty((0, 2), int),
+                          R=np.eye(3), scales=np.ones(3), translation=np.zeros(3))
+
+    # Centre the source around origin for the warp math.
+    src_c = src - src.mean(0)
+
+    # 2) Rigid rotation: 180° XY base (structural prior) + jitter in xy and z.
+    yaw_deg = 180.0 if always_180 else 0.0
+    yaw_deg += rng.uniform(-rot_jitter_xy_deg, rot_jitter_xy_deg)
+    # (yaw is around z; in our (z,y,x) order, yaw rotates y/x)
+    cy, sy = np.cos(np.deg2rad(yaw_deg)), np.sin(np.deg2rad(yaw_deg))
+    R_yaw = np.array([[1, 0, 0], [0, cy, -sy], [0, sy, cy]])
+    # z-jitter as small pitch
+    pitch_deg = rng.uniform(-rot_jitter_z_deg, rot_jitter_z_deg)
+    cp, sp = np.cos(np.deg2rad(pitch_deg)), np.sin(np.deg2rad(pitch_deg))
+    R_pitch = np.array([[cp, 0, sp], [0, 1, 0], [-sp, 0, cp]])
+    R = R_yaw @ R_pitch
+
+    # 3) Anisotropic scale.
+    sz = rng.uniform(*z_scale_range)
+    sxy = rng.uniform(*xy_scale_range)
+    S = np.array([sz, sxy, sxy])
+
+    # 4) Apply rigid + scale.
+    rigid = (R @ (src_c * S).T).T
+
+    # 5) TPS warp — sample control points on the cube interior.
+    cp_idx = rng.choice(len(rigid), size=min(tps_n_cp, len(rigid)), replace=False)
+    cps_src = rigid[cp_idx]
+    disp = rng.normal(0, tps_jitter_um, size=cps_src.shape)
+    cps_dst = cps_src + disp
+    warped = rigid.copy()
+    for axis in range(3):
+        rbf = Rbf(cps_src[:, 0], cps_src[:, 1], cps_src[:, 2],
+                  cps_dst[:, axis] - cps_src[:, axis],
+                  function="thin_plate")
+        delta = rbf(rigid[:, 0], rigid[:, 1], rigid[:, 2])
+        warped[:, axis] = rigid[:, axis] + delta
+
+    # 6) Drop random subset to simulate partial overlap.
+    keep_src = rng.random(len(src)) > (drop_rate / 2.0)
+    keep_dst = rng.random(len(warped)) > (drop_rate / 2.0)
+
+    src_kept = src[keep_src]
+    warped_kept = warped[keep_dst]
+    # GT correspondences are over the intersection.
+    idx_src_in = np.where(keep_src)[0]
+    idx_dst_in = np.where(keep_dst)[0]
+    src_pos = {i: k for k, i in enumerate(idx_src_in)}
+    dst_pos = {i: k for k, i in enumerate(idx_dst_in)}
+    common = sorted(set(idx_src_in) & set(idx_dst_in))
+    corr = np.array([(src_pos[i], dst_pos[i]) for i in common], dtype=int)
+
+    return WarpSample(
+        source_um=src_kept,
+        warped_um=warped_kept,
+        correspondence=corr,
+        R=R,
+        scales=S,
+        translation=src.mean(0),
+        tps_metadata={"cps": cps_src, "dst": cps_dst, "yaw": yaw_deg, "pitch": pitch_deg},
+    )
+
+
+def _selftest():
+    rng = np.random.default_rng(0)
+    pts = rng.uniform(-500, 500, size=(2000, 3))
+    w = sample_warped_pair(pts, rng=rng)
+    print(f"F8 selftest: src={len(w.source_um)} warped={len(w.warped_um)} "
+          f"corr={len(w.correspondence)} scales={w.scales}")
+
+
+if __name__ == "__main__":
+    _selftest()

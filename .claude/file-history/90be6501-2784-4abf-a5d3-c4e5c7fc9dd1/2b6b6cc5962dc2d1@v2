@@ -1,0 +1,113 @@
+"""M1 — Volumetric mask NCC at coarse grid.
+
+Load CZ seg-mask and HCR GFP+ seg-mask, binarise, downsample to ~20 µm
+isotropic, run a 180°-initialised anisotropic-scale sweep over `(sxy, sz)`
+and a bounded translation search via 3D NCC.
+
+The output is a coarse `(R, S, t)` with a robust-z intrinsic confidence.
+Emits graceful-degradation output if the robust-z is below threshold.
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+import numpy as np
+import pandas as pd
+from scipy.signal import fftconvolve
+from scipy import ndimage as ndi
+
+_THIS = Path(__file__).resolve().parent
+_ROOT = _THIS.parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+if str(_ROOT.parent / "dev_code") not in sys.path:
+    sys.path.insert(0, str(_ROOT.parent / "dev_code"))
+
+from bench.harness import register_candidate, CoregResult, TransformDescriptor
+from lib.mask_loaders import load_hcr_seg_mask, load_cz_seg_mask
+
+
+def _downsample_iso(vol, xy_um, z_um, target_um):
+    zoom_factors = (z_um / target_um, xy_um / target_um, xy_um / target_um)
+    return ndi.zoom(vol.astype(np.float32), zoom_factors, order=0)
+
+
+def _apply_180(vol):
+    return vol[:, ::-1, ::-1]
+
+
+def _ncc3d(tpl, img):
+    """3D zero-mean NCC by FFT; returns the peak & offset in (dz, dy, dx)."""
+    tpl = tpl - tpl.mean()
+    img = img - img.mean()
+    num = fftconvolve(img, tpl[::-1, ::-1, ::-1], mode="same")
+    # Denominator approximation: product of std * n_voxels
+    # (Exact local-denominator would require an integral-image; for coarse
+    # M1 this is acceptable.)
+    n = np.prod(tpl.shape)
+    den = (tpl.std() * img.std() * n) + 1e-9
+    ncc = num / den
+    peak = np.max(ncc)
+    off = np.unravel_index(np.argmax(ncc), ncc.shape)
+    # center offset
+    c = np.array(ncc.shape) // 2
+    off = tuple(int(off[i] - c[i]) for i in range(3))
+    return float(peak), off, ncc
+
+
+@register_candidate("M1")
+def run_m1(s, *, level=4, target_um=20.0,
+           sxy_grid=(1.5, 1.75, 2.0), sz_grid=(2.0, 2.5, 3.0),
+           min_robust_z=3.0) -> CoregResult:
+    # Load masks
+    gfp_ids = s.hcr_gfp_df["hcr_id"].astype(int).tolist()
+    try:
+        hcr_mask, hxy, hzu = load_hcr_seg_mask(s, level=level, gfp_ids=gfp_ids)
+        cz_mask, cxy, czu = load_cz_seg_mask(s)
+    except Exception as e:
+        return CoregResult(pd.DataFrame(), 0.0, diagnostics={"error": f"load: {e}"})
+
+    # Binarise and downsample to shared iso grid
+    hcr_b = (hcr_mask > 0).astype(np.uint8)
+    cz_b = (cz_mask > 0).astype(np.uint8)
+    hcr_d = _downsample_iso(hcr_b, hxy, hzu, target_um)
+    cz_d_nat = _downsample_iso(cz_b, cxy, czu, target_um)
+    # 180° XY rotation of CZ at iso grid
+    cz_d = _apply_180(cz_d_nat)
+
+    best = dict(ncc=-np.inf, sxy=None, sz=None, off=None)
+    for sxy in sxy_grid:
+        for sz in sz_grid:
+            zf = (sz, sxy, sxy)
+            cz_s = ndi.zoom(cz_d, zf, order=0).astype(np.float32)
+            # Pad/crop cz_s to fit in hcr_d for NCC
+            if any(cz_s.shape[i] >= hcr_d.shape[i] for i in range(3)):
+                continue
+            peak, off, _ = _ncc3d(cz_s, hcr_d.astype(np.float32))
+            if peak > best["ncc"]:
+                best = dict(ncc=peak, sxy=sxy, sz=sz, off=off,
+                            cz_shape=cz_s.shape, hcr_shape=hcr_d.shape)
+
+    if best["sxy"] is None:
+        return CoregResult(pd.DataFrame(), 0.0, diagnostics={"error": "no fit"})
+
+    # Convert offset (voxels) to physical µm translation.
+    dz, dy, dx = best["off"]
+    t_um = np.array([dz * target_um, dy * target_um, dx * target_um])
+
+    R0 = np.array([[1, 0, 0], [0, -1, 0], [0, 0, -1]], float)
+    S = np.array([best["sz"], best["sxy"], best["sxy"]])
+    transform = TransformDescriptor(
+        R=R0, scales=S, translation=t_um,
+        src_mean=np.zeros(3), rotation_deg_z=180.0, kind="mask-ncc",
+    )
+    return CoregResult(
+        pairs_df=pd.DataFrame(),
+        confidence=float(best["ncc"]),
+        transform=transform,
+        diagnostics=dict(
+            best_ncc=best["ncc"], sxy=best["sxy"], sz=best["sz"],
+            off_vox=best["off"], t_um=t_um.tolist(),
+            target_um=target_um, level=level,
+        ),
+    )

@@ -1,0 +1,120 @@
+"""Spatial outlier rejection: reject tiles whose z10 is far below their
+neighbors' z10 median.  Then apply maxlift clamp on survivors.
+
+Autofluorescence-corrupted tiles should be ISOLATED (one bad tile surrounded
+by normal tiles).  Real shallow tiles (tissue fold) cluster spatially.
+"""
+from __future__ import annotations
+import sys, importlib.util, os
+from pathlib import Path
+import numpy as np
+import pandas as pd
+from scipy.spatial import cKDTree
+os.environ["PYTHONUNBUFFERED"] = "1"
+
+sys.path.insert(0, "/root/capsule/code/dev_code")
+_spec = importlib.util.spec_from_file_location(
+    "img_surface_l2",
+    str(Path("/root/capsule/code/dev_code") / "03_image_based_surface.py"))
+_mod = importlib.util.module_from_spec(_spec); sys.modules["img_surface_l2"] = _mod
+_spec.loader.exec_module(_mod)
+
+from benchmark_analysis import load_hcr_combined
+from benchmark_data_loader import hcr_px_to_um, load_subject
+
+
+def sz(s, x, y):
+    return (s["a"]*x + s["b"]*y + s["c"]
+            + s.get("p",0)*x*x + s.get("q",0)*x*y + s.get("r",0)*y*y)
+
+
+def eval_surf(s, pts):
+    zs = sz(s, pts[:,0], pts[:,1])
+    depth = pts[:,2] - zs
+    n = len(depth)
+    above = (depth < 0).sum() / n
+    edges = np.arange(-200, 404, 5.0)
+    h, _ = np.histogram(depth, bins=edges)
+    density = h / (5.0 * max(n, 1))
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    bulk = density[(centers >= 50) & (centers <= 200)].mean()
+    onset = np.nan
+    if bulk > 0:
+        for c, d in zip(centers, density):
+            if c >= 0 and d >= 0.5 * bulk:
+                onset = float(c); break
+    return above, onset
+
+
+def spatial_outlier_clamp(surface, xs, ys, zs, *, tile_um=120.0, within_tile_q=0.10,
+                           safety_offset_um=3.0, min_per_tile=5,
+                           neighbor_radius_tiles=2, spatial_thr_um=80.0,
+                           density_radius_um=30.0, density_min_neighbors=3):
+    keep = _mod._filter_tops_by_density(
+        xs, ys, zs, radius_um=density_radius_um,
+        min_neighbors=density_min_neighbors)
+    if keep.sum() < 50:
+        return surface, 0.0, 0, 0, "no-tops"
+    xs_f = xs[keep]; ys_f = ys[keep]; zs_f = zs[keep]
+    xb = (xs_f // tile_um).astype(int)
+    yb = (ys_f // tile_um).astype(int)
+    key = yb * 100000 + xb
+    df = pd.DataFrame({"k": key, "x": xs_f, "y": ys_f, "z": zs_f})
+    agg = df.groupby("k").agg(
+        x=("x", "median"), y=("y", "median"),
+        z=("z", lambda v: float(np.quantile(v, within_tile_q))),
+        n=("z", "size"))
+    agg = agg[agg["n"] >= int(min_per_tile)].reset_index()
+    if len(agg) == 0:
+        return surface, 0.0, 0, 0, "no-tiles"
+    tx, ty, tz = agg["x"].values, agg["y"].values, agg["z"].values
+    # Spatial outlier check: for each tile, look up z of neighbors within R tiles
+    R = float(neighbor_radius_tiles) * tile_um
+    tree = cKDTree(np.column_stack([tx, ty]))
+    neigh_idx = tree.query_ball_point(np.column_stack([tx, ty]), r=R)
+    keep_tile = np.ones(len(tz), dtype=bool)
+    neigh_med = np.full(len(tz), np.nan)
+    for i, idxs in enumerate(neigh_idx):
+        idxs = [j for j in idxs if j != i]  # exclude self
+        if len(idxs) < 3:
+            continue  # too few neighbors, keep as-is
+        m = float(np.median(tz[idxs]))
+        neigh_med[i] = m
+        if tz[i] < m - float(spatial_thr_um):
+            keep_tile[i] = False
+    n_total = len(tz)
+    n_kept = int(keep_tile.sum())
+    tx_k, ty_k, tz_k = tx[keep_tile], ty[keep_tile], tz[keep_tile]
+    plane_z = sz(surface, tx_k, ty_k)
+    deficit = plane_z - tz_k
+    pos = deficit[deficit > 0]
+    lift = float(pos.max()) if len(pos) else 0.0
+    out = dict(surface)
+    out["c"] = float(out["c"] - lift - safety_offset_um)
+    rej = n_total - n_kept
+    note = f"rejected={rej}/{n_total}"
+    return out, lift, n_total, n_kept, note
+
+
+SUBJECTS = ["755252", "767018", "767022", "782149", "788406", "790322"]
+for sid in SUBJECTS:
+    print(f"=== {sid} ===", flush=True)
+    s = load_subject(sid)
+    vol, xy_um, z_um, channels = load_hcr_combined(s, level=4)
+    pts = hcr_px_to_um(s.hcr_centroids[["z_px","y_px","x_px"]].values, s)[:, [2,1,0]]
+
+    res = _mod.estimate_surface_and_l2_image_based(
+        vol, z_um, xy_um, clamp_min_per_tile=100000)
+    if res.surface is None:
+        continue
+    tr = res.tile_records
+    xs, ys, zs = tr.x_um.values, tr.y_um.values, tr.z_onset_um.values
+
+    for thr in [50.0, 80.0, 120.0]:
+        for radius in [1, 2, 3]:
+            s2, lift, nt, nk, note = spatial_outlier_clamp(
+                res.surface, xs, ys, zs,
+                spatial_thr_um=thr, neighbor_radius_tiles=radius)
+            a, o = eval_surf(s2, pts)
+            print(f"  thr={thr:.0f} r={radius}: c={s2['c']:6.1f} lift={lift:5.1f} "
+                  f"above={a:.4f} onset={o} [{note}]", flush=True)

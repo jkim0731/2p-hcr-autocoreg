@@ -1,0 +1,36 @@
+=== dry run C2-LOSO: held=788406 train=['790322'] n_iter=100 ===
+  C2-LOSO: held-out=788406 train_pool=['790322'] n_iter=100
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  c2_preload sid=790322 t=84.6s cz=1016 hcr_crop=4447/10131 pairs=769
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  c2_preload sid=788406 t=93.6s cz=932 hcr_crop=8818/17427 pairs=784
+  C2-LOSO: preload t=179.8s total_train_pairs=769
+  C2-LOSO: model hand_dim=20 patch_dim=64 total_params=443,378
+  c2_stage2 it=50/100 loss=6.283 t=310.2s sid=790322 Na=1016 Nb=4447 n_pairs=769
+  c2_stage2 it=100/100 loss=3.646 t=631.6s sid=790322 Na=1016 Nb=4447 n_pairs=769
+  C2-LOSO: emitted 862 pairs
+
+=== inference: 862 pairs emitted ===
+  confidence median=0.996
+
+=== GT recall @ 20 µm (labeled CZs only) ===
+  hits@20/labeled = 2/730 = r@20=0.003 median_err=442.3 µm (labeled pairs)
+
+=== diagnostics ===
+  held_out: 788406
+  train_subjects: ['790322']
+  n_train_iter: 100
+  lr: 0.0001
+  hand_dim: 20
+  patch_dim: 64
+  model_params: 443378
+  train_loss_final: 2.8766021728515625
+  train_loss_mean50: 3.646232829093933
+  n_hcr_kept: 8818
+  n_emitted: 862
+
+=== total time: 822.3s (13.7 min) ===
+
+=== PASSED ===

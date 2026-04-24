@@ -1,0 +1,61 @@
+"""Inspect column-wise z-intensity profiles for 755252.
+Question: are autofluorescence and pia separated by a dip (two runs) or
+continuous (one run)?
+"""
+from __future__ import annotations
+import sys, importlib.util, os
+from pathlib import Path
+import numpy as np
+os.environ["PYTHONUNBUFFERED"] = "1"
+
+sys.path.insert(0, "/root/capsule/code/dev_code")
+_spec = importlib.util.spec_from_file_location(
+    "img_surface_l2",
+    str(Path("/root/capsule/code/dev_code") / "03_image_based_surface.py"))
+_mod = importlib.util.module_from_spec(_spec); sys.modules["img_surface_l2"] = _mod
+_spec.loader.exec_module(_mod)
+
+from benchmark_analysis import load_hcr_combined
+from benchmark_data_loader import hcr_px_to_um, load_subject
+
+
+s = load_subject("755252")
+vol, xy_um, z_um, channels = load_hcr_combined(s, level=4)
+print(f"vol shape: {vol.shape}, z_um={z_um}, xy_um={xy_um}", flush=True)
+
+# Sample a few columns from areas where we know tops < pia (autofluorescence)
+# From earlier diagnostic: tops p50=448, real pia p50=527
+# Pick a middle xy column
+Y, X = vol.shape[1]//2, vol.shape[2]//2
+z_axis = np.arange(vol.shape[0]) * z_um
+
+# Sample 6 columns at different locations
+np.random.seed(0)
+samples = [(Y, X), (Y-50, X-50), (Y+50, X+50), (Y, X-80), (Y-30, X+30), (Y+40, X-40)]
+
+for i, (y, x) in enumerate(samples):
+    if y < 0 or y >= vol.shape[1] or x < 0 or x >= vol.shape[2]: continue
+    # Average over 3x3 window for smoothing
+    win = vol[:, max(0,y-1):y+2, max(0,x-1):x+2].mean(axis=(1,2))
+    # Threshold: col_bg + 0.25 * dyn
+    col_bg = float(np.nanpercentile(win[win > 0], 10)) if (win > 0).any() else 0.0
+    col_peak = float(np.nanpercentile(win[win > 0], 99)) if (win > 0).any() else 0.0
+    dyn = col_peak - col_bg
+    thr = col_bg + 0.25 * dyn
+    above = win > thr
+
+    # Find runs
+    z_above = z_axis[above]
+    runs = []
+    if len(z_above):
+        gaps = np.where(np.diff(z_above) > 2*z_um)[0]
+        segs = np.split(z_above, gaps + 1) if len(gaps) else [z_above]
+        runs = [(seg.min(), seg.max(), seg.max()-seg.min()+z_um) for seg in segs if len(seg) >= 2]
+
+    print(f"\n=== col ({y},{x}): bg={col_bg:.1f} peak={col_peak:.1f} dyn={dyn:.1f} thr={thr:.1f}")
+    print(f"  runs above thr (z_start, z_end, len):")
+    for r in runs[:10]:
+        print(f"    z={r[0]:6.1f}–{r[1]:6.1f} ({r[2]:.0f}µm)")
+    # Peak z value
+    z_peak = z_axis[np.argmax(win)]
+    print(f"  peak z={z_peak:.1f} (intensity={win.max():.1f})")

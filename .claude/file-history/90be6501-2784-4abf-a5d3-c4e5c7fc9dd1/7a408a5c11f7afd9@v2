@@ -1,0 +1,71 @@
+"""Quick pathway test of asymmetric G1."""
+import sys, time
+sys.path.insert(0, "/root/capsule/code/full_automatic_execution_01")
+sys.path.insert(0, "/root/capsule/code/dev_code")
+import numpy as np
+import torch
+
+from benchmark_data_loader import load_subject
+from lib.centroid_helpers import centroids_um
+from lib.synthetic_warps import sample_asymmetric_warped_pair
+from bench.candidate_impls._g1_gnn_matcher import (
+    _simple_features, _build_knn_graph, GNNMatcher, _pair_loss)
+
+t0 = time.time()
+s = load_subject("788406")
+print(f"load_subject: {time.time()-t0:.1f}s", flush=True)
+
+t1 = time.time()
+hcr_um, _ = centroids_um(s, "hcr_gfp")
+cz_um, _ = centroids_um(s, "cz")
+print(f"centroids_um: {time.time()-t1:.1f}s; n_hcr={len(hcr_um)} n_cz={len(cz_um)}", flush=True)
+
+t2 = time.time()
+rng = np.random.default_rng(0)
+w = sample_asymmetric_warped_pair(hcr_um, rng=rng, source_cube_um=400.0, target_margin_um=400.0)
+print(f"asym_sample: {time.time()-t2:.1f}s; n_src={len(w.source_um)} n_tgt={len(w.warped_um)} corr={len(w.correspondence)}", flush=True)
+
+t3 = time.time()
+f_src = _simple_features(w.source_um, hcr_um)
+f_dst = _simple_features(w.warped_um, hcr_um)
+print(f"simple_feat: {time.time()-t3:.1f}s", flush=True)
+
+t4 = time.time()
+e_src = _build_knn_graph(w.source_um, k=8)
+e_dst = _build_knn_graph(w.warped_um, k=8)
+print(f"knn_graph: {time.time()-t4:.1f}s; e_src.shape={e_src.shape} e_dst.shape={e_dst.shape}", flush=True)
+
+t5 = time.time()
+model = GNNMatcher(in_dim=f_src.shape[1], hidden=96, n_layers=4, cross_layers=3)
+opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+print(f"model_build: {time.time()-t5:.1f}s; params={sum(p.numel() for p in model.parameters())}", flush=True)
+
+# Single forward+backward timing
+t6 = time.time()
+sim, _, _ = model(torch.as_tensor(f_src, dtype=torch.float32),
+                   torch.as_tensor(e_src, dtype=torch.long),
+                   torch.as_tensor(f_dst, dtype=torch.float32),
+                   torch.as_tensor(e_dst, dtype=torch.long))
+loss = _pair_loss(sim, model.dustbin, torch.as_tensor(w.correspondence, dtype=torch.long),
+                   len(w.source_um), len(w.warped_um))
+opt.zero_grad(); loss.backward(); opt.step()
+print(f"single_iter: {time.time()-t6:.2f}s; loss={loss.item():.3f}", flush=True)
+
+# 10-iter timing
+t7 = time.time()
+for _ in range(10):
+    w = sample_asymmetric_warped_pair(hcr_um, rng=rng)
+    if len(w.correspondence) < 5:
+        continue
+    f_src = _simple_features(w.source_um, hcr_um)
+    f_dst = _simple_features(w.warped_um, hcr_um)
+    e_src = _build_knn_graph(w.source_um, k=8)
+    e_dst = _build_knn_graph(w.warped_um, k=8)
+    sim, _, _ = model(torch.as_tensor(f_src, dtype=torch.float32),
+                       torch.as_tensor(e_src, dtype=torch.long),
+                       torch.as_tensor(f_dst, dtype=torch.float32),
+                       torch.as_tensor(e_dst, dtype=torch.long))
+    loss = _pair_loss(sim, model.dustbin, torch.as_tensor(w.correspondence, dtype=torch.long),
+                       len(w.source_um), len(w.warped_um))
+    opt.zero_grad(); loss.backward(); opt.step()
+print(f"10_iters: {time.time()-t7:.2f}s; per_iter={((time.time()-t7)/10):.2f}s", flush=True)

@@ -1,0 +1,113 @@
+"""Test tightening the clamp density filter to exclude AF patches.
+
+Current default: radius_um=30, min_neighbors=3. If AF on 755252 is
+less 3D-coherent than pia (spatially clustered but thinner in z),
+tighter filters might exclude AF tops from the clamp while keeping
+pia tops.
+"""
+from __future__ import annotations
+import sys, importlib.util, os
+from pathlib import Path
+import numpy as np
+os.environ["PYTHONUNBUFFERED"] = "1"
+
+sys.path.insert(0, "/root/capsule/code/dev_code")
+_spec = importlib.util.spec_from_file_location(
+    "img_surface_l2",
+    str(Path("/root/capsule/code/dev_code") / "03_image_based_surface.py"))
+_mod = importlib.util.module_from_spec(_spec); sys.modules["img_surface_l2"] = _mod
+_spec.loader.exec_module(_mod)
+
+# Monkey-patch _clamp_to_column_tops to allow density_radius_um/density_min_neighbors
+# override via the public entry's kwargs (already accepted, so no patching needed).
+
+from benchmark_analysis import load_hcr_combined
+from benchmark_data_loader import hcr_px_to_um, load_subject
+
+
+def sz(s, x, y):
+    return (s["a"]*x + s["b"]*y + s["c"]
+            + s.get("p", 0.0)*x*x + s.get("q", 0.0)*x*y + s.get("r", 0.0)*y*y)
+
+
+def eval_surf(s, pts):
+    if s is None: return np.nan, np.nan, np.nan
+    zs = sz(s, pts[:,0], pts[:,1])
+    depth = pts[:,2] - zs
+    n = len(depth); above = (depth < 0).sum() / n
+    edges = np.arange(-200, 404, 5.0)
+    h, _ = np.histogram(depth, bins=edges)
+    density = h / (5.0 * max(n, 1))
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    bulk = density[(centers >= 50) & (centers <= 200)].mean()
+    onset = np.nan
+    if bulk > 0:
+        for c, d in zip(centers, density):
+            if c >= 0 and d >= 0.5 * bulk:
+                onset = float(c); break
+    return s["c"], above, onset
+
+
+# The public entry point does not expose clamp density params. Run a
+# custom version that does.
+def run_custom(vol, z_um, xy_um, dens_radius, dens_min_nb, tq=0.85):
+    sx = max(1, int(round(10.0 / xy_um)))
+    vol_sub = vol[:, ::sx, ::sx].astype(np.float32, copy=False)
+    _, Ys, Xs = vol_sub.shape
+    xs_col = np.arange(Xs, dtype=np.float32) * sx * xy_um
+    ys_col = np.arange(Ys, dtype=np.float32) * sx * xy_um
+    xx, yy = np.meshgrid(xs_col, ys_col)
+
+    # Anchor
+    a_top, _, _ = _mod._per_column_top_in_band(
+        vol_sub, z_um, None, None, relative_margin=0.05,
+        min_signal_abs_frac=0.05, min_thick_um=15.0)
+    mask_a = np.isfinite(a_top)
+    xa = xx[mask_a].ravel().astype(np.float64)
+    ya = yy[mask_a].ravel().astype(np.float64)
+    za = a_top[mask_a].ravel().astype(np.float64)
+    med = float(np.median(za))
+    mad = float(np.median(np.abs(za - med))) + 1e-6
+    keep = np.abs(za - med) <= 6.0 * 1.4826 * mad
+    anchor = _mod._robust_plane_fit(xa[keep], ya[keep], za[keep])
+
+    # Surface (stage 3)
+    anchor_zz = _mod._surface_z(anchor, xx, yy).astype(np.float32)
+    z_low = anchor_zz - 150.0; z_high = anchor_zz + 150.0
+    top_z, _, _ = _mod._per_column_top_in_band(
+        vol_sub, z_um, z_low, z_high,
+        relative_margin=0.25, min_signal_abs_frac=0.20, min_thick_um=10.0)
+    mask_t = np.isfinite(top_z)
+    x_t = xx[mask_t].ravel().astype(np.float64)
+    y_t = yy[mask_t].ravel().astype(np.float64)
+    z_t = top_z[mask_t].ravel().astype(np.float64)
+
+    surf = _mod._quadratic_quantile_fit(x_t, y_t, z_t, target_quantile=tq, n_iter=30)
+    surf_clamped, lift, _ = _mod._clamp_to_column_tops(
+        surf, x_t, y_t, z_t,
+        tile_um=120.0, within_tile_q=0.10, safety_offset_um=3.0,
+        min_per_tile=5, density_radius_um=dens_radius,
+        density_min_neighbors=dens_min_nb,
+        lift_q=1.0, lift_iqr_k=1.5)
+    return surf_clamped, lift
+
+
+HCR = ["755252", "767018", "767022", "782149", "788406", "790322"]
+CONFIGS = [
+    ("default r=30 nb=3", 30, 3),
+    ("r=30 nb=6",         30, 6),
+    ("r=40 nb=8",         40, 8),
+    ("r=50 nb=12",        50, 12),
+    ("r=80 nb=20",        80, 20),
+]
+
+for sid in HCR:
+    print(f"=== {sid} ===", flush=True)
+    s = load_subject(sid)
+    vol, xy_um, z_um, channels = load_hcr_combined(s, level=4)
+    pts = hcr_px_to_um(s.hcr_centroids[["z_px","y_px","x_px"]].values, s)[:, [2,1,0]]
+    for name, r, nb in CONFIGS:
+        surf, lift = run_custom(vol, z_um, xy_um, r, nb)
+        c, a, o = eval_surf(surf, pts)
+        print(f"  {name:<22}: c={c:6.1f} lift={lift:5.1f} "
+              f"above={a:.4f} onset={o}", flush=True)

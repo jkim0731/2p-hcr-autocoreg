@@ -1,0 +1,458 @@
+"""Session 03 — image-based surface estimator (curved).
+
+Image-only analogue of N22 (session 03 v3).  Two-pass:
+
+  1. **Coarse anchor.**  Tile the volume in XY, take the per-tile
+     per-z median intensity, and find the first-sustained-above-noise
+     jump within the top 30 % of the volume for each tile.  Fit a
+     plane through those tile anchors → a rough preliminary surface.
+
+  2. **Per-column top-of-signal + quadratic quantile fit.**  Sample the
+     volume on a fine ~10 µm XY grid.  For each column, form a
+     search band ±band_um around the coarse plane; within the band,
+     compute a column-specific baseline (10th percentile) and peak
+     (99th percentile); accept the first sustained rise above
+     `baseline + relative_margin * (peak − baseline)`.  Fit a
+     quadratic surface ``z = a·x + b·y + c + p·x² + q·x·y + r·y²`` to
+     the column tops via **quantile regression IRLS at q = 0.70**
+     (pulls the fit deeper, away from above-surface shallow noise).
+
+The curved (quadratic) fit captures the surface dips (e.g. 790322
+around x≈2000 µm) that a plane cannot represent.  The quantile loss
+replaces the Huber mean used in the v1 plane estimator — symmetric
+robust loss is bulk-biased and N22 demonstrated that q = 0.70 is the
+distribution-driven break from that.
+
+L2 detection is intentionally removed in this iteration (the CZ L2
+signal was ambiguous in the side views; see session log).
+
+All thresholds are distribution-driven: per-column dynamic range, a
+global dyn_hint floor, and the quantile choice itself.  No
+hand-tuned absolute intensities.
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass, field
+from typing import Optional
+
+import numpy as np
+import pandas as pd
+from scipy.ndimage import gaussian_filter1d
+
+
+# ---------------------------------------------------------------------
+# Phase 1 — coarse tile-based plane anchor
+# ---------------------------------------------------------------------
+
+def _coarse_plane_anchor(
+    vol: np.ndarray,
+    z_um: float,
+    xy_um: float,
+    *,
+    xy_tile_um: float,
+    top_blank_frac: float,
+    top_blank_min_um: float,
+    surface_search_frac: float,
+    k_surface: float,
+    relative_margin_min: float,
+    min_thick_surface_um: float,
+    smooth_sigma_um: float,
+) -> Optional[dict]:
+    """Tile-wise median profile + first-rise plane fit (previous
+    implementation, kept as a stable anchor for the refinement pass).
+
+    Returns a plane dict {"a", "b", "c"} or None.
+    """
+    Z, Y, X = vol.shape
+    z_max_search = int(round(Z * surface_search_frac))
+    top_px = max(int(round(top_blank_min_um / z_um)),
+                 int(round(top_blank_frac * Z)))
+    top_px = max(top_px, 3)
+    min_thick_px = max(1, int(round(min_thick_surface_um / z_um)))
+    sigma_px = max(0.5, smooth_sigma_um / z_um)
+    tile_py = max(4, int(round(xy_tile_um / xy_um)))
+    tile_px = tile_py
+
+    # Aggregate tile profiles
+    tile_profs = []
+    tile_xy = []
+    for iy in range(0, Y, tile_py):
+        for ix in range(0, X, tile_px):
+            sub = vol[:, iy:iy + tile_py, ix:ix + tile_px]
+            if sub.size == 0:
+                continue
+            prof = np.median(
+                sub.reshape(Z, -1).astype(np.float32, copy=False), axis=1)
+            tile_profs.append(prof)
+            tile_xy.append((iy + tile_py / 2.0, ix + tile_px / 2.0))
+    if not tile_profs:
+        return None
+
+    # Dynamic range hint = 99-percentile of tile peaks
+    tile_peaks = np.array([
+        float(np.nanmax(p)) if np.any(np.isfinite(p)) else np.nan
+        for p in tile_profs])
+    tile_peaks = tile_peaks[np.isfinite(tile_peaks)]
+    dyn_hint = float(np.percentile(tile_peaks, 99)) if tile_peaks.size else 0.0
+
+    # Truly-blank top baseline
+    blank_cut = 0.05 * dyn_hint if dyn_hint > 0 else None
+    blank_vals = []
+    for p in tile_profs:
+        chunk = p[:min(top_px, len(p))]
+        chunk = chunk[np.isfinite(chunk)]
+        if blank_cut is not None:
+            chunk = chunk[chunk <= blank_cut]
+        if chunk.size:
+            blank_vals.append(chunk)
+    if blank_vals and sum(b.size for b in blank_vals) >= 3:
+        vals = np.concatenate(blank_vals)
+        med = float(np.median(vals))
+        mad = float(np.median(np.abs(vals - med)))
+        sigma = max(1.4826 * mad, float(np.std(vals)))
+    else:
+        med = 0.0
+        sigma = 0.0
+    if sigma < 1e-6 and dyn_hint > 0:
+        sigma = 0.02 * dyn_hint
+    elif sigma < 1e-6:
+        sigma = 1e-6
+    thr = max(med + k_surface * sigma, med + relative_margin_min * dyn_hint)
+
+    xs_c, ys_c, zs_c = [], [], []
+    for (cy, cx), prof in zip(tile_xy, tile_profs):
+        prof_s = gaussian_filter1d(prof, sigma=sigma_px, mode="nearest")
+        above = prof_s > thr
+        run = 0
+        z_hit = None
+        for zi in range(min(z_max_search, len(prof_s))):
+            if above[zi]:
+                run += 1
+                if run >= min_thick_px:
+                    z_hit = zi - min_thick_px + 1
+                    break
+            else:
+                run = 0
+        if z_hit is None:
+            continue
+        xs_c.append(cx * xy_um)
+        ys_c.append(cy * xy_um)
+        zs_c.append(z_hit * z_um)
+    if len(zs_c) < 5:
+        return None
+
+    # Plane via IRLS-Huber
+    xs_arr = np.asarray(xs_c); ys_arr = np.asarray(ys_c); zs_arr = np.asarray(zs_c)
+    A = np.column_stack([xs_arr, ys_arr, np.ones_like(xs_arr)])
+    coef = np.linalg.lstsq(A, zs_arr, rcond=None)[0]
+    for _ in range(8):
+        r = zs_arr - A @ coef
+        sig = 1.4826 * np.median(np.abs(r - np.median(r))) + 1e-6
+        w = np.where(np.abs(r) <= 1.345 * sig, 1.0,
+                     1.345 * sig / (np.abs(r) + 1e-9))
+        sw = np.sqrt(w)
+        coef = np.linalg.lstsq(sw[:, None] * A, sw * zs_arr, rcond=None)[0]
+    return {"a": float(coef[0]), "b": float(coef[1]), "c": float(coef[2]),
+            "dyn_hint": dyn_hint, "surf_thr": thr}
+
+
+# ---------------------------------------------------------------------
+# Phase 2 — per-column top-of-signal within an anchor band
+# ---------------------------------------------------------------------
+
+def _per_column_top_in_band(
+    vol_sub: np.ndarray,
+    z_um: float,
+    xx: np.ndarray,
+    yy: np.ndarray,
+    z_low_um: np.ndarray,
+    z_high_um: np.ndarray,
+    *,
+    relative_margin: float,
+    min_signal_abs_frac: float,
+    min_thick_um: float,
+) -> np.ndarray:
+    """Per-column first-sustained-above top-of-signal.
+
+    Mirrors v3's `_per_column_top_in_band` but on a single-channel
+    combined volume.  Returns (Ys, Xs) top-z map in µm, NaN where no
+    signal was detected.
+    """
+    Z, Ys, Xs = vol_sub.shape
+    z_axis = np.arange(Z, dtype=np.float32) * z_um
+    band_mask = ((z_axis[:, None, None] >= z_low_um[None])
+                 & (z_axis[:, None, None] <= z_high_um[None]))
+    evidence = vol_sub.astype(np.float32, copy=False)
+    in_band = np.where(band_mask, evidence, np.nan).astype(np.float32)
+    with np.errstate(all="ignore"):
+        col_bg = np.nanpercentile(in_band, 10, axis=0)
+        col_peak = np.nanpercentile(in_band, 99, axis=0)
+    dyn = col_peak - col_bg
+    global_dyn = float(np.nanpercentile(dyn, 95))
+    abs_floor = float(min_signal_abs_frac * global_dyn)
+    col_valid = np.isfinite(dyn) & (dyn >= abs_floor)
+    thr = col_bg + relative_margin * dyn
+    above = (evidence > thr[None]) & band_mask & col_valid[None]
+    k = max(1, int(round(min_thick_um / z_um)))
+    if Z < k + 1:
+        return np.full((Ys, Xs), np.nan, dtype=np.float32)
+    cum = np.cumsum(above.astype(np.int32), axis=0)
+    win = cum[k - 1:].copy()
+    win[1:] -= cum[:-k]
+    is_start = win == k
+    has_any = is_start.any(axis=0)
+    top_z = np.full_like(col_bg, np.nan, dtype=np.float32)
+    if has_any.any():
+        first_idx = np.argmax(is_start, axis=0)
+        top_z[has_any] = (first_idx[has_any] + (k - 1) // 2) * z_um
+    return top_z
+
+
+# ---------------------------------------------------------------------
+# Phase 3 — quadratic surface via quantile-regression IRLS
+# ---------------------------------------------------------------------
+
+def _quadratic_quantile_fit(
+    xs: np.ndarray,
+    ys: np.ndarray,
+    zs: np.ndarray,
+    target_quantile: float = 0.70,
+    n_iter: int = 30,
+) -> dict:
+    """Fit ``z = a·x + b·y + c + p·x² + q·x·y + r·y²`` to (xs, ys, zs)
+    using quantile-regression IRLS at ``target_quantile``.
+
+    IRLS weight:
+        w_i = q      if r_i > 0   (keep deeper tops)
+        w_i = 1 - q  if r_i < 0   (down-weight shallow tops)
+        divided by max(|r_i|, eps)
+
+    Coefficients are returned in absolute (x, y) coordinates.
+    """
+    x0 = float(xs.mean()); y0 = float(ys.mean())
+    u = xs - x0; v = ys - y0
+    X = np.column_stack([u, v, u * u, u * v, v * v, np.ones_like(u)])
+    beta = np.linalg.lstsq(X, zs, rcond=None)[0]
+    qv = float(target_quantile)
+    for _ in range(n_iter):
+        r = zs - X @ beta
+        abs_r = np.abs(r)
+        eps = max(0.01 * float(np.median(abs_r) + 1e-6), 0.5)
+        w = np.where(r >= 0, qv, 1.0 - qv) / np.clip(abs_r, eps, None)
+        sw = np.sqrt(w)
+        beta_new = np.linalg.lstsq(sw[:, None] * X, sw * zs, rcond=None)[0]
+        if np.linalg.norm(beta_new - beta) < 1e-6:
+            beta = beta_new
+            break
+        beta = beta_new
+    a_c, b_c, p, q_c, r_c, c_c = beta
+    # Convert centered coefficients to absolute (x, y) frame
+    a_abs = a_c - 2 * p * x0 - q_c * y0
+    b_abs = b_c - 2 * r_c * y0 - q_c * x0
+    c_abs = (c_c - a_c * x0 - b_c * y0
+             + p * x0 * x0 + q_c * x0 * y0 + r_c * y0 * y0)
+    tilt = math.degrees(math.atan(math.hypot(a_abs, b_abs)))
+    resid = zs - X @ beta
+    return {
+        "a": float(a_abs), "b": float(b_abs), "c": float(c_abs),
+        "p": float(p), "q": float(q_c), "r": float(r_c),
+        "tilt_deg": float(tilt),
+        "n_points": int(len(zs)),
+        "resid_rms_um": float(np.sqrt(np.mean(resid * resid))),
+        "resid_mad_um": float(1.4826 * np.median(np.abs(resid))),
+    }
+
+
+def _surface_z(surface: dict, x, y):
+    x = np.asarray(x, dtype=float); y = np.asarray(y, dtype=float)
+    return (surface["a"] * x + surface["b"] * y + surface["c"]
+            + surface.get("p", 0.0) * x * x
+            + surface.get("q", 0.0) * x * y
+            + surface.get("r", 0.0) * y * y)
+
+
+# ---------------------------------------------------------------------
+# Main entry point
+# ---------------------------------------------------------------------
+
+@dataclass
+class SurfaceResult:
+    surface: Optional[dict]
+    anchor_plane: Optional[dict]
+    n_column_tops: int
+    dyn_hint: float
+    surf_thr_anchor: float
+    target_quantile: float
+    z_um: float
+    xy_um: float
+    # legacy fields (nothing to do with L2 — kept None for any
+    # downstream code that used to inspect them).
+    l2: Optional[dict] = None
+    baseline_mean: float = 0.0
+    baseline_sigma: float = 0.0
+    surf_thr: float = 0.0
+    l2_thr: float = float("nan")
+    n_tiles_total: int = 0
+    n_surface_tiles: int = 0
+    n_l2_tiles: int = 0
+    tile_records: pd.DataFrame = field(default_factory=pd.DataFrame)
+
+
+def estimate_surface_and_l2_image_based(
+    vol: np.ndarray,
+    z_um: float,
+    xy_um: float,
+    *,
+    # Phase 1 (anchor)
+    xy_tile_um: float = 150.0,
+    top_blank_frac: float = 0.05,
+    top_blank_min_um: float = 20.0,
+    surface_search_frac: float = 0.30,
+    k_surface: float = 3.0,
+    relative_margin_min: float = 0.01,
+    min_thick_surface_um: float = 12.0,
+    smooth_sigma_um: float = 6.0,
+    # Phase 2 (per-column refinement)
+    column_stride_um: float = 10.0,
+    band_um: float = 150.0,
+    relative_margin: float = 0.25,
+    min_signal_abs_frac: float = 0.20,
+    min_thick_um: float = 10.0,
+    # Phase 3 (quadratic quantile fit)
+    target_quantile: float = 0.70,
+    n_iter: int = 30,
+    # Accepted-but-ignored for signature compatibility
+    mask_bg_for_l2=None,
+    **_ignored,
+) -> SurfaceResult:
+    """Image-only curved surface estimator (see module docstring).
+
+    Parameters mirror N22 as closely as possible:
+    * ``band_um`` matches N22's anchor band (±150 µm).
+    * ``relative_margin=0.25`` matches N22's per-column threshold.
+    * ``min_signal_abs_frac=0.20`` gates columns whose dynamic range is
+      below 20 % of the global 95-percentile dynamic range.
+    * ``target_quantile=0.70`` matches N22's quantile-regression IRLS.
+    """
+    Z, Y, X = vol.shape
+
+    anchor = _coarse_plane_anchor(
+        vol, z_um, xy_um,
+        xy_tile_um=xy_tile_um,
+        top_blank_frac=top_blank_frac,
+        top_blank_min_um=top_blank_min_um,
+        surface_search_frac=surface_search_frac,
+        k_surface=k_surface,
+        relative_margin_min=relative_margin_min,
+        min_thick_surface_um=min_thick_surface_um,
+        smooth_sigma_um=smooth_sigma_um,
+    )
+    if anchor is None:
+        return SurfaceResult(
+            surface=None, anchor_plane=None,
+            n_column_tops=0, dyn_hint=0.0,
+            surf_thr_anchor=0.0,
+            target_quantile=target_quantile,
+            z_um=z_um, xy_um=xy_um,
+        )
+
+    # --- Phase 2 setup: subsample XY to ~column_stride_um ---------
+    sx = max(1, int(round(column_stride_um / xy_um)))
+    sy = max(1, int(round(column_stride_um / xy_um)))
+    vol_sub = vol[:, ::sy, ::sx]
+    _, Ys, Xs = vol_sub.shape
+    xs_um = np.arange(Xs, dtype=np.float32) * sx * xy_um
+    ys_um = np.arange(Ys, dtype=np.float32) * sy * xy_um
+    xx, yy = np.meshgrid(xs_um, ys_um)
+
+    # Anchor-derived z band: clamp to [0, (Z-1)*z_um] so invalid
+    # bands don't silently mask everything.
+    anchor_zz = (anchor["a"] * xx + anchor["b"] * yy + anchor["c"])
+    z_max_um = (Z - 1) * z_um
+    z_low_um = np.clip(anchor_zz - band_um, 0.0, z_max_um)
+    z_high_um = np.clip(anchor_zz + band_um, 0.0, z_max_um)
+
+    # --- Phase 2: per-column top-of-signal -------------------------
+    top_z = _per_column_top_in_band(
+        vol_sub, z_um, xx, yy, z_low_um, z_high_um,
+        relative_margin=relative_margin,
+        min_signal_abs_frac=min_signal_abs_frac,
+        min_thick_um=min_thick_um,
+    )
+    mask = np.isfinite(top_z)
+    if mask.sum() < 50:
+        return SurfaceResult(
+            surface=None, anchor_plane=anchor,
+            n_column_tops=int(mask.sum()),
+            dyn_hint=float(anchor.get("dyn_hint", 0.0)),
+            surf_thr_anchor=float(anchor.get("surf_thr", 0.0)),
+            target_quantile=target_quantile,
+            z_um=z_um, xy_um=xy_um,
+        )
+
+    xs_fit = xx[mask].ravel()
+    ys_fit = yy[mask].ravel()
+    zs_fit = top_z[mask].ravel()
+
+    # --- Phase 3: quadratic quantile fit ---------------------------
+    surface = _quadratic_quantile_fit(
+        xs_fit, ys_fit, zs_fit,
+        target_quantile=target_quantile,
+        n_iter=n_iter,
+    )
+    surface["method"] = f"image_n22_q{int(target_quantile * 100)}"
+
+    return SurfaceResult(
+        surface=surface,
+        anchor_plane=anchor,
+        n_column_tops=int(mask.sum()),
+        dyn_hint=float(anchor.get("dyn_hint", 0.0)),
+        surf_thr_anchor=float(anchor.get("surf_thr", 0.0)),
+        target_quantile=target_quantile,
+        z_um=z_um, xy_um=xy_um,
+    )
+
+
+# ---------------------------------------------------------------------
+# Metrics (mirrors session v2 / v3)
+# ---------------------------------------------------------------------
+
+def depth_profile_stats(
+    pts_xyz_um: np.ndarray,
+    surface: dict,
+    *,
+    depth_min: float = -200.0,
+    depth_max: float = 400.0,
+    bin_um: float = 5.0,
+) -> dict:
+    """Above-frac / onset / cum-ratio metrics used in session 03 v2/v3."""
+    if surface is None or len(pts_xyz_um) == 0:
+        return {}
+    z_surf = _surface_z(surface, pts_xyz_um[:, 0], pts_xyz_um[:, 1])
+    depth = pts_xyz_um[:, 2] - z_surf
+    n = len(depth)
+    above = (depth < 0).sum() / n
+    above5 = (depth < -5.0).sum() / n
+    edges = np.arange(depth_min, depth_max + bin_um, bin_um)
+    h, _ = np.histogram(depth, bins=edges)
+    density = h / (bin_um * max(n, 1))
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    bulk = density[(centers >= 50) & (centers <= 200)].mean()
+    above_dens = density[(centers >= -200) & (centers < 0)].mean()
+    cum_above = above_dens / max(bulk, 1e-9)
+    onset = np.nan
+    if bulk > 0:
+        halfmax = 0.5 * bulk
+        for c, d in zip(centers, density):
+            if c >= 0 and d >= halfmax:
+                onset = float(c)
+                break
+    return {
+        "above_frac": float(above),
+        "above_frac_5um": float(above5),
+        "cum_above_ratio": float(cum_above),
+        "onset_depth_um": onset,
+        "n_points": int(n),
+    }

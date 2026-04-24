@@ -1,0 +1,10 @@
+"""List HCR channels per subject."""
+import sys
+sys.path.insert(0, "/root/capsule/code/dev_code")
+from benchmark_analysis import list_hcr_channels
+from benchmark_data_loader import load_subject
+
+for sid in ["755252", "767018", "767022", "782149", "788406", "790322"]:
+    s = load_subject(sid)
+    chs = list_hcr_channels(s)
+    print(f"{sid}: {chs}")

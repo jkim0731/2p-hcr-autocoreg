@@ -1,0 +1,75 @@
+"""Test first_substantial on both anchor AND surface stages."""
+from __future__ import annotations
+import sys, importlib.util, os
+from pathlib import Path
+import numpy as np
+os.environ["PYTHONUNBUFFERED"] = "1"
+
+sys.path.insert(0, "/root/capsule/code/dev_code")
+_spec = importlib.util.spec_from_file_location(
+    "img_surface_l2",
+    str(Path("/root/capsule/code/dev_code") / "03_image_based_surface.py"))
+_mod = importlib.util.module_from_spec(_spec); sys.modules["img_surface_l2"] = _mod
+_spec.loader.exec_module(_mod)
+
+from benchmark_analysis import load_hcr_combined
+from benchmark_data_loader import hcr_px_to_um, load_subject
+
+
+def sz(s, x, y):
+    return (s["a"]*x + s["b"]*y + s["c"]
+            + s.get("p",0)*x*x + s.get("q",0)*x*y + s.get("r",0)*y*y)
+
+
+def eval_surf(s, pts):
+    if s is None: return np.nan, np.nan
+    zs = sz(s, pts[:,0], pts[:,1])
+    depth = pts[:,2] - zs
+    n = len(depth)
+    above = (depth < 0).sum() / n
+    edges = np.arange(-200, 404, 5.0)
+    h, _ = np.histogram(depth, bins=edges)
+    density = h / (5.0 * max(n, 1))
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    bulk = density[(centers >= 50) & (centers <= 200)].mean()
+    onset = np.nan
+    if bulk > 0:
+        for c, d in zip(centers, density):
+            if c >= 0 and d >= 0.5 * bulk:
+                onset = float(c); break
+    return above, onset
+
+
+HCR_SUBJECTS = ["755252", "767018", "767022", "782149", "788406", "790322"]
+
+# Fixed: use first_substantial for BOTH anchor and surface, with frac=0.5 for both
+for sid in HCR_SUBJECTS:
+    print(f"=== {sid} ===", flush=True)
+    s = load_subject(sid)
+    vol, xy_um, z_um, channels = load_hcr_combined(s, level=4)
+    pts = hcr_px_to_um(s.hcr_centroids[["z_px","y_px","x_px"]].values, s)[:, [2,1,0]]
+
+    # (A) Baseline: default "first" everywhere
+    rA = _mod.estimate_surface_and_l2_image_based(vol, z_um, xy_um)
+    aA, oA = eval_surf(rA.surface, pts)
+    anchor_cA = rA.anchor["c"] if rA.anchor else np.nan
+    print(f"  baseline:      anchor_c={anchor_cA:6.1f}  c={rA.surface['c']:6.1f} lift={rA.clamp_lift_um:5.1f} above={aA:.4f} onset={oA}", flush=True)
+
+    # (B) first_substantial for BOTH anchor and surface, frac=0.5
+    rB = _mod.estimate_surface_and_l2_image_based(
+        vol, z_um, xy_um,
+        column_top_method="first_substantial",
+        column_top_substantial_frac=0.5)
+    aB, oB = eval_surf(rB.surface, pts)
+    anchor_cB = rB.anchor["c"] if rB.anchor else np.nan
+    print(f"  both_sub_0.5:  anchor_c={anchor_cB:6.1f}  c={rB.surface['c']:6.1f} lift={rB.clamp_lift_um:5.1f} above={aB:.4f} onset={oB}", flush=True)
+
+    # (C) first for surface, first_substantial(0.5) for anchor
+    rC = _mod.estimate_surface_and_l2_image_based(
+        vol, z_um, xy_um,
+        column_top_method="first",
+        anchor_top_method="first_substantial",
+        anchor_top_substantial_frac=0.5)
+    aC, oC = eval_surf(rC.surface, pts)
+    anchor_cC = rC.anchor["c"] if rC.anchor else np.nan
+    print(f"  anchor_only:   anchor_c={anchor_cC:6.1f}  c={rC.surface['c']:6.1f} lift={rC.clamp_lift_um:5.1f} above={aC:.4f} onset={oC}", flush=True)

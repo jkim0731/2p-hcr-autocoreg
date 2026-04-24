@@ -1,0 +1,20 @@
+
+===== 788406 =====
+  788406: n_cz=932 n_hcr_gfp=17427
+    HCR mask (level=4): shape=(380, 581, 580) xy=3.96µm z=4.00µm nz=2962384 wall=0.3s
+    CZ voronoi labels: shape=(450, 512, 512) xy=0.780µm z=1.00µm nz=2824964 wall=45.8s
+    HCR vol: shape=(66, 115, 114) origin_um=[16.0, 4.0, 0.0]
+    CZ  vol: shape=(21, 20, 20) origin_um=[28.0, 0.0, 0.0]
+    sweep wall=2.8s best sxy=2.0 sz=1.8 ncc_peak=0.528 zscore=2.9
+    GT fit: sxy=1.797 sz=2.821 cz_center_in_hcr=[621.4, 1193.9, 1241.2]
+    ORIGIN_ERR=627.1 µm  sxy_err=+0.203 sz_err=-1.021
+
+===== 782149 =====
+  782149: n_cz=894 n_hcr_gfp=3831
+    HCR mask (level=4): shape=(252, 581, 579) xy=3.92µm z=4.00µm nz=473091 wall=563.6s
+    CZ voronoi labels: shape=(450, 512, 512) xy=0.780µm z=1.00µm nz=2592062 wall=48.6s
+    HCR vol: shape=(41, 114, 113) origin_um=[76.0, 0.0, 0.0]
+    CZ  vol: shape=(22, 20, 20) origin_um=[15.0, 0.0, 0.0]
+    sweep wall=0.6s best sxy=1.6 sz=1.8 ncc_peak=0.261 zscore=3.0
+    GT fit: sxy=1.965 sz=2.907 cz_center_in_hcr=[867.6, 1331.0, 1100.2]
+    ORIGIN_ERR=1171.3 µm  sxy_err=-0.365 sz_err=-1.107

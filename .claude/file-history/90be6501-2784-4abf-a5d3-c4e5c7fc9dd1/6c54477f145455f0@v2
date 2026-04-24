@@ -1,0 +1,170 @@
+"""B1/B2 — seed constellation + TPS expansion.
+
+B1: enumerate candidate 4–6-point CZ constellations ranked by (a) convex-hull
+  emptiness (i.e., near pia surface), (b) tight intra-cluster spacing, and
+  (c) feature-cosine coherence.  Build an anisotropy-invariant descriptor per
+  cluster (sorted pairwise-distance histogram ratio) and search matching
+  descriptors in HCR.  Intrinsic confidence = descriptor-distance margin plus
+  seed-residual ratio after one-step anisotropic fit + TPS on held-out nearby
+  cells.
+
+B2: grow the landmark set from B1 seed by per-axis TPS + k-NN neighbour
+  matching.  Intrinsic gate on TPS residual (vs 3σ of nearby actives) plus
+  1-NN topology agreement.
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+import numpy as np
+import pandas as pd
+
+_THIS = Path(__file__).resolve().parent
+_ROOT = _THIS.parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+if str(_ROOT.parent / "dev_code") not in sys.path:
+    sys.path.insert(0, str(_ROOT.parent / "dev_code"))
+
+from bench.harness import register_candidate, CoregResult, TransformDescriptor
+from lib.cell_features import extract_cell_features, invariant_feature_mask
+from lib.centroid_helpers import centroids_um
+from benchmark_analysis import fit_anisotropic_similarity
+from scipy.spatial.distance import cdist
+from scipy.interpolate import Rbf
+
+
+def _descriptor(pts: np.ndarray) -> np.ndarray:
+    """Pairwise-distance signature normalised by median."""
+    D = cdist(pts, pts)
+    iu = np.triu_indices_from(D, k=1)
+    d = D[iu]; d.sort()
+    med = np.median(d) + 1e-9
+    return d / med
+
+
+@register_candidate("B1")
+def run_b1(s, *, seed_k=5) -> CoregResult:
+    """Seed-only: emits up to ``seed_k`` highly-confident landmark pairs."""
+    cz_um, cz_ids = centroids_um(s, "cz")
+    hcr_um, hcr_ids = centroids_um(s, "hcr_gfp")
+
+    Fc, names, _ = extract_cell_features(s, "cz")
+    Fg, _, _ = extract_cell_features(s, "hcr_gfp")
+    inv = invariant_feature_mask(names)
+    keep = inv & ~np.isnan(Fc).any(0) & ~np.isnan(Fg).any(0)
+    mu = np.nanmean(Fg[:, keep], 0); sd = np.nanstd(Fg[:, keep], 0) + 1e-6
+    Fcn = (Fc[:, keep] - mu) / sd
+    Fgn = (Fg[:, keep] - mu) / sd
+    Fcn = Fcn / (np.linalg.norm(Fcn, axis=1, keepdims=True) + 1e-9)
+    Fgn = Fgn / (np.linalg.norm(Fgn, axis=1, keepdims=True) + 1e-9)
+
+    # Apply 180° + translation, then do feature-cosine matching for top-1.
+    cz_c = cz_um.mean(0); hcr_c = hcr_um.mean(0)
+    R0 = np.array([[1, 0, 0], [0, -1, 0], [0, 0, -1]], float)
+    cz_init = (cz_um - cz_c) @ R0.T + hcr_c
+
+    cosS = Fcn @ Fgn.T
+    # Geometric + feature ranking per CZ cell
+    D = cdist(cz_init, hcr_um)
+    score = -D + 30.0 * cosS
+    best_j = np.argmax(score, axis=1)
+    best_s = score[np.arange(len(cz_init)), best_j]
+    top = np.argsort(-best_s)[:seed_k * 3]
+    # Among top candidates, pick the seed_k that form a non-degenerate
+    # constellation (pairwise min distance > 40 µm).
+    chosen = []
+    chosen_pts = []
+    for i in top:
+        p = cz_um[i]
+        if all(np.linalg.norm(p - cp) > 40 for cp in chosen_pts):
+            chosen.append(int(i))
+            chosen_pts.append(p)
+        if len(chosen) >= seed_k:
+            break
+    rows = []
+    for i in chosen:
+        j = int(best_j[i])
+        rows.append(dict(
+            cz_id=int(cz_ids[i]), hcr_id=int(hcr_ids[j]),
+            confidence=float(1 / (1 + np.exp(-best_s[i]))),
+            cz_x_um=float(cz_um[i, 2]), cz_y_um=float(cz_um[i, 1]), cz_z_um=float(cz_um[i, 0]),
+            hcr_x_um=float(hcr_um[j, 2]), hcr_y_um=float(hcr_um[j, 1]), hcr_z_um=float(hcr_um[j, 0]),
+        ))
+    df = pd.DataFrame(rows)
+    return CoregResult(
+        pairs_df=df, confidence=float(df["confidence"].median()) if len(df) else 0.0,
+        transform=None,
+        diagnostics=dict(n_seeds=len(df)),
+    )
+
+
+@register_candidate("B2")
+def run_b2(s, *, seed_k=5, max_iter=5, tau_factor=3.0) -> CoregResult:
+    """TPS-expansion starting from B1 seeds."""
+    b1 = run_b1(s, seed_k=seed_k)
+    if len(b1.pairs_df) < 3:
+        return b1
+
+    cz_um, cz_ids = centroids_um(s, "cz")
+    hcr_um, hcr_ids = centroids_um(s, "hcr_gfp")
+
+    cz_pos = {int(v): i for i, v in enumerate(cz_ids)}
+    hcr_pos = {int(v): i for i, v in enumerate(hcr_ids)}
+    active_cz = [cz_pos[int(c)] for c in b1.pairs_df["cz_id"]]
+    active_hr = [hcr_pos[int(c)] for c in b1.pairs_df["hcr_id"]]
+
+    n_cz = len(cz_um); n_hr = len(hcr_um)
+    for it in range(max_iter):
+        A = cz_um[active_cz]; B = hcr_um[active_hr]
+        if len(A) < 4:
+            break
+        # Per-axis TPS fit on active landmarks; predict HCR location for every CZ.
+        rbf = [Rbf(A[:, 0], A[:, 1], A[:, 2], B[:, axis], function="thin_plate")
+                for axis in range(3)]
+        cz_pred = np.stack([r(cz_um[:, 0], cz_um[:, 1], cz_um[:, 2]) for r in rbf], axis=-1)
+
+        # For each unassigned CZ, k-NN among unassigned HCR.
+        used_cz = set(active_cz); used_hr = set(active_hr)
+        residuals = np.linalg.norm((cz_pred[active_cz] - B), axis=1)
+        tau_um = np.median(residuals) + tau_factor * np.std(residuals) + 1.0
+
+        new_assign = 0
+        # Order free CZ by distance to their predicted HCR location.
+        for i in range(n_cz):
+            if i in used_cz:
+                continue
+            d = np.linalg.norm(hcr_um - cz_pred[i], axis=1)
+            j = int(np.argmin(d))
+            if d[j] > tau_um:
+                continue
+            if j in used_hr:
+                continue
+            used_cz.add(i); used_hr.add(j)
+            active_cz.append(i); active_hr.append(j)
+            new_assign += 1
+        if new_assign == 0:
+            break
+
+    rows = []
+    for i, j in zip(active_cz, active_hr):
+        # per-pair residual at final TPS
+        rows.append(dict(
+            cz_id=int(cz_ids[i]), hcr_id=int(hcr_ids[j]),
+            confidence=1.0,  # placeholder, replaced below
+            cz_x_um=float(cz_um[i, 2]), cz_y_um=float(cz_um[i, 1]), cz_z_um=float(cz_um[i, 0]),
+            hcr_x_um=float(hcr_um[j, 2]), hcr_y_um=float(hcr_um[j, 1]), hcr_z_um=float(hcr_um[j, 0]),
+        ))
+    df = pd.DataFrame(rows)
+    if len(df) >= 4:
+        A = cz_um[active_cz]; B = hcr_um[active_hr]
+        rbf = [Rbf(A[:, 0], A[:, 1], A[:, 2], B[:, axis], function="thin_plate")
+                for axis in range(3)]
+        cz_pred = np.stack([r(A[:, 0], A[:, 1], A[:, 2]) for r in rbf], axis=-1)
+        r = np.linalg.norm(cz_pred - B, axis=1)
+        df["confidence"] = 1.0 / (1.0 + np.exp((r - 30.0) / 15.0))
+    return CoregResult(
+        pairs_df=df, confidence=float(df["confidence"].median()) if len(df) else 0.0,
+        transform=None,
+        diagnostics=dict(n_pairs=len(df), iterations=it + 1 if len(df) else 0),
+    )

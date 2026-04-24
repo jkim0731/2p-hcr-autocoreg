@@ -1,0 +1,39 @@
+
+=== 788406 ===
+  n_cz=932, n_hcr_gfp=17427, n_gt=787
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  I2 (7.3s) GT median=334 µm rms=358 µm n_lt50_direct=3/787
+  NN: 1/787 IDs exact, n_lt50_pos=5 (median NN-to-GT dist=339 µm)
+  Recip NN: n_recip_total=53, GT-subset IDs exact=0, n_lt50_pos=0 / 46
+
+=== 755252 ===
+  n_cz=835, n_hcr_gfp=30804, n_gt=639
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  I2 (9.4s) GT median=260 µm rms=390 µm n_lt50_direct=1/639
+  NN: 0/639 IDs exact, n_lt50_pos=1 (median NN-to-GT dist=257 µm)
+  Recip NN: n_recip_total=104, GT-subset IDs exact=0, n_lt50_pos=0 / 74
+
+=== 767022 ===
+  n_cz=926, n_hcr_gfp=14239, n_gt=793
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  I2 (5.7s) GT median=381 µm rms=452 µm n_lt50_direct=1/793
+  NN: 2/793 IDs exact, n_lt50_pos=2 (median NN-to-GT dist=383 µm)
+  Recip NN: n_recip_total=50, GT-subset IDs exact=0, n_lt50_pos=0 / 45
+
+=== 782149 ===
+  n_cz=894, n_hcr_gfp=3831, n_gt=303
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  I2 (6.7s) GT median=348 µm rms=363 µm n_lt50_direct=1/303
+  NN: 1/303 IDs exact, n_lt50_pos=1 (median NN-to-GT dist=358 µm)
+  Recip NN: n_recip_total=27, GT-subset IDs exact=0, n_lt50_pos=0 / 12
+
+=== SUMMARY ===
+subject  n_gt  i2_dt_s  i2_median_um  i2_rms_um  i2_direct_n_lt50  nn_id_exact  nn_pos_n_lt50  recip_gt_id_exact  recip_pos_n_lt50  recip_total
+ 788406   787      7.3         334.0      358.0                 3            1              5                  0                 0           53
+ 755252   639      9.4         260.0      390.0                 1            0              1                  0                 0          104
+ 767022   793      5.7         381.0      452.0                 1            2              2                  0                 0           50
+ 782149   303      6.7         348.0      363.0                 1            1              1                  0                 0           27

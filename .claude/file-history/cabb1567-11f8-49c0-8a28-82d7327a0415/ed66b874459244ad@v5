@@ -1,0 +1,625 @@
+"""Session 03 — image-based curved surface estimator (N22 image-port).
+
+Port of N22 (`benchmark_analysis.estimate_pia_surface_quantile_ceiling`)
+that replaces the centroid-based ROI clamp with an image-derived local-
+maxima clamp so the fitter works from pixels alone.
+
+Stages:
+
+  1. **Top-of-volume baseline.**  Pool every voxel of the top 1–2
+     z-slices (dropping exact-zero padding voxels); take median and
+     1.4826·MAD.  That sets a calibrated noise floor for the anchor.
+
+  2. **Anchor plane** via per-tile first-rise using the global
+     threshold — coarse plane, just used to constrain the per-column
+     search band.
+
+  3. **Per-column top-of-signal in ±band_um around the anchor.**
+     Each column (10 µm stride) gets its own 10–99 percentile baseline
+     / peak, and its threshold is ``col_bg + 0.25·(col_peak-col_bg)``.
+     Columns with too little dynamic range are rejected.  The onset
+     is the first z that stays above threshold for ≥ `min_thick_um`.
+
+  4. **Quadratic quantile-regression fit (q = 0.70).**  IRLS with
+     asymmetric weights ``q`` vs ``1-q`` pulls the fit past shallow
+     noise, matching N22.
+
+  5. **Image-peak clamp.**  Detect local-max voxels in the top ~half
+     of the volume (strong isolated bright spots — cell-like).  In
+     each `clamp_tile_um` XY tile, take the 10th-percentile shallowest
+     peak z; lift the surface until it sits above that envelope,
+     then subtract `safety_offset_um`.  This is the image-only
+     analogue of N22's `_clamp_to_roi_envelope` (centroids replaced
+     by local-maxima positions).
+
+No L2 estimation (dropped per user request; CZ L2 ambiguous in side
+views).  All thresholds are distribution-driven.
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass, field
+from typing import Optional
+
+import numpy as np
+import pandas as pd
+from scipy.ndimage import gaussian_filter1d, maximum_filter
+
+
+# ---------------------------------------------------------------------
+# Stage 1 — top-of-volume baseline
+# ---------------------------------------------------------------------
+
+def _global_top_baseline(
+    vol: np.ndarray,
+    *,
+    n_top_planes: int,
+    max_pad_frac: float = 0.95,
+) -> tuple[float, float, float]:
+    """Robust baseline (median, 1.4826·MAD) pooled over top 1–2 slices.
+
+    Slices that are ≥ ``max_pad_frac`` exact-zero are treated as pure
+    padding and skipped; exact-zero voxels in the remaining slices are
+    dropped (they're zero-padding around non-rectangular CZ ROIs).
+
+    Returns (mean, sigma, dyn_hint) with a fallback sigma of
+    ``0.02 · percentile(vol, 99)`` when the pool ends up empty (HCR
+    combined volume is exactly zero at the top).
+    """
+    Z = vol.shape[0]
+    n_top = max(1, min(n_top_planes, Z))
+    pool: list[np.ndarray] = []
+    for zi in range(n_top):
+        sl = vol[zi].astype(np.float32, copy=False).ravel()
+        if sl.size == 0:
+            continue
+        frac_zero = float(np.mean(sl == 0))
+        if frac_zero >= max_pad_frac:
+            continue
+        nz = sl[sl > 0]
+        if nz.size:
+            pool.append(nz)
+
+    dyn_hint = float(np.percentile(vol, 99.0))
+    if not pool:
+        sigma = max(1e-6, 0.02 * dyn_hint) if dyn_hint > 0 else 1e-6
+        return 0.0, sigma, dyn_hint
+
+    vals = np.concatenate(pool)
+    med = float(np.median(vals))
+    mad = float(np.median(np.abs(vals - med)))
+    sigma = 1.4826 * mad
+    std_fallback = float(np.std(vals))
+    sigma = max(sigma, std_fallback)
+    if sigma < 1e-6 and dyn_hint > 0:
+        sigma = 0.02 * dyn_hint
+    elif sigma < 1e-6:
+        sigma = 1e-6
+    return med, sigma, dyn_hint
+
+
+# ---------------------------------------------------------------------
+# Stage 2 — anchor plane via per-tile first-rise
+# ---------------------------------------------------------------------
+
+def _first_sustained_above(
+    profile: np.ndarray, thr: float, min_thick_px: int,
+    z_hi: int,
+) -> Optional[int]:
+    run = 0
+    for zi in range(min(z_hi, len(profile))):
+        if np.isfinite(profile[zi]) and profile[zi] > thr:
+            run += 1
+            if run >= min_thick_px:
+                return zi - min_thick_px + 1
+        else:
+            run = 0
+    return None
+
+
+def _anchor_plane_from_tiles(
+    vol: np.ndarray, z_um: float, xy_um: float,
+    *, tile_px: int, thr: float, min_thick_px: int,
+    z_max_search: int, sigma_px: float,
+) -> tuple[Optional[dict], int, int]:
+    """Fit a tilted plane ``z = a·x + b·y + c`` through per-tile
+    first-rise onsets (IRLS-Huber).  Used as the anchor for the
+    per-column search band."""
+    Z, Y, X = vol.shape
+    xs, ys, zs = [], [], []
+    for iy in range(0, Y, tile_px):
+        for ix in range(0, X, tile_px):
+            sub = vol[:, iy:iy + tile_px, ix:ix + tile_px]
+            if sub.size == 0:
+                continue
+            prof = np.median(
+                sub.reshape(Z, -1).astype(np.float32, copy=False), axis=1)
+            prof_s = gaussian_filter1d(prof, sigma=sigma_px, mode="nearest")
+            z_hit = _first_sustained_above(
+                prof_s, thr, min_thick_px, z_max_search)
+            if z_hit is None:
+                continue
+            xs.append((ix + tile_px / 2.0) * xy_um)
+            ys.append((iy + tile_px / 2.0) * xy_um)
+            zs.append(z_hit * z_um)
+
+    n_tiles_total = max(1, (Y + tile_px - 1) // tile_px) * \
+                    max(1, (X + tile_px - 1) // tile_px)
+    n_hits = len(xs)
+    if n_hits < 10:
+        return None, n_tiles_total, n_hits
+
+    xs = np.asarray(xs); ys = np.asarray(ys); zs = np.asarray(zs)
+    x0 = float(xs.mean()); y0 = float(ys.mean())
+    u = xs - x0; v = ys - y0
+    A = np.column_stack([u, v, np.ones_like(u)])
+    beta = np.linalg.lstsq(A, zs, rcond=None)[0]
+    for _ in range(8):
+        r = zs - A @ beta
+        sig = 1.4826 * np.median(np.abs(r - np.median(r))) + 1e-6
+        w = np.where(np.abs(r) <= 1.345 * sig, 1.0,
+                     1.345 * sig / (np.abs(r) + 1e-9))
+        sw = np.sqrt(w)
+        beta = np.linalg.lstsq(sw[:, None] * A, sw * zs, rcond=None)[0]
+    a_c, b_c, c_c = beta
+    c_abs = c_c - a_c * x0 - b_c * y0
+    tilt = math.degrees(math.atan(math.hypot(a_c, b_c)))
+    anchor = {"a": float(a_c), "b": float(b_c), "c": float(c_abs),
+              "p": 0.0, "q": 0.0, "r": 0.0,
+              "tilt_deg": float(tilt), "n_points": int(n_hits)}
+    return anchor, n_tiles_total, n_hits
+
+
+# ---------------------------------------------------------------------
+# Stage 3 — per-column top-of-signal in a band around anchor
+# ---------------------------------------------------------------------
+
+def _per_column_top_in_band(
+    vol_sub: np.ndarray, z_um: float,
+    z_low: np.ndarray, z_high: np.ndarray,
+    *, relative_margin: float, min_signal_abs_frac: float,
+    min_thick_um: float,
+) -> tuple[Optional[np.ndarray], np.ndarray, np.ndarray]:
+    """Per-column first-sustained-above-threshold in a z band.
+
+    Matches ``_per_column_top_in_band`` in ``03_surface_790322_explore``
+    but trimmed to a single-channel combined volume.  Returns
+    (top_z_um, dyn_per_col, col_peak_per_col).
+    """
+    Zs, Ys, Xs = vol_sub.shape
+    z_axis = np.arange(Zs, dtype=np.float32) * z_um
+    band_mask = (z_axis[:, None, None] >= z_low[None]) & \
+                (z_axis[:, None, None] <= z_high[None])
+    in_band = np.where(band_mask, vol_sub, np.nan).astype(np.float32)
+    with np.errstate(all="ignore"):
+        col_bg = np.nanpercentile(in_band, 10, axis=0)
+        col_peak = np.nanpercentile(in_band, 99, axis=0)
+    dyn = col_peak - col_bg
+    global_dyn = float(np.nanpercentile(dyn, 95))
+    abs_floor = float(min_signal_abs_frac * global_dyn)
+    col_valid = np.isfinite(dyn) & (dyn >= abs_floor)
+    thr = col_bg + relative_margin * dyn
+    above = (vol_sub > thr[None, :, :]) & band_mask & col_valid[None, :, :]
+    k = max(1, int(round(min_thick_um / z_um)))
+    if Zs < k + 1:
+        return None, dyn, col_peak
+    cum = np.cumsum(above.astype(np.int32), axis=0)
+    win = cum[k - 1:].copy()
+    win[1:] -= cum[:-k]
+    is_start = win == k
+    has_any = is_start.any(axis=0)
+    first_z_idx = np.argmax(is_start, axis=0)
+    top_z = np.full_like(col_bg, np.nan)
+    top_z[has_any] = (first_z_idx[has_any] + (k - 1) // 2) * z_um
+    return top_z, dyn, col_peak
+
+
+# ---------------------------------------------------------------------
+# Stage 4 — quadratic quantile-regression IRLS
+# ---------------------------------------------------------------------
+
+def _quadratic_quantile_fit(
+    xs: np.ndarray, ys: np.ndarray, zs: np.ndarray,
+    *, target_quantile: float = 0.70, n_iter: int = 30,
+) -> dict:
+    """Fit ``z = a·x + b·y + c + p·x² + q·x·y + r·y²`` with IRLS quantile
+    regression at ``target_quantile``.
+
+    Positive residuals (top deeper than fit) are weighted ``q``, negative
+    residuals (top shallower than fit) ``1 - q``.  This pulls the fit
+    past shallow noise (above-surface autofluorescence / debris) —
+    exactly matching N22 (`_robust_quadratic_fit` replaced by a quantile
+    loss).
+    """
+    x0 = float(xs.mean()); y0 = float(ys.mean())
+    u = xs - x0; v = ys - y0
+    X = np.column_stack([u, v, u * u, u * v, v * v, np.ones_like(u)])
+    beta = np.linalg.lstsq(X, zs, rcond=None)[0]
+    q = float(target_quantile)
+    for _ in range(n_iter):
+        r = zs - X @ beta
+        abs_r = np.abs(r)
+        eps = max(0.01 * float(np.median(abs_r) + 1e-6), 0.5)
+        w = np.where(r >= 0, q, 1.0 - q) / np.clip(abs_r, eps, None)
+        sw = np.sqrt(w)
+        beta_new = np.linalg.lstsq(sw[:, None] * X, sw * zs, rcond=None)[0]
+        if np.linalg.norm(beta_new - beta) < 1e-6:
+            beta = beta_new
+            break
+        beta = beta_new
+    a_c, b_c, p, q_c, r_c, c_c = beta
+    a_abs = a_c - 2 * p * x0 - q_c * y0
+    b_abs = b_c - 2 * r_c * y0 - q_c * x0
+    c_abs = (c_c - a_c * x0 - b_c * y0
+             + p * x0 * x0 + q_c * x0 * y0 + r_c * y0 * y0)
+    tilt = math.degrees(math.atan(math.hypot(a_abs, b_abs)))
+    resid = zs - X @ beta
+    return {
+        "a": float(a_abs), "b": float(b_abs), "c": float(c_abs),
+        "p": float(p), "q": float(q_c), "r": float(r_c),
+        "tilt_deg": float(tilt),
+        "n_points": int(len(zs)),
+        "resid_mad_um": float(1.4826 * np.median(np.abs(resid))),
+        "target_quantile": float(target_quantile),
+    }
+
+
+def _surface_z(surface: dict, x, y):
+    x = np.asarray(x, dtype=float); y = np.asarray(y, dtype=float)
+    return (surface["a"] * x + surface["b"] * y + surface["c"]
+            + surface.get("p", 0.0) * x * x
+            + surface.get("q", 0.0) * x * y
+            + surface.get("r", 0.0) * y * y)
+
+
+# ---------------------------------------------------------------------
+# Stage 5 — image-peak clamp (image-only analogue of N22's ROI clamp)
+# ---------------------------------------------------------------------
+
+def _detect_bright_peaks(
+    vol: np.ndarray, z_um: float, xy_um: float,
+    *, bg_mean: float, bg_sigma: float, dyn_hint: float,
+    peak_k: float = 10.0,
+    neighborhood_um: tuple[float, float, float] = (8.0, 10.0, 10.0),
+    z_max_px: Optional[int] = None,
+) -> np.ndarray:
+    """Local-maxima detector.  Returns an (N, 3) array of peak
+    coordinates in µm ``(x, y, z)``.
+
+    A voxel is a peak iff it equals the max in an elliptical
+    neighborhood of size ``neighborhood_um`` and exceeds
+    ``bg_mean + peak_k · bg_sigma``.  Only peaks in ``z < z_max_px``
+    are returned, so we don't scan the whole tissue (waste of RAM and
+    the clamp only needs peaks in/above the upper tissue anyway).
+    """
+    Z, Y, X = vol.shape
+    if z_max_px is None:
+        z_max_px = Z
+    z_max_px = int(max(1, min(Z, z_max_px)))
+    sz = max(1, int(round(neighborhood_um[0] / z_um)) | 1)
+    sy = max(1, int(round(neighborhood_um[1] / xy_um)) | 1)
+    sx = max(1, int(round(neighborhood_um[2] / xy_um)) | 1)
+    sub = vol[:z_max_px].astype(np.float32, copy=False)
+    thr_noise = bg_mean + peak_k * bg_sigma
+    thr_rel = bg_mean + 0.20 * dyn_hint
+    thr = max(thr_noise, thr_rel)
+    local_max = maximum_filter(sub, size=(sz, sy, sx), mode="nearest")
+    peaks = (sub == local_max) & (sub > thr)
+    zz, yy, xx = np.where(peaks)
+    if zz.size == 0:
+        return np.empty((0, 3), dtype=np.float32)
+    pts = np.column_stack([
+        xx.astype(np.float32) * xy_um,
+        yy.astype(np.float32) * xy_um,
+        zz.astype(np.float32) * z_um,
+    ])
+    return pts
+
+
+def _clamp_to_image_peaks(
+    surface: dict, peaks_xyz_um: np.ndarray,
+    *, tile_um: float = 120.0, within_tile_q: float = 0.10,
+    safety_offset_um: float = 3.0, min_per_tile: int = 5,
+) -> tuple[dict, float, int]:
+    """Image-only analogue of N22's ROI envelope clamp.
+
+    Group peaks into ``tile_um`` XY tiles; per tile, take the
+    ``within_tile_q`` quantile of peak z as the "shallowest cluster
+    representative".  Lift the surface so it sits above every such
+    representative (minus ``safety_offset_um``).
+    """
+    if len(peaks_xyz_um) < 50:
+        return surface, 0.0, 0
+    pxs, pys, pzs = peaks_xyz_um[:, 0], peaks_xyz_um[:, 1], peaks_xyz_um[:, 2]
+    xb = (pxs // tile_um).astype(int)
+    yb = (pys // tile_um).astype(int)
+    key = yb * 100000 + xb
+    df = pd.DataFrame({"k": key, "x": pxs, "y": pys, "z": pzs})
+    q_within = float(within_tile_q)
+    agg = df.groupby("k").agg(
+        x=("x", "median"), y=("y", "median"),
+        z=("z", lambda v: float(np.quantile(v, q_within))),
+        n=("z", "size"))
+    agg = agg[agg["n"] >= int(min_per_tile)]
+    if agg.empty:
+        return surface, 0.0, 0
+    tx, ty, tz = agg["x"].values, agg["y"].values, agg["z"].values
+    plane_z = _surface_z(surface, tx, ty)
+    deficit = plane_z - tz
+    pos = deficit[deficit > 0]
+    lift = float(pos.max()) if len(pos) else 0.0
+    out = dict(surface)
+    out["c"] = float(out["c"] - lift - safety_offset_um)
+    return out, lift, int(len(agg))
+
+
+# ---------------------------------------------------------------------
+# Main entry
+# ---------------------------------------------------------------------
+
+@dataclass
+class SurfaceResult:
+    surface: Optional[dict]
+    anchor: Optional[dict]
+    baseline_mean: float
+    baseline_sigma: float
+    surf_thr: float
+    dyn_hint: float
+    n_anchor_tiles: int
+    n_anchor_hits: int
+    n_column_tops: int
+    clamp_lift_um: float
+    safety_offset_um: float
+    n_clamp_tiles: int
+    peak_k: float
+    target_quantile: float
+    tile_records: pd.DataFrame
+    z_um: float
+    xy_um: float
+    # legacy / compatibility (L2 removed)
+    l2: Optional[dict] = None
+    l2_thr: float = float("nan")
+    n_l2_tiles: int = 0
+    anchor_plane: Optional[dict] = None  # alias for `anchor`
+    n_surface_tiles: int = 0  # alias for n_column_tops
+    n_tiles_total: int = 0    # alias for n_anchor_tiles
+    surf_thr_anchor: float = 0.0
+
+
+def estimate_surface_and_l2_image_based(
+    vol: np.ndarray,
+    z_um: float,
+    xy_um: float,
+    *,
+    # Stage 1 — baseline
+    n_top_planes: int = 2,
+    k_surface: float = 6.0,
+    relative_margin_min: float = 0.02,
+    max_pad_frac: float = 0.95,
+    # Stage 2 — anchor plane
+    anchor_xy_tile_um: float = 80.0,
+    anchor_search_frac: float = 0.40,
+    anchor_min_thick_um: float = 10.0,
+    anchor_smooth_sigma_um: float = 6.0,
+    # Stage 3 — per-column top-of-signal
+    column_stride_um: float = 10.0,
+    band_um: float = 150.0,
+    column_margin: float = 0.25,
+    min_signal_abs_frac: float = 0.20,
+    column_min_thick_um: float = 10.0,
+    # Stage 4 — quantile fit
+    target_quantile: float = 0.70,
+    n_quantile_iter: int = 30,
+    # Stage 5 — image-peak clamp
+    clamp_tile_um: float = 120.0,
+    clamp_within_tile_q: float = 0.10,
+    clamp_peak_k: float = 10.0,
+    clamp_neighborhood_um: tuple[float, float, float] = (8.0, 10.0, 10.0),
+    clamp_min_per_tile: int = 5,
+    clamp_search_frac: float = 0.55,
+    safety_offset_um: float = 3.0,
+    # Accepted-but-ignored (kept so old callers don't break)
+    mask_bg_for_l2=None,
+    xy_tile_um: Optional[float] = None,
+    surface_search_frac: Optional[float] = None,
+    min_thick_surface_um: Optional[float] = None,
+    smooth_sigma_um: Optional[float] = None,
+    **_ignored,
+) -> SurfaceResult:
+    """N22-style image-only curved surface estimator.
+
+    (see module docstring for the 5-stage pipeline)
+    """
+    # Back-compat: accept old kwargs
+    if xy_tile_um is not None:
+        anchor_xy_tile_um = float(xy_tile_um)
+    if surface_search_frac is not None:
+        anchor_search_frac = float(surface_search_frac)
+    if min_thick_surface_um is not None:
+        anchor_min_thick_um = float(min_thick_surface_um)
+        column_min_thick_um = float(min_thick_surface_um)
+    if smooth_sigma_um is not None:
+        anchor_smooth_sigma_um = float(smooth_sigma_um)
+
+    Z, Y, X = vol.shape
+
+    # --- Stage 1: baseline ---
+    bg_mean, bg_sigma, dyn_hint = _global_top_baseline(
+        vol, n_top_planes=n_top_planes, max_pad_frac=max_pad_frac,
+    )
+    thr_noise = bg_mean + k_surface * bg_sigma
+    thr_rel = bg_mean + relative_margin_min * dyn_hint
+    surf_thr = max(thr_noise, thr_rel)
+
+    # --- Stage 2: anchor plane ---
+    z_max_anchor = max(2, int(round(Z * anchor_search_frac)))
+    anchor_min_thick_px = max(1, int(round(anchor_min_thick_um / z_um)))
+    anchor_sigma_px = max(0.5, anchor_smooth_sigma_um / z_um)
+    anchor_tile_px = max(4, int(round(anchor_xy_tile_um / xy_um)))
+    anchor, n_anchor_tiles, n_anchor_hits = _anchor_plane_from_tiles(
+        vol, z_um, xy_um,
+        tile_px=anchor_tile_px, thr=surf_thr,
+        min_thick_px=anchor_min_thick_px,
+        z_max_search=z_max_anchor, sigma_px=anchor_sigma_px,
+    )
+
+    if anchor is None:
+        return SurfaceResult(
+            surface=None, anchor=None,
+            baseline_mean=bg_mean, baseline_sigma=bg_sigma,
+            surf_thr=surf_thr, dyn_hint=dyn_hint,
+            n_anchor_tiles=n_anchor_tiles, n_anchor_hits=n_anchor_hits,
+            n_column_tops=0, clamp_lift_um=0.0,
+            safety_offset_um=safety_offset_um, n_clamp_tiles=0,
+            peak_k=clamp_peak_k, target_quantile=target_quantile,
+            tile_records=pd.DataFrame(),
+            z_um=z_um, xy_um=xy_um,
+            anchor_plane=None, n_surface_tiles=0,
+            n_tiles_total=n_anchor_tiles, surf_thr_anchor=surf_thr,
+        )
+
+    # --- Stage 3: per-column top-of-signal in band ---
+    sx = max(1, int(round(column_stride_um / xy_um)))
+    sy = max(1, int(round(column_stride_um / xy_um)))
+    vol_sub = vol[:, ::sy, ::sx].astype(np.float32, copy=False)
+    _, Ys, Xs = vol_sub.shape
+    xs_um = np.arange(Xs, dtype=np.float32) * sx * xy_um
+    ys_um = np.arange(Ys, dtype=np.float32) * sy * xy_um
+    xx, yy = np.meshgrid(xs_um, ys_um)
+
+    anchor_zz = _surface_z(anchor, xx, yy).astype(np.float32)
+    z_low = anchor_zz - float(band_um)
+    z_high = anchor_zz + float(band_um)
+
+    top_z, dyn_grid, peak_grid = _per_column_top_in_band(
+        vol_sub, z_um, z_low, z_high,
+        relative_margin=column_margin,
+        min_signal_abs_frac=min_signal_abs_frac,
+        min_thick_um=column_min_thick_um,
+    )
+    if top_z is None:
+        return SurfaceResult(
+            surface=None, anchor=anchor,
+            baseline_mean=bg_mean, baseline_sigma=bg_sigma,
+            surf_thr=surf_thr, dyn_hint=dyn_hint,
+            n_anchor_tiles=n_anchor_tiles, n_anchor_hits=n_anchor_hits,
+            n_column_tops=0, clamp_lift_um=0.0,
+            safety_offset_um=safety_offset_um, n_clamp_tiles=0,
+            peak_k=clamp_peak_k, target_quantile=target_quantile,
+            tile_records=pd.DataFrame(),
+            z_um=z_um, xy_um=xy_um,
+            anchor_plane=anchor, n_surface_tiles=0,
+            n_tiles_total=n_anchor_tiles, surf_thr_anchor=surf_thr,
+        )
+
+    mask = np.isfinite(top_z)
+    n_top = int(mask.sum())
+    if n_top < 50:
+        return SurfaceResult(
+            surface=None, anchor=anchor,
+            baseline_mean=bg_mean, baseline_sigma=bg_sigma,
+            surf_thr=surf_thr, dyn_hint=dyn_hint,
+            n_anchor_tiles=n_anchor_tiles, n_anchor_hits=n_anchor_hits,
+            n_column_tops=n_top, clamp_lift_um=0.0,
+            safety_offset_um=safety_offset_um, n_clamp_tiles=0,
+            peak_k=clamp_peak_k, target_quantile=target_quantile,
+            tile_records=pd.DataFrame(),
+            z_um=z_um, xy_um=xy_um,
+            anchor_plane=anchor, n_surface_tiles=n_top,
+            n_tiles_total=n_anchor_tiles, surf_thr_anchor=surf_thr,
+        )
+
+    xs_fit = xx[mask].ravel().astype(np.float64)
+    ys_fit = yy[mask].ravel().astype(np.float64)
+    zs_fit = top_z[mask].ravel().astype(np.float64)
+
+    # --- Stage 4: quadratic quantile fit ---
+    surface = _quadratic_quantile_fit(
+        xs_fit, ys_fit, zs_fit,
+        target_quantile=target_quantile, n_iter=n_quantile_iter,
+    )
+    surface["method"] = (
+        f"image_n22_port_q{int(target_quantile*100)}"
+        f"_wtq{int(clamp_within_tile_q*100):02d}"
+    )
+
+    # --- Stage 5: image-peak clamp ---
+    z_max_peak = int(max(2, round(Z * clamp_search_frac)))
+    peaks = _detect_bright_peaks(
+        vol, z_um, xy_um,
+        bg_mean=bg_mean, bg_sigma=bg_sigma, dyn_hint=dyn_hint,
+        peak_k=clamp_peak_k,
+        neighborhood_um=clamp_neighborhood_um,
+        z_max_px=z_max_peak,
+    )
+    surface, lift, n_clamp_tiles = _clamp_to_image_peaks(
+        surface, peaks,
+        tile_um=clamp_tile_um, within_tile_q=clamp_within_tile_q,
+        safety_offset_um=safety_offset_um,
+        min_per_tile=clamp_min_per_tile,
+    )
+    surface["clamp_lift_um"] = float(lift)
+    surface["safety_offset_um"] = float(safety_offset_um)
+
+    # Package tile records (per-column onsets)
+    col_rec = pd.DataFrame({
+        "x_um": xs_fit, "y_um": ys_fit, "z_onset_um": zs_fit,
+    })
+
+    return SurfaceResult(
+        surface=surface, anchor=anchor,
+        baseline_mean=bg_mean, baseline_sigma=bg_sigma,
+        surf_thr=surf_thr, dyn_hint=dyn_hint,
+        n_anchor_tiles=n_anchor_tiles, n_anchor_hits=n_anchor_hits,
+        n_column_tops=n_top, clamp_lift_um=float(lift),
+        safety_offset_um=float(safety_offset_um),
+        n_clamp_tiles=n_clamp_tiles,
+        peak_k=float(clamp_peak_k), target_quantile=float(target_quantile),
+        tile_records=col_rec,
+        z_um=float(z_um), xy_um=float(xy_um),
+        anchor_plane=anchor, n_surface_tiles=n_top,
+        n_tiles_total=n_anchor_tiles, surf_thr_anchor=float(surf_thr),
+    )
+
+
+# ---------------------------------------------------------------------
+# Metrics (mirrors session v2/v3)
+# ---------------------------------------------------------------------
+
+def depth_profile_stats(
+    pts_xyz_um: np.ndarray,
+    surface: dict,
+    *,
+    depth_min: float = -200.0,
+    depth_max: float = 400.0,
+    bin_um: float = 5.0,
+) -> dict:
+    if surface is None or len(pts_xyz_um) == 0:
+        return {}
+    z_surf = _surface_z(surface, pts_xyz_um[:, 0], pts_xyz_um[:, 1])
+    depth = pts_xyz_um[:, 2] - z_surf
+    n = len(depth)
+    above = (depth < 0).sum() / n
+    above5 = (depth < -5.0).sum() / n
+    edges = np.arange(depth_min, depth_max + bin_um, bin_um)
+    h, _ = np.histogram(depth, bins=edges)
+    density = h / (bin_um * max(n, 1))
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    bulk = density[(centers >= 50) & (centers <= 200)].mean()
+    above_dens = density[(centers >= -200) & (centers < 0)].mean()
+    cum_above = above_dens / max(bulk, 1e-9)
+    onset = np.nan
+    if bulk > 0:
+        halfmax = 0.5 * bulk
+        for c, d in zip(centers, density):
+            if c >= 0 and d >= halfmax:
+                onset = float(c)
+                break
+    return {
+        "above_frac": float(above),
+        "above_frac_5um": float(above5),
+        "cum_above_ratio": float(cum_above),
+        "onset_depth_um": onset,
+        "n_points": int(n),
+    }

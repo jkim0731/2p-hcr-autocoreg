@@ -1,0 +1,34 @@
+---
+name: 03 image-based surface (curved)
+description: Session 03_image_based_surface_estimation — image-only curved-surface analogue of N22. No L2 — dropped per user request.
+type: project
+originSessionId: cabb1567-11f8-49c0-8a28-82d7327a0415
+---
+Session `03_image_based_surface_estimation` implements
+`estimate_surface_and_l2_image_based()` in
+`code/dev_code/03_image_based_surface.py`.  Three-phase:
+
+1. Coarse plane anchor via per-tile first-rise (old behaviour).
+2. Per-column top-of-signal in a ±150 µm band around the anchor
+   (10 µm XY stride; per-column baseline + 0.25 × dyn margin).
+3. Quadratic surface `z = a·x + b·y + c + p·x² + q·xy + r·y²` fit
+   via quantile-regression IRLS at q = 0.70.
+
+Mirrors N22 math, minus the ROI-centroid clamp (image-only).
+Driver + figures in `03_image_based_surface_run.py` /
+`03_image_based_surface_figs.py`; results in
+`sessions/03_image_based_surface_estimation/`.
+
+**Why:** User rejected the earlier plane fit as too flat; explicitly
+asked to match v3 (N22) curvature using images only.  L2 was
+explicitly dropped in the same message.
+
+**How to apply:** Onset_depth_um is now 2.5–12.5 µm on all 6
+benchmark subjects (HCR and CZ).  above_frac sits at 5–10 % for HCR
+and 0.5–6.6 % for CZ — higher than N22's ≤ 0.08 % because there is
+no ROI clamp.  Treat this as a complementary image-driven cross-check
+for pia, not a replacement for N22.
+
+**Open issues (2026-04-17):** 782149 CZ above_frac = 6.6 % (highest).
+Open question: whether `target_quantile ≥ 0.75` closes the above_frac
+gap without hurting onset — not yet swept.

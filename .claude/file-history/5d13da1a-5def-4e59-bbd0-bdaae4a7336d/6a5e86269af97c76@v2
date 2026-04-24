@@ -1,0 +1,445 @@
+# Grand Plan — Automated czstack ↔ HCR Coregistration
+
+**Purpose.** This is the candidate-ordered roadmap that replaces the manual BigWarp workflow with an automatic pipeline. Each candidate is a small, well-scoped unit of work that a future session can pick up, implement, and validate. Candidates are ordered by **simplicity × likely success rate**, not by pipeline stage — so you can land simple high-value pieces first and only reach for the heavier machinery if the simple ones are insufficient.
+
+**Important consideration.** The resulting product is to be generalized. Do not consider parameter inference from the existing benchmark at all, except when explicitly stated. Assume the features can change in the future.
+
+**How to use this doc.**
+- Pick the top `not_started` candidate in the *Recommended session order* below.
+- Open a new session directory `sessions/NN_<candidate_id>_<short_name>/`, log work in `log.md`, summarise in a numbered notebook.
+- Update the Status + Findings line of that candidate when the session closes. Add the session directory to the ledger table at the bottom.
+- The doc is a **living file** — edit it in place; do not fork.
+
+**Status legend.** `not_started` · `in_progress` · `validated` · `abandoned`.
+
+**Uniform candidate schema.** Every candidate block has: **Goal / Inputs / Method sketch / Outputs / Success metric / Dependencies / Estimated effort / Status**.
+
+**CLAUDE.md dev rule (binding).** Do **not** use benchmark data to design algorithms; only for validation afterwards. This applies to every candidate below.
+
+---
+
+## 0. Foundations already available
+
+Reuse these; do not re-implement.
+
+- **Data loading** — `code/dev_code/benchmark_data_loader.py::load_subject()`. Returns a `SubjectData` with resolved paths, 3 GFP+ sources (spot-count CSV, raw spot aggregation, intensity CSV), and coordinate conventions.
+- **HCR pia surface (default)** — `code/dev_code/benchmark_analysis.py::estimate_pia_surface_quantile_ceiling()` (N22). Validated on all 6 benchmark subjects: `above_frac ≤ 0.08 %`, `onset_depth 2.5–7.5 µm`.
+- **CZ pia surface** — `estimate_pia_surface_image_ceiling()` in the same module (roughness ≤ 12 µm, tilt ≤ 3° across subjects).
+- **Depth-from-surface coordinate** — `depth_from_surface()`, `depth_profile()`. Robust axial feature that removes buffer-thickness and tilt confounds.
+- **Anisotropic affine fit** — `anisotropic_similarity_fit()` (Procrustes rotation + per-axis scale + translation).
+- **Greedy/assignment matchers** — `code/manual workflow/manual_coreg_utils.py`:
+  - `choose_max_count_nearest_neighbor(est, hcr_df, feature='density', k=5)` — k-NN + max-density with duplicate resolution.
+  - `one_to_one_matching(est, hcr_df)` — iterative global-min-distance bipartite matcher.
+  - `get_ids_from_landmarks(df)` — parse `cz#-hcr#` pairs.
+- **Landmark-set hygiene** — `code/manual workflow/landmark_filtering.py::grid_sample_landmarks()`.
+- **TPS** — `scipy.interpolate.Rbf(..., function='thin_plate')`, fit per-axis (same as manual step 2/3).
+
+### Benchmark priors — **validation reference only**
+
+These numbers exist solely to check algorithm outputs against known benchmark statistics. **They must not seed any algorithm.** Our estimates of scale, rotation, residual, etc., are computed from data geometry; the priors are compared to those estimates only after the fact.
+
+- XY expansion ≈ 1.77× (range 1.64–1.92×).
+- Z expansion ≈ 2.83× (range 2.13–3.58×). Z:XY anisotropy ≈ 1.5×.
+- In-plane rotation ≈ 180° on all 6 subjects.   *(Exception: the 180° rotation is treated as a structural imaging-geometry prior, consistent with the dev protocol — it is a constant of the acquisition setup, not a population statistic.)*
+- 1-NN cell spacing ≈ 20 µm; 5-NN ≈ 33–37 µm.
+- Post-affine landmark residual 16–43 µm RMS — this is the nonrigid warp scale TPS must absorb.
+
+### Ground-truth sources for QC / training
+
+1. **`coreg_table.csv`** — canonical gold standard per subject (one-to-one `[czstack_id, hcr_id]`, produced by manual workflow step 4).
+2. **`landmarks_*_qced.csv` rows with `active=true`** — richer superset (includes intermediate QC'd pairs).
+3. **GUI-generated corrections** (from G1 onward) — accept/reject/adjust events logged to `qc_actions.jsonl`; grows over time.
+
+---
+
+## 1. Registration protocol
+
+Two complementary tracks share the R1 coarse affine **and the G1 review GUI**. They run in **parallel**, not in series — neither blocks the other.
+
+- **Track B (manual-mimic, Sections 1.A–1.D):** Surface fit → R1 → Seed match (R2) → TPS expansion (R3) → fine refinement (R4–R6). Classifier-gated (Q-series); greedy; requires Section 2.
+- **Track A (fully-automatic, Section 1.E):** Surface fit → R1 → **one-shot global matcher (A1–A8)** that produces a coreg table with intrinsic confidence in a single pass. No classifier gate or greedy expansion in the inference loop; each A-candidate stands alone.
+
+**Both tracks require the GUI (G1, Section 3) for manual verification and correction of final outputs** — A-series candidates produce a coreg table with intrinsic confidence, but the table still passes through human review before being accepted as ground truth.
+
+Run both tracks: Track A is the shortest path to an automatic pipeline; Track B produces labels for learned methods and cross-checks Track A's outputs.
+
+### R1 — Scale-free coarse affine with surface-tilt alignment  _(tier 1)_
+
+- **Goal.** Produce a reliable coarse localisation of CZ inside HCR using only (a) the 180° XY rotation prior, (b) the "CZ ≈ HCR XY center" prior, and (c) the pia-surface planes fitted from the existing surface-estimation utilities. The output has two tiers: a **minimal** rotation + translation that is always reliable, and an **extended** rotation + translation + scale that is produced when the scale search is confident. **No benchmark-derived expansion priors.**
+- **Inputs.** CZ + HCR GFP+ centroids; both pia surfaces (foundation 0).
+- **Method sketch.**
+  1. **Pia-plane fit.** Fit a plane through each pia surface (existing `estimate_pia_surface_image_ceiling` for CZ and `estimate_pia_surface_quantile_ceiling` for HCR already produce surface points; feed those to a least-squares plane fit). Extract unit normals `n_cz`, `n_hcr`.
+  2. **Tilt-aligned rotation.** Apply `R_180°XY` to CZ, which rotates `n_cz → R_180°XY · n_cz`. Compute `R_tilt` as the small rotation (Rodrigues, axis = `(R_180°XY · n_cz) × n_hcr`, angle = `acos((R_180°XY · n_cz) · n_hcr)`) that aligns the rotated CZ normal with HCR's normal. Final rotation `R = R_tilt · R_180°XY`.
+  3. **Centroid translation.** After applying `R`, translate so the rotated CZ centroid maps to the HCR centroid in all three axes (Z from pia-alignment, XY from the "roughly at center" prior).
+
+  **End of minimal output.** Steps 1–3 produce `(R, t)` — a sample-specific coarse localisation derived from surfaces and centroids only. This output is always produced and always reliable (modulo a working surface fitter).
+
+  4. **Depth-from-surface** in both modalities — shared pia-anchored axial coordinate, consistent with the aligned surfaces.
+  5. **Z-scale + Z-offset search with partial overlap (1D).** This step does **not** assume CZ and HCR cover the same axial range.
+     - Scan `sz` over a permissive grid (step 0.02). The grid extent is a search-feasibility parameter, **not** a prior on expansion — explicitly documented in the R1 session log.
+     - For each candidate `sz`: rescale the CZ depth-density profile to `sz × z_cz`; slide it across the HCR profile over `tz`.
+     - At each `(sz, tz)`: compute Pearson correlation on the **overlap region only**, with a minimum-overlap floor (e.g. require the overlap to span ≥ 25 % of the shorter profile) to prevent trivial single-peak alignments from scoring high.
+     - Pick `(sz, tz)` maximising the partial-overlap NCC.
+     - This transparently handles the three coverage regimes:
+       - HCR thicker than mapped CZ: overlap = full CZ range.
+       - HCR same as mapped CZ: overlap = full range of both.
+       - HCR thinner than mapped CZ: overlap = top portion of CZ (where HCR captures data); deep CZ cells have no HCR counterpart and are excluded from the Z score.
+  6. **XY-scale + XY-translation joint search.** The user's "CZ ≈ HCR XY center" prior *is* a geometric "CZ ⊂ HCR in XY" constraint, so the `sxy ≤ L_hcr / L_cz` bound is legitimate — it comes from the user's geometric prior, not from benchmark statistics. Scan isotropic `sxy ∈ [0.5, L_hcr / L_cz]` (step ≈ 0.05) and `(tx, ty)` within a ±half-HCR-XY-extent box on a sparse grid. For each `(sxy, tx, ty)`, rasterise Gaussian-blurred 2D density maps on a shared grid and score via NCC / NMI. Pick the best.
+  7. **Anisotropic refinement (optional).** Local search over `(sx, sy)` around the best `sxy` to allow axis-specific scales.
+  8. **Per-axis scale confidence.** Peak-to-RMS ratio of the Z and XY score surfaces. When a component's confidence exceeds a threshold (e.g. 3), it is added to the extended output; when it does not, the component is emitted as `unknown` and downstream methods are responsible for estimating it.
+- **Outputs.**
+  - **Minimal (always):** `(R, t)` from steps 1–3.
+  - **Extended (conditional):** additional `S = diag(sx, sy, sz)` with per-axis confidence. Components with low confidence are marked `unknown`.
+  - A short "coverage regime" note (thinner / equal / thicker HCR) from step 5.
+- **Success metrics.**
+  - Minimal output: localised origin within ≤ 100 µm of manual-landmark-derived affine on held-out subjects; rotation within ±5°.
+  - Extended output (when emitted): in addition to the minimal metric, `(sx, sy, sz)` recovered within ± 20 % of manual-landmark scale.
+- **Dependencies.** Foundation 0 only (surfaces + depth profile). **No benchmark priors.**
+- **Failure modes.**
+  - Plane-fit degeneracy → only occurs if the surface fitter itself fails; both fitters are already validated across the 6 benchmark subjects, so the tilt step is safe in normal operation.
+  - Flat XY score surface on thin / asymmetric HCR (e.g. 782149) → `sxy` emitted as `unknown`; minimal output still valid.
+  - Flat axial partial-overlap NCC when CZ and HCR cortical-layer content is too different → `sz` emitted as `unknown`; minimal output still valid.
+  - In the worst case, every scale component is `unknown` and only `(R, t)` is emitted. That is the intended graceful-degradation — it matches the user-stated "sample-specific condition can be good enough" fallback.
+- **Estimated effort.** 1–1.5 sessions.
+- **Status.** `first_pass_done_v2` — revised implementation in `dev_code/r1_revised.py`, benchmarked in `sessions/05_R1_revised/`. Minimal `(R, t)` emitted on all 6 subjects; **3/6 pass origin ≤ 100 µm**, **3/6 pass rotation ± 5°** (only 790322 clears both). Scale extension not emitted on any subject — density-map NCC on v2.2-peakgauss GFP+ density maps (10 – 16 % of HCR cells, 400 µm CZ inside 1.8 – 2.3 mm HCR) admits prominent but geometrically-wrong peaks at `sxy ≈ 0.5 – 0.75`; robust-z prominence threshold raised 3 → 6 so every subject routes to the graceful-degradation fallback, matching method-sketch step 8's "emit unknown when the peak is not trustworthy". First-pass implementation (`sessions/04_R1_coarse_align/`, `dev_code/r1_coarse_align.py`) remains superseded.
+
+### R2 — Constellation matching (graph / geometric-hash seed)  _(tier 1; depends on Q0 or GUI)_
+
+- **Goal.** Produce the first 4–6 CZ↔HCR landmark pairs automatically — the same seed a human would pick in BigWarp.
+- **Inputs.** CZ + HCR GFP+ centroids, R1 affine, pia surfaces.
+- **Method sketch.**
+  1. In CZ, enumerate candidate 4–6 cell clusters ranked by (a) **convex-hull emptiness** (few non-cluster GFP+ cells inside the hull — the user-confirmed uniqueness cue), (b) tight intra-cluster spacing, and (c) proximity to surface (manual protocol heuristic, not strict).
+  2. Compute an anisotropy-invariant descriptor per cluster (pairwise-distance histogram after axis normalisation, inner angles, volume of hull).
+  3. Search matching descriptors in HCR, restricted to the R1 localised region. Use a hash index or kd-tree on the descriptor space.
+  4. For the top-K candidate seed pairs, fit a one-step anisotropic affine + TPS, score by residual on held-out nearby cells.
+  5. Return the top-K ranked seed matches with confidence scores (not only the top-1).
+- **Outputs.** Ranked list of seed 4–6 pair constellations with confidences.
+- **Success metric.** Top-K (K ≤ 5) contains the manually-chosen constellation on ≥ 5/6 benchmark subjects.
+- **Dependencies.** R1 (for region restriction); Q0 or GUI (G1) to verify before feeding R3.
+- **Estimated effort.** 1–2 sessions.
+- **Status.** `not_started`.
+
+### R3 — Iterative landmark expansion with TPS  _(tier 1; depends on Q1 or later QC)_
+
+- **Goal.** Grow the landmark set from the seed to dense coverage, mimicking the manual step-2/step-3 loop.
+- **Inputs.** Verified seed landmarks (from R2 or GUI); GFP+ HCR cells; CZ centroids.
+- **Method sketch.**
+  1. Fit per-axis `Rbf(..., function='thin_plate')` on active landmarks.
+  2. For every unmatched CZ cell: map to HCR via TPS; take k-NN among unmatched GFP+ HCR cells (reuse `choose_max_count_nearest_neighbor` with `k=5`, `feature='density'`).
+  3. Gate each candidate through Q1 (or Q2/Q3 once available). Accept → append to active landmarks.
+  4. Re-fit TPS; repeat. Stop when the acceptance rate drops below a small threshold or the landmark count saturates (~500–1000).
+  5. Periodically apply `grid_sample_landmarks()` to keep spatial coverage balanced.
+- **Outputs.** Dense active landmarks + candidate coreg table, each pair annotated with confidence.
+- **Success metric.** Match rate within 5 pp of the manual baseline per subject (manual: 34–86 %); landmark residual RMS ≤ 50 µm.
+- **Dependencies.** R2 seed (or GUI-selected seed); Q1 (gate).
+- **Estimated effort.** 1–2 sessions.
+- **Status.** `not_started`.
+
+### R4 — Anisotropic ICP + grid-TPS refinement  _(tier 2)_
+
+- **Goal.** Tighter global fit than R3's greedy growth, when R3 drifts or stalls.
+- **Method sketch.** Anisotropic-scale ICP on GFP+ point clouds seeded from R1/R2; after ICP convergence, place TPS control points on a regular grid (or at landmark positions from R3) and relax.
+- **Dependencies.** R1 + R2.
+- **Status.** `not_started`.
+
+### R5 — Probabilistic nonrigid point-cloud registration (CPD / FilterReg)  _(tier 3)_
+
+- **Goal.** Off-the-shelf GMM-based nonrigid registration; robust to partial overlap and outliers.
+- **Method sketch.** Use a Python CPD implementation (e.g. `pycpd`) on downsampled GFP+ point clouds; post-process the warped field into per-axis TPS for compatibility with downstream tools.
+- **Dependencies.** R1 (for initial alignment).
+- **Status.** `not_started`.
+
+### R6 — Learned descriptor / GNN / contrastive embedding  _(tier 3, research lane)_
+
+- **Goal.** Replace hand-crafted local descriptors with a learned embedding; bipartite match in embedding space.
+- **Dependencies.** R3 + Q3 + G1 must be available first (they produce the training corpus).
+- **Status.** `not_started`.
+
+---
+
+## 1.E — Fully-automatic track (A-series)
+
+**Intent.** Each A-candidate is a stand-alone one-shot matcher that takes `(CZ centroids, HCR centroids, per-cell features, R1 coarse affine)` and returns a coreg table with **built-in per-pair confidence**. No learned-classifier QC gate in the inference loop; no serial dependency on other A-candidates or on Track B's landmark-expansion (R2/R3/Q0/Q1/Q2/Q3).
+
+**Why this track is feasible.** The problem regime (99 % outlier ratio, size imbalance 1 : 50, known rotation and coarse centre, nonrigid residual ≲ 50 µm RMS) matches the sweet spots of modern outlier-robust and optimal-transport registration.
+
+**Scope of "no-QC".** What the A-series eliminates is the learned/hand-tuned **classifier step** inside the inference pipeline (Q1/Q2/Q3). What it does **not** eliminate:
+- **Manual review via the GUI (G1) is still required.** Every A-candidate's output must be reviewable and correctable by a human — both for scientific validity and because the GUI's accept/reject log remains the only way to grow labelled data for the learned methods (Q3/Q4/Q5, A6/A7/A8).
+- **Benchmark validation** of hyperparameters (K, inlier thresholds, entropy regularisers) against `coreg_table.csv` ground truth.
+
+In other words: G1 is **shared infrastructure** between Track A and Track B; it is not a Track-B-only dependency. The confidence signal a GUI reviewer inspects differs (intrinsic method confidence for A-series vs. learned classifier score for Track B), but the act of review is the same.
+
+### A1 — TEASER++ (certifiable outlier-robust affine + TPS refinement)  _(tier 1, recommended entry)_
+
+- **Goal.** Produce an inlier set of CZ↔HCR correspondences with provable robustness to >99 % outliers; refine with TPS.
+- **Inputs.** CZ + HCR GFP+ centroids; per-cell features (depth-from-surface, GFP density, volume); R1 affine.
+- **Method sketch.**
+  1. Apply R1 to CZ; crop HCR to the localised region.
+  2. For each CZ cell, take top-K putative HCR correspondences by feature + Euclidean distance after R1 (K ≈ 5–10).
+  3. Feed putative pairs into TEASER++ (library: `teaserpp_python`). It returns the maximum-consistent inlier set under an anisotropic affine + translation with a certificate.
+  4. Refit anisotropic affine on inliers; apply TPS (per-axis `Rbf(thin_plate)`) on inliers for nonrigid residual.
+  5. Score each putative pair by "distance from warped position after TPS" and inlier-certificate membership.
+- **Outputs.** Coreg table with per-pair inlier/outlier label and residual.
+- **Success metric.** ≥ 90 % of manual `coreg_table.csv` pairs recovered at ≤ 10 µm accuracy on the held-out subjects, precision ≥ 95 %.
+- **Dependencies.** R1. No Q-classifier; G1 required for output review.
+- **Estimated effort.** 1–2 sessions.
+- **Status.** `not_started`.
+
+### A2 — Spectral graph matching (Leordeanu–Hebert)  _(tier 1)_
+
+- **Goal.** Solve the pairwise-consistent assignment as a spectral eigenvalue problem; the principal eigenvector is the match probability.
+- **Inputs.** CZ + HCR GFP+ centroids after R1; top-K HCR candidates per CZ cell (K ≈ 5, so ≈ 5 000 candidate pairs).
+- **Method sketch.**
+  1. Build an affinity matrix `M` over candidate pairs. `M[(i,a),(j,b)]` = compatibility that matching CZ_i↔HCR_a and CZ_j↔HCR_b are simultaneously correct; combine geometric consistency (distance preservation after anisotropic affine) and feature agreement. Diagonal = per-pair feature affinity.
+  2. Compute the principal eigenvector of `M` (power iteration or Lanczos — M is ≈ 5 000².
+  3. Read off matches greedily from highest eigenvector entries, enforcing one-to-one via Sinkhorn or iterative discretisation.
+- **Outputs.** Coreg table; eigenvector entry as continuous confidence.
+- **Success metric.** Same as A1.
+- **Dependencies.** R1. No Q-classifier; G1 required for output review.
+- **Estimated effort.** 1–2 sessions.
+- **Status.** `not_started`.
+
+### A3 — Fused / Partial Gromov–Wasserstein (FGW)  _(tier 1)_
+
+- **Goal.** Optimal-transport matching that is invariant to the isometry component of the deformation (via the GW distance over internal pairwise distances) while using features as the Wasserstein side.
+- **Inputs.** CZ + HCR GFP+ centroids after R1 (HCR subsampled to ≈ 5–10 k via R1 crop + GFP+ filter); per-cell feature vectors.
+- **Method sketch.**
+  1. Compute pairwise intra-distance matrices `C_cz`, `C_hcr`; feature-distance matrix `D` between CZ and HCR.
+  2. Solve partial FGW via `ot.gromov.fused_gromov_wasserstein` / `ot.partial.partial_gromov_wasserstein` (POT library). The coupling matrix `T` has mass on confident matches.
+  3. Read off matches by argmax per row of `T`; threshold by coupling mass for accept/reject.
+- **Outputs.** Coreg table; coupling mass as confidence.
+- **Success metric.** Same as A1.
+- **Dependencies.** R1. No Q-classifier; G1 required for output review.
+- **Estimated effort.** 1–2 sessions (needs subsampling + entropy-regulariser tuning).
+- **Status.** `not_started`.
+
+### A4 — Attributed graph matching with RRWM / FGM  _(tier 2)_
+
+- **Goal.** Same spirit as A2 but with explicit attributed k-NN graph structure on each side.
+- **Method sketch.** Build attributed k-NN graphs (edges = distances, nodes = features); solve with Reweighted Random Walk Matching or Factorised Graph Matching; add dummy/outlier nodes for partial matching.
+- **Why tier 2:** RRWM/FGM off-the-shelf implementations typically assume balanced sizes; the outlier-node extension is non-trivial. Treat as an upgrade path from A2 if graph-structural features (e.g., triangle consistency) promise material gains.
+- **Dependencies.** R1; G1 required for output review. Optionally compare against A2.
+- **Status.** `not_started`.
+
+### A5 — Hungarian on feature-+-distance affinity  _(tier 2, baseline)_
+
+- **Goal.** Dead-simple bipartite assignment baseline: after R1, solve `scipy.optimize.linear_sum_assignment` on an N×M affinity matrix combining residual distance and feature similarity; threshold by score.
+- **Why included:** sanity floor for A1/A2/A3 — if a method fails to beat A5, it is not worth the complexity. Also useful to quantify how much the global-consistency methods actually help.
+- **Why not higher:** purely local; no pairwise consistency; the 1-NN spacing of ~20 µm guarantees ambiguities Hungarian cannot resolve.
+- **Dependencies.** R1; G1 required for output review.
+- **Status.** `not_started`.
+
+### A6 — Self-supervised PointNet/EdgeConv + Sinkhorn matching  _(tier 3)_
+
+- **Goal.** Neighbourhood encoder trained on **synthetic warps** (apply random anisotropic TPS to HCR cells) as a pretext; at inference, embed CZ and HCR cells and match via Sinkhorn with a "dustbin" for unmatched (dustbin replaces the learned-classifier gate, not the GUI).
+- **Dependencies.** R1; G1 required for output review. Also needs a synthetic-warp pipeline + GPU training. Start once A1/A2/A3 have demonstrated what the ceiling of classical methods looks like.
+- **Status.** `not_started`.
+
+### A7 — 3D SuperGlue / LightGlue-style attention matching  _(tier 3)_
+
+- **Goal.** Transformer with cross-attention between CZ and HCR cell tokens; Sinkhorn + dustbin for partial matching.
+- **Dependencies.** R1; G1 required for output review. Trained self-supervised (synthetic warps) or weakly-supervised (`coreg_table.csv`). Heavier compute than A6.
+- **Status.** `not_started`.
+
+### A8 — Predator (overlap-attention partial-to-partial PCR)  _(tier 3)_
+
+- **Goal.** Predator's architecture is designed for partial overlap (per-point overlap-score gate). Natural fit for the CZ-inside-HCR regime.
+- **Dependencies.** R1; G1 required for output review. Training requirements as A6/A7.
+- **Status.** `not_started`.
+
+### Explicitly rejected alternatives (with reason)
+
+- **FCGF / FPFH + RANSAC** — designed for equal-size rigid registration; doesn't handle 1 : 50 size imbalance without heavy adaptation.
+- **Deep Closest Point (DCP)** — rigid-only and symmetric-size assumption.
+- **Functional maps / spectral manifold alignment** — Laplacian-eigenvector alignment is fragile to noise and size imbalance; expensive to debug.
+- **Random-forest / GBDT pairwise scorer as a registration method** — this *is* QC by another name; conceptually serial.
+- **Plain CPD / NICP without features or robustifier** — local-minimum-prone at 99 % outlier ratio; use A1 instead.
+
+---
+
+## 2. QC protocol — ROI-to-ROI match confirmation
+
+### Q0 — Seed-match verifier  _(tier 1; gates R2)_
+
+- **Goal.** Accept/reject the initial 4–6 pair constellation from R2 before any expansion.
+- **Method sketch.** (a) Check CZ cluster's intra-cluster distance matrix matches the candidate HCR cluster's after anisotropic rescale; (b) fit a local anisotropic affine + TPS on the 4–6 pairs and compute residual on nearby held-out cells in both modalities; (c) require the seed to have substantially lower residual than decoys. Surface top-K if top-1 fails.
+- **Outputs.** accept / reject / human-review flag on each seed candidate.
+- **Success metric.** ≥ 90 % agreement with human judgement on benchmark seeds.
+- **Dependencies.** R2.
+- **Status.** `not_started`.
+
+### Q1 — Distance + context-consistency filter  _(tier 1; gates R3)_
+
+- **Goal.** Per-pair confidence gate for R3's expansion loop.
+- **Method sketch.** Reject a candidate pair if (a) TPS residual > 3·σ of the residuals of nearby active landmarks, OR (b) 1-NN-graph topology disagrees — the CZ cell's k nearest neighbours should map to near the HCR cell's k nearest neighbours.
+- **Outputs.** accept / reject per candidate.
+- **Success metric.** Precision ≥ 90 % on held-out benchmark pairs (when used as a gate, it shouldn't admit false positives).
+- **Dependencies.** R3 pipeline to be gated.
+- **Status.** `not_started`.
+
+### Q2 — Neighbourhood descriptor scoring  _(tier 1)_
+
+- **Goal.** Richer scalar score per candidate than Q1, auditable by eye.
+- **Method sketch.** Per-candidate features: sorted k-NN distances (CZ and HCR side), relative angles, local density, depth-from-surface, ROI volume ratio, spot count / intensity. Kernel similarity between the CZ and HCR feature vectors; single threshold.
+- **Outputs.** Scalar score in [0, 1].
+- **Dependencies.** Foundation 0.
+- **Status.** `not_started`.
+
+### Q3 — Gradient-boosted classifier on hand-crafted features  _(tier 2)_
+
+- **Goal.** Learned, calibrated match-probability. Replaces Q1/Q2 hand-tuned thresholds.
+- **Training labels.**
+  - **Positives** = `coreg_table.csv` pairs (canonical ground truth) ∪ `active=true` rows from the final iter-N `landmarks_*_qced.csv` (richer superset).
+  - **Hard negatives** = GUI-rejected candidates from `qc_actions.jsonl` (grows over time).
+  - **Easy negatives** = random unmatched pairs within the local spatial neighbourhood.
+- **Method sketch.** Features from Q2; gradient-boosted trees (XGBoost / LightGBM); leave-one-subject-out cross-validation; isotonic calibration; return `P(match | features)`.
+- **Outputs.** Calibrated match probability per candidate.
+- **Success metric.** LOSO-CV AUC ≥ 0.95 at 5-pp-below-manual recall.
+- **Dependencies.** Q2 feature code + ground-truth sources (including initial GUI data from G1).
+- **Status.** `not_started`.
+
+### Q4 — Contrastive neighbourhood embedding  _(tier 3)_
+
+- **Goal.** Learned embedding; bipartite match in embedding space. Upgrade path from Q3 when hand-features saturate.
+- **Method sketch.** Small PointNet / Transformer on CZ and HCR local point clouds (k-NN neighbourhood + features). InfoNCE loss pairing positives from the same ground-truth sources as Q3.
+- **Dependencies.** Q3 groundwork + G1 data.
+- **Status.** `not_started`.
+
+### Q5 — GAN-based match classification  _(tier 3, user-mentioned)_
+
+- **Goal.** Explore whether GAN-based augmentation and discriminator training beat Q4 at this data scale.
+- **Method sketch.** Discriminator between matched vs. unmatched neighbourhood patches; generator for data augmentation in either (a) image patches or (b) point-cloud neighbourhoods.
+- **Dependencies.** Q4 baseline.
+- **Status.** `not_started`.
+
+---
+
+## 3. GUI for review & correction
+
+The GUI is a **first-class deliverable shared by both tracks**. Every automated output — whether from the A-series one-shot matchers or from Track B's greedy expansion — must pass through human review before being accepted as ground truth. Every correction also becomes a training example for the learned methods (Q3/Q4/Q5, A6/A7/A8).
+
+### G1 — Minimum viable review GUI  _(tier 1; shared foundation alongside R1; blocks Q3/Q4/Q5 training)_
+
+- **Goal.** Allow a human to review automated candidate matches and record accept / reject / adjust decisions.
+- **Method sketch.**
+  1. Load CZ z-stack, HCR volume (level-2 pyramid), current `landmarks_*.csv`, and candidate matches from R3.
+  2. Side-by-side or overlaid viewer. Candidate stack: [napari](https://napari.org) with a small plugin, or a Jupyter/ipywidgets panel — decide in the first G1 session.
+  3. Per-candidate actions: accept · reject · adjust HCR target · flag uncertain.
+  4. Write updated `landmarks_*_qced.csv` and regenerate `coreg_table.csv` using the manual step-4 logic.
+  5. Append every action to `qc_actions.jsonl` (fields: timestamp, subject, candidate_id, action, before/after coordinates, user). This is the training corpus.
+- **Outputs.** Updated landmark CSV; refreshed coreg table; action log.
+- **Success metric.** A single session user can review and correct ≥ 100 candidates per hour on benchmark data without custom config per subject.
+- **Dependencies.** None (can start before R3; initially review existing manual landmarks to shake out the UI).
+- **Status.** `not_started`.
+
+### G2 — Active-learning loop  _(tier 2; depends on G1 + Q3)_
+
+- **Goal.** Use the trained Q3 classifier to surface highest-uncertainty candidates first, so human labels yield maximum information per minute.
+- **Method sketch.** After each G1 session, retrain Q3 on the accumulated `qc_actions.jsonl`; sort the next review batch by entropy of `P(match)`.
+- **Dependencies.** G1 + Q3.
+- **Status.** `not_started`.
+
+---
+
+## 4. Recommended session order
+
+Two **parallel tracks** share two prerequisites: R1 and G1. Do not serialise the tracks — they serve different purposes.
+
+### Shared foundation (both tracks depend on these)
+
+1. **R1** — scale-free coarse affine with surface-tilt alignment, partial-overlap axial matching, and graceful-degradation output (minimal rotation + translation always; extended scales when confident). Unblocks every downstream candidate; handles thinner or thicker HCR natively; when scale estimation is uncertain, emits `(R, t)` only and leaves scale to downstream scale-aware methods.
+2. **G1** — minimum review GUI. Required for manual verification/correction of every candidate's output (A-series and Track B alike). Start in parallel with R1.
+
+### Track A — fully-automatic (Section 1.E)
+
+Each candidate is stand-alone: no classifier gate, no dependency on Track B's R2/R3/Q*. Output is still reviewed in G1. Pick the highest-promise tier-1 method, benchmark it, then compare.
+
+- 3A. **A1 (TEASER++)** — recommended first pick; certifiable robustness matches the 99 % outlier regime.
+- 4A. **A2 (Spectral GM)** and **A3 (FGW)** — run in parallel as alternative tier-1 methods; compare confidence-vs-precision curves against A1.
+- 5A. **A5 (Hungarian baseline)** — cheap sanity floor; run alongside A1/A2/A3.
+- 6A. **A4 (RRWM/FGM)** — tier-2 graph upgrade if A2 shows promise but stalls.
+- 7A. **A6–A8 (learned methods)** — research lane; start once a synthetic-warp pipeline is in place and classical ceiling is known.
+
+### Track B — manual-mimic with QC classifier (Sections 1.A–1.D, 2)
+
+Produces ground-truth labels for the learned methods (Q3/Q4/Q5, A6/A7/A8) and provides a cross-check on Track A's outputs. Uses the same G1 GUI as Track A.
+
+- 3B. **Q1 + Q2** — gate logic (G1 already in place as shared foundation).
+- 4B. **R2 + Q0** — seed constellation match + verifier.
+- 5B. **R3** gated by Q1/Q2 — landmark expansion.
+- 6B. **Q3** — learned classifier upgrade.
+- 7B. **R4 / R5, Q4 / Q5, G2, R6** — later rounds.
+
+### Decision rule at the end of each benchmark run
+
+- If any A-candidate hits ≥ 90 % coreg recall at ≥ 95 % precision on the held-out subjects (788406, 790322, 767018, 782149) **after G1 human review**, promote that A-candidate to the production pipeline.
+- Otherwise, fall back to Track B's R3+Q3 pipeline (which by then has the classifier in place).
+- If neither track clears the bar on the stress subjects (767018, 782149), open a new section for hybrid methods that run A1's inlier set as a seed for R3's TPS expansion.
+
+---
+
+## 5. Validation strategy
+
+**Dev/validation split (binding, per `06 Dev Protocol.md`).** Do not use benchmark data information to design algorithms. Use it only to validate afterwards.
+
+**Benchmark roster.**
+- **Primary validation:** 788406, 790322 (highest-quality data, spot-based GFP+).
+- **Stress:** 767018 (older pipeline, 35 % manual match rate), 782149 (thin section, 12° pia tilt, 34 % manual match rate).
+- **Secondary:** 755252, 767022 (intensity-only GFP+ — requires a threshold sweep to get a comparable GFP+ count).
+
+**Metrics.**
+
+| Candidate class | Metric |
+|---|---|
+| R1 | localisation error vs. manual-landmark-derived affine (µm); rotation error (°). |
+| R2 | top-K recall of the manual seed constellation. |
+| R3 / R4 / R5 | % of CZ cells whose accepted match is within D µm of the manual match (D ∈ {5, 10, 20}); landmark residual RMS; match rate vs. manual baseline. |
+| **A-series (A1–A8)** | same D-threshold match metrics as R3/R4/R5, **plus intrinsic-confidence calibration** against ground-truth PR: TEASER inlier-count curve (A1), spectral eigenvector-threshold sweep (A2), GW coupling-mass threshold sweep (A3), dustbin-score sweep (A6/A7/A8). |
+| Q0 | seed accept/reject agreement with human judgement. |
+| Q1 / Q2 | precision at fixed recall against `active=true` labels. |
+| Q3 / Q4 / Q5 | LOSO-CV AUC; calibration plot; PR curve vs. manual label sets. |
+| G1 / G2 | reviewer throughput (candidates/hour); fraction of auto-matches requiring adjustment. |
+
+---
+
+## 6. Session / result ledger
+
+Update this table when a candidate session opens/closes. Status values: `not_started | in_progress | validated | abandoned`.
+
+| Candidate | Session dir                             | Status      | Headline metric | Log link |
+|-----------|-----------------------------------------|-------------|-----------------|----------|
+| R1 (first pass) | `sessions/04_R1_coarse_align/`    | superseded      | 3/6 origin ≤100 µm (v2.2 peakgauss defaults); 5/6 rot ±10°; used benchmark expansion priors | [log](../sessions/04_R1_coarse_align/log.md) |
+| R1 (revised)    | `sessions/05_R1_revised/`         | first_pass_done_v2 | 3/6 origin ≤100 µm, 3/6 rot ±5° (minimal `(R, t)` only); density-map NCC cannot recover scales on this data → all subjects emit minimal | [log](../sessions/05_R1_revised/log.md) |
+| A1        | `sessions/NN_A1_teaser/`                | not_started | —               | —        |
+| A2        | `sessions/NN_A2_spectral_gm/`           | not_started | —               | —        |
+| A3        | `sessions/NN_A3_fgw/`                   | not_started | —               | —        |
+| A5        | `sessions/NN_A5_hungarian_baseline/`    | not_started | —               | —        |
+| A4        | `sessions/NN_A4_rrwm/`                  | not_started | —               | —        |
+| A6        | `sessions/NN_A6_ssl_pointnet/`          | not_started | —               | —        |
+| A7        | `sessions/NN_A7_superglue3d/`           | not_started | —               | —        |
+| A8        | `sessions/NN_A8_predator/`              | not_started | —               | —        |
+| Q1        | `sessions/NN_Q1_gate/`                  | not_started | —               | —        |
+| Q2        | `sessions/NN_Q2_descriptor/`            | not_started | —               | —        |
+| G1        | `sessions/NN_G1_review_gui/`            | not_started | —               | —        |
+| R2 + Q0   | `sessions/NN_R2_constellation/`         | not_started | —               | —        |
+| R3        | `sessions/NN_R3_tps_expansion/`         | not_started | —               | —        |
+| Q3        | `sessions/NN_Q3_classifier/`            | not_started | —               | —        |
+| R4        | `sessions/NN_R4_icp_tps/`               | not_started | —               | —        |
+| R5        | `sessions/NN_R5_cpd/`                   | not_started | —               | —        |
+| Q4        | `sessions/NN_Q4_contrastive/`           | not_started | —               | —        |
+| Q5        | `sessions/NN_Q5_gan/`                   | not_started | —               | —        |
+| G2        | `sessions/NN_G2_active_learning/`       | not_started | —               | —        |
+| R6        | `sessions/NN_R6_learned_descriptor/`    | not_started | —               | —        |
+
+---
+
+## 7. Change log
+
+- 2026-04-17 — initial version drafted; scope covers R1–R6, Q0–Q5, G1–G2 with recommended session order and validation protocol.
+- 2026-04-17 — added Section 1.E (A-series: A1 TEASER++, A2 Spectral GM, A3 Fused Gromov-Wasserstein, A4 RRWM/FGM, A5 Hungarian baseline, A6 self-supervised GNN, A7 3D SuperGlue, A8 Predator; rejected alternatives documented). Reworked Section 4 into two parallel tracks (A and B) sharing R1. Extended Section 5 metrics and Section 6 ledger.
+- 2026-04-17 — clarified that G1 (review GUI) is a **shared foundation** required by both Track A and Track B; "no-QC" in Section 1.E means "no learned classifier in the inference loop," not "no human review." Each A-candidate's Dependencies line updated to "R1; G1 required for output review." Section 3 intro rewritten to reflect cross-track role.
+- 2026-04-17 — R1 first pass landed (`sessions/04_R1_coarse_align/`). XY density-xcorr (method step 3) dropped in favour of HCR GFP+ centroid: GFP+ is 55–70 % of HCR cells on the benchmark so density patterns are not sparse enough to localise. Benchmark: 3/6 pass ≤ 100 µm origin; 5/6 pass ±10° rotation. Punts to R2: asymmetric HCR (782149) and rotation drift (767018).
+- 2026-04-17 — Session 04 subgoal 01 (GFP+ threshold, v2): `counts >= 5` replaced with **Yen max-entropy on `log(counts ≥ 1)`**, per-subject. Constraint from user: the rule must be distribution-only (future subjects have no `coreg_table.csv`) and should maximise the threshold subject to ≥ 95 % coverage of the coreg-table HCR IDs. Fixed-fraction strategies (v1's winner) disqualified for violating generalisability; depth-from-pia metrics dropped as non-diagnostic. Of the distribution-driven candidates (GMM 2-/3-comp, Otsu, Kneedle, Kittler–Illingworth, Triangle, Yen, Isodata), Yen is the only one that lands in the tail of the log-count distribution — per-subject thresholds 84/153/90/156 counts, GFP+ fractions 10–16 % (vs 31–54 % for GMM/Otsu which split inside the signal mode). Coreg-table coverage ≥ 0.960 on every subject. Loader default now `gfp_threshold_method='yen_log'`; `counts_min` and `fixed_frac` retained as options. R1 re-validation: rotation / `tz_std` unchanged; origin error ±25 µm (782149 372→348, 790322 90→83 improve; 788406 98→124, 767018 136→161 regress). Pass rate 3/6 → 2/6 on the 100 µm origin metric; accepted because the primary aim is a biologically credible sparse GFP+ set for R2 / A-series matchers — R1's centroid XY is a placeholder estimator. Intensity-only subjects (755252, 767022) deferred to subgoal 02.
+- 2026-04-17 — Session 04 subgoal 01 **(v2.1 addendum)**: density-only and joint counts×density strategies added to the analysis (6 + 3 new strategies) after user feedback that v2 forgot the density and count+density families. Ranking metric switched from `threshold_min` (counts-only, meaningless when density or joint families enter) to **`max gfp_frac` across subjects** — lower is more stringent — tie-broken by `gfp_frac_mean`, then `coreg_cov_min`. Fixed-percentile exclusion still applies. New default: **`yen_log_joint`** — Yen on both `log(counts ≥ 1)` and `log(density > 0)` with an AND-filter. Dominates counts-only Yen: identical on 788406 / 790322 / 782149 (high-count cells also have high density) and **strictly tighter on 767018** (0.095 vs 0.109 gfp_frac) because it removes high-count / low-density cells (big, weakly-labelled). R1 origin error on 767018 recovers to pre-snapshot quality (joint 133 µm vs counts-only Yen 160 µm vs pre-snapshot 136 µm), no other subject regresses. Density-only strategies alone are too permissive (0.40–0.70 gfp_frac) because `log(density > 0)` lacks a noise floor for the same structural reason `log(counts)` does — 0-count cells are implicit and therefore absent. Loader wired: new `_yen_log_density_threshold()` helper + `yen_log_joint` branch in `_apply_count_threshold`; falls back to counts-only Yen on subjects without a `density` column.
+- 2026-04-17 — **R1 revised: scale-free, surface-tilt aligned, graceful-degradation.** Only the 180° XY rotation prior, the "CZ ≈ HCR XY center" prior, and the pia-plane fits are used; scales are estimated from data with the axial search using partial-overlap NCC (no `sz ≤ D_hcr / D_cz` bound — HCR section thickness is independent of expansion and the method handles thinner or thicker HCR); residual tilt is recovered by linear plane-to-plane alignment of the pia surfaces; R1 emits minimal `(R, t)` always, adding `S` only when per-axis scale confidence clears threshold (graceful degradation). **No R1-B candidate:** the "first localize" principle (`CLAUDE.md`) is satisfied by the sample-specific priors alone, so when R1's scale search fails the minimal output is itself the backup, consumed transparently by downstream scale-aware methods (A1 / A3 / TEASER-class internals). First-pass implementation (`dev_code/r1_coarse_align.py` / `sessions/04_R1_coarse_align/`) is marked superseded because it used benchmark-derived expansion priors and the coverage-constrained axial bound. Section 0 benchmark priors relabelled as validation-reference only. Downstream Dependencies lines unchanged (they already reference R1 only).
+- 2026-04-17 — **R1 revised first-pass benchmark landed** (`dev_code/r1_revised.py`, `sessions/05_R1_revised/`). Uses v2.2 peakgauss GFP+ defaults (subgoal 01/02 unchanged). Implements all eight method-sketch steps with two documented deviations: (i) the partial-overlap 1-D NCC min-overlap floor keys off the **longer** profile, not the shorter one — needed because thin-HCR subjects have 10 – 20-bin profiles that otherwise admit trivial 2-3-bin matches (NCC is scale-invariant); (ii) the per-axis confidence metric is robust-z `(peak − median) / (1.4826·MAD)` on the score curve, threshold 6.0 (not the "≈ 3" sketch value). At threshold 3 the XY NCC on 788406 admitted `sxy = 0.75` at confidence 5.07 (GT = 1.77; origin error blew up to 571 µm); raising to 6.0 routes every benchmark subject to the minimal output. Minimal-output benchmark: **3/6 pass origin ≤ 100 µm** (790322 71, 767018 99, 755252 57), **3/6 pass rot ± 5°** (788406 2.4°, 790322 0.4°, 782149 2.9°); only 790322 clears both. Compared to first-pass R1 v2.2: 788406 and 782149 regress (+75 / +89 µm), 767018 and 755252 improve (−28 / −67 µm), 790322 and 767022 flat — consistent with the tilt correction helping tilted-HCR subjects and hurting subjects where the 1.77× / 2.83× expansion prior happened to centre the affine. **Scale extension disabled on this dataset:** density-map NCC on 10 – 16 % GFP+ fractions finds geometrically-wrong peaks (shrunken CZ inside large HCR XY footprint) that the prominence metric can't distinguish from correct peaks — this is the regime Grand Plan §R1 step 8 anticipated with the `unknown` fallback. Ledger updated: first-pass R1 row marked `superseded`; revised R1 row added pointing to `sessions/05_R1_revised/`.

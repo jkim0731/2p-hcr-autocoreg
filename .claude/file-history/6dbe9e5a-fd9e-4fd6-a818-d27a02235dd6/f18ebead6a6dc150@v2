@@ -1,0 +1,73 @@
+"""Diagnose: for 755252, how many tiles have bimodal tops?"""
+from __future__ import annotations
+import sys, importlib.util, os
+from pathlib import Path
+import numpy as np
+import pandas as pd
+os.environ["PYTHONUNBUFFERED"] = "1"
+
+sys.path.insert(0, "/root/capsule/code/dev_code")
+_spec = importlib.util.spec_from_file_location(
+    "img_surface_l2",
+    str(Path("/root/capsule/code/dev_code") / "03_image_based_surface.py"))
+_mod = importlib.util.module_from_spec(_spec); sys.modules["img_surface_l2"] = _mod
+_spec.loader.exec_module(_mod)
+
+from benchmark_analysis import load_hcr_combined
+from benchmark_data_loader import load_subject
+
+for sid in ["755252", "767018"]:
+    print(f"\n=== {sid} ===")
+    s = load_subject(sid)
+    vol, xy_um, z_um, _ = load_hcr_combined(s, level=4)
+    sx = max(1, int(round(10.0 / xy_um)))
+    vol_sub = vol[:, ::sx, ::sx].astype(np.float32, copy=False)
+    _, Ys, Xs = vol_sub.shape
+    xs_col = np.arange(Xs, dtype=np.float32) * sx * xy_um
+    ys_col = np.arange(Ys, dtype=np.float32) * sx * xy_um
+    xx, yy = np.meshgrid(xs_col, ys_col)
+
+    # Anchor
+    a_top, _, _ = _mod._per_column_top_in_band(
+        vol_sub, z_um, None, None, relative_margin=0.05,
+        min_signal_abs_frac=0.20, min_thick_um=15.0)
+    ma = np.isfinite(a_top)
+    za = a_top[ma].ravel()
+    med_z = float(np.median(za))
+    mad_z = float(np.median(np.abs(za - med_z))) + 1e-6
+    keep = np.abs(za - med_z) <= 6.0 * 1.4826 * mad_z
+    anchor = _mod._robust_plane_fit(
+        xx[ma].ravel()[keep], yy[ma].ravel()[keep], za[keep])
+    anchor_zz = _mod._surface_z(anchor, xx, yy).astype(np.float32)
+    z_low = anchor_zz - 150.0; z_high = anchor_zz + 150.0
+    top_z, _, _ = _mod._per_column_top_in_band(
+        vol_sub, z_um, z_low, z_high, relative_margin=0.25,
+        min_signal_abs_frac=0.20, min_thick_um=10.0)
+    mask = np.isfinite(top_z)
+    xs_fit = xx[mask].ravel()
+    ys_fit = yy[mask].ravel()
+    zs_fit = top_z[mask].ravel()
+
+    keep_d = _mod._filter_tops_by_density(
+        xs_fit, ys_fit, zs_fit, radius_um=30.0, min_neighbors=3)
+    xs_fit, ys_fit, zs_fit = xs_fit[keep_d], ys_fit[keep_d], zs_fit[keep_d]
+    print(f"  after density filter: {len(xs_fit)} tops")
+    print(f"  tops z: p5={np.percentile(zs_fit,5):.0f} p50={np.percentile(zs_fit,50):.0f} p95={np.percentile(zs_fit,95):.0f}")
+
+    xb = (xs_fit // 120.0).astype(int)
+    yb = (ys_fit // 120.0).astype(int)
+    key = yb * 100000 + xb
+    df = pd.DataFrame({"k": key, "z": zs_fit})
+    bimodal_ct = 0; total_ct = 0
+    gap_distribution = []
+    for k, sub in df.groupby("k"):
+        if len(sub) < 5: continue
+        total_ct += 1
+        zs = np.sort(sub["z"].values)
+        max_gap = np.diff(zs).max()
+        gap_distribution.append(float(max_gap))
+        if max_gap > 40.0:
+            bimodal_ct += 1
+    print(f"  tiles with >5 tops: {total_ct}; tiles with gap>40µm: {bimodal_ct} ({100*bimodal_ct/total_ct:.1f}%)")
+    gd = np.array(gap_distribution)
+    print(f"  tile max-gap distribution: p50={np.percentile(gd,50):.1f} p75={np.percentile(gd,75):.1f} p90={np.percentile(gd,90):.1f} max={gd.max():.1f}")

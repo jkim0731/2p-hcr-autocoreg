@@ -1,0 +1,47 @@
+"""For 755252 + 790322, plot log-median vs z per channel + combined."""
+import sys
+from pathlib import Path
+sys.path.insert(0, '/root/capsule/code/dev_code')
+from benchmark_analysis import list_hcr_channels, load_hcr_combined, load_hcr_volume
+from benchmark_data_loader import load_subject
+import numpy as np
+import matplotlib.pyplot as plt
+
+EPS = 1e-3
+
+for sid in ['755252', '790322']:
+    s = load_subject(sid)
+    vol_c, xy_um, z_um, _ = load_hcr_combined(s, level=4)
+    Z = vol_c.shape[0]; zs = np.arange(Z) * z_um
+    chs = list_hcr_channels(s)
+
+    fig, ax = plt.subplots(figsize=(7, 7))
+    log_c = np.log(vol_c + EPS)
+    m_c = np.median(log_c, axis=(1, 2))
+    ax.plot(m_c, zs, lw=1.8, label='combined', color='k')
+
+    for ch in chs:
+        try:
+            v, _, _ = load_hcr_volume(s, channel=ch, level=4)
+        except Exception as e:
+            print(f'{sid} {ch}: err {e}')
+            continue
+        log_v = np.log(v + EPS)
+        m_v = np.median(log_v, axis=(1, 2))
+        # normalize each channel so it shares x-axis with combined: shift to same bg floor
+        bg = np.median(m_v[:max(3, int(40/z_um))])
+        m_v_shift = m_v - bg  # zero at top
+        ax.plot(m_v_shift - 7, zs, lw=1.0, label=f'{ch} (-7+shift)')
+
+    ax.invert_yaxis()
+    ax.set_xlabel('log median (combined) / shifted-log median (channels)')
+    ax.set_ylabel('z (µm)')
+    ax.set_title(f'{sid} — z vs log-median: combined vs per-channel')
+    ax.axhline(100, color='gray', ls=':', lw=0.6)
+    ax.axhline(350, color='gray', ls=':', lw=0.6)
+    ax.legend(fontsize=8)
+    plt.tight_layout()
+    p = f'/tmp/iter07_chscan_{sid}.png'
+    plt.savefig(p, dpi=110)
+    plt.close(fig)
+    print(f'wrote {p}')

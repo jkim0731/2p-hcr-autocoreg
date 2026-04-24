@@ -1,0 +1,147 @@
+"""Render iter07 TPS surface across multiple y positions per HCR subject.
+
+For each subject: load combined HCR volume, refit TPS from cached
+``iter07_transitions_<sid>.npz``, re-run N22 (centroid-based) for
+reference, then draw a 2x3 grid of XZ slices at 6 y positions
+(equispaced across the interior 70% of the FOV) with N22 (green) and
+iter07 TPS (red) overlaid.
+
+Output: ``figures/iter07_multiy_<sid>.png`` (6 subjects).
+"""
+from __future__ import annotations
+
+import importlib.util
+import sys
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import numpy as np
+from scipy.interpolate import RBFInterpolator
+
+ROOT = Path("/root/capsule")
+sys.path.insert(0, str(ROOT / "code" / "dev_code"))
+
+_spec = importlib.util.spec_from_file_location(
+    "img_surface_v21",
+    str(ROOT / "code" / "dev_code" / "03_image_based_surface.py"),
+)
+_img = importlib.util.module_from_spec(_spec)
+sys.modules["img_surface_v21"] = _img
+_spec.loader.exec_module(_img)
+
+from benchmark_analysis import (
+    estimate_pia_surface_image_ceiling,
+    estimate_pia_surface_quantile_ceiling,
+    list_hcr_channels,
+    load_hcr_combined,
+    load_hcr_volume,
+)
+from benchmark_data_loader import hcr_px_to_um, load_subject
+
+SESSION = ROOT / "code" / "sessions" / "03c_onset_features"
+OUT_FIG = SESSION / "figures"
+DATA = SESSION / "data"
+HCR = ["755252", "767018", "767022", "782149", "788406", "790322"]
+N_Y = 6
+Y_INTERIOR_FRAC = 0.15   # pad fraction same as sampling grid
+TPS_SMOOTHING = 10000.0
+EPS = 1e-3
+
+
+def get_n22(s, vol, xy_um, z_um, hcr_xyz):
+    anchor = estimate_pia_surface_image_ceiling(
+        hcr_xyz, vol, z_um, xy_um,
+        relative_margin=0.005, min_signal_abs=0.05, safety_offset_um=0.0)
+    if anchor is None:
+        return None
+    per_ch = []
+    for ch in list_hcr_channels(s):
+        try:
+            v_ch, _, _ = load_hcr_volume(s, channel=ch, level=4)
+            per_ch.append(v_ch.astype(np.float32, copy=False))
+        except FileNotFoundError:
+            continue
+    sxy = max(1, int(round(10.0 / xy_um)))
+    vols_sub = [v[:, ::sxy, ::sxy] for v in per_ch]
+    _, Ys, Xs = vols_sub[0].shape
+    xs_sub = np.arange(Xs) * sxy * xy_um
+    ys_sub = np.arange(Ys) * sxy * xy_um
+    xx_sub, yy_sub = np.meshgrid(xs_sub, ys_sub)
+    return estimate_pia_surface_quantile_ceiling(
+        hcr_xyz, vols_sub, z_um, sxy * xy_um, xx_sub, yy_sub, anchor)
+
+
+def fit_tps(xs_um, ys_um, zs_um, smoothing=TPS_SMOOTHING):
+    ok = np.isfinite(zs_um)
+    if ok.sum() < 4:
+        return None
+    pts = np.column_stack([xs_um[ok], ys_um[ok]])
+    return RBFInterpolator(pts, zs_um[ok], kernel='thin_plate_spline',
+                           smoothing=smoothing)
+
+
+def eval_tps(rbf, x, y):
+    if rbf is None:
+        return np.full_like(np.asarray(x, dtype=float), np.nan)
+    x = np.asarray(x); y = np.asarray(y)
+    pts = np.column_stack([x.ravel(), y.ravel()])
+    return rbf(pts).reshape(x.shape)
+
+
+def render_subject(sid: str):
+    print(f"=== {sid} ===", flush=True)
+    s = load_subject(sid)
+    vol, xy_um, z_um, _ = load_hcr_combined(s, level=4)
+    Z, Y, X = vol.shape
+    hcr_xyz = hcr_px_to_um(
+        s.hcr_centroids[["z_px", "y_px", "x_px"]].values, s)[:, [2, 1, 0]]
+
+    n22 = get_n22(s, vol, xy_um, z_um, hcr_xyz)
+
+    cache = np.load(DATA / f"iter07_transitions_{sid}.npz")
+    xs_um = cache["xs_um"]; ys_um = cache["ys_um"]; zs_um = cache["zs_um"]
+    rbf = fit_tps(xs_um, ys_um, zs_um)
+
+    x_um = np.arange(X) * xy_um
+    y_um = np.arange(Y) * xy_um
+    z_axis = np.arange(Z) * z_um
+    y_lo = int(Y_INTERIOR_FRAC * Y); y_hi = Y - 1 - y_lo
+    y_idx = np.linspace(y_lo, y_hi, N_Y).astype(int)
+
+    fig, axes = plt.subplots(2, 3, figsize=(18, 9), sharey=True)
+    axes = axes.ravel()
+    for ax, iy in zip(axes, y_idx):
+        y_const = iy * xy_um
+        img = np.log(vol[:, iy, :] + EPS)
+        vmax = float(np.percentile(img, 99.5))
+        vmin = float(np.percentile(img, 5))
+        ax.imshow(img, aspect='auto', cmap='gray', origin='upper',
+                  extent=[x_um[0], x_um[-1], z_axis[-1], z_axis[0]],
+                  vmin=vmin, vmax=vmax)
+        if n22 is not None:
+            z_n22 = _img._surface_z(n22, x_um, np.full_like(x_um, y_const))
+            ax.plot(x_um, z_n22, color='tab:green', lw=1.3, label='N22')
+        z_tps = eval_tps(rbf, x_um, np.full_like(x_um, y_const))
+        ax.plot(x_um, z_tps, color='tab:red', lw=1.4, label='iter07 TPS')
+        ax.set_xlabel('x (µm)')
+        ax.set_title(f"y = {y_const:.0f} µm  (iy = {iy}/{Y})")
+        ax.legend(loc='lower right', fontsize=8)
+    axes[0].set_ylabel('z (µm)'); axes[3].set_ylabel('z (µm)')
+    fig.suptitle(
+        f"{sid} — iter07 TPS surface across {N_Y} y positions "
+        f"(log(combined+ε); green=N22, red=iter07)",
+        fontsize=12, y=1.00)
+    plt.tight_layout()
+    out = OUT_FIG / f"iter07_multiy_{sid}.png"
+    plt.savefig(out, dpi=110)
+    plt.close(fig)
+    print(f"  wrote {out}", flush=True)
+
+
+def main():
+    for sid in HCR:
+        render_subject(sid)
+
+
+if __name__ == "__main__":
+    main()

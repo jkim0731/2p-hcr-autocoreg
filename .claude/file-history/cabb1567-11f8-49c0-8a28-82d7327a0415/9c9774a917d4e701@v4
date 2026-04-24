@@ -1,0 +1,163 @@
+# Session 03 — Image-based curved-surface estimation
+
+Date: 2026-04-17
+
+## Goal
+
+Image-only analogue of N22 (session 03 v3).  Fit a **quadratic** surface
+`z = a·x + b·y + c + p·x² + q·x·y + r·y²` to the pia using intensity
+information alone (no centroid ROI).  No L2 estimation — dropped per
+user request (the CZ L2 signal was ambiguous in the side views).
+
+After two iterations (per-column in-band search too fragile; v3-port
+too complex), the algorithm was simplified to a two-stage,
+top-of-volume-anchored method that works on all six benchmark
+subjects.
+
+## Algorithm (2 stages)
+
+### Stage 1 — global baseline from the top 1–2 z-planes
+
+The top 1–2 z-slices are always outside tissue.  Pool every voxel of
+those slices across the **entire image** and compute a robust
+(median + 1.4826 · MAD) baseline.  One threshold is used for every
+tile — the image's own noise floor, not a per-tile / per-column
+heuristic.
+
+Padding handling:
+
+* A slice whose fraction of exact-zero voxels ≥ `max_pad_frac` (0.95)
+  is treated as pure padding and skipped.
+* Exact-zero voxels are dropped from the pool so the median reflects
+  the **real blank region**, not the zero padding (important for CZ,
+  where z=0 is often ~50 % zero-padded around a non-rectangular ROI
+  and z=1+ is the real buffer ring above tissue).
+* HCR: top slices are literally pure zeros → all slices skipped →
+  fall back to `sigma = 0.02 · dyn_hint` where `dyn_hint =
+  percentile(vol, 99)`.  Threshold then lives on the volume's own
+  dynamic range.
+* CZ: dropping zeros yields a median at the buffer fluorescence
+  (~400–2500 counts, subject-dependent) and a MAD capturing the
+  buffer's own pixel variability.
+
+Threshold:
+```
+surf_thr = max( bg_mean + k_surface · bg_sigma,
+                bg_mean + relative_margin_min · dyn_hint )
+```
+with `k_surface = 6.0`, `relative_margin_min = 0.02`.
+
+### Stage 2 — per-tile onset + quadratic Huber fit
+
+Tile the XY plane (`xy_tile_um` = 80 HCR / 60 CZ).  For each tile:
+
+1. 1-D median profile along z.
+2. Gaussian-smooth with `smooth_sigma_um` (6 HCR / 4 CZ).
+3. Find the first z where the profile stays above `surf_thr` for at
+   least `min_thick_surface_um` contiguous microns (12 HCR / 10 CZ),
+   searching only the top `surface_search_frac = 0.30` of the volume.
+4. Record (x_tile_centre, y_tile_centre, z_onset_px · z_um).
+
+Fit quadratic `z = a·x + b·y + c + p·x² + q·x·y + r·y²` via IRLS-Huber
+(centered for conditioning; coefficients returned in absolute frame).
+
+No ROI clamp (image-only).  No in-band per-column search (removed —
+the band runs into tissue and the "baseline percentile" is
+contaminated).
+
+## Files
+
+* `code/dev_code/03_image_based_surface.py`
+  — `estimate_surface_and_l2_image_based(vol, z_um, xy_um, *,
+     n_top_planes, k_surface, relative_margin_min, xy_tile_um,
+     surface_search_frac, min_thick_surface_um, smooth_sigma_um)`
+  → `SurfaceResult(surface, baseline_mean, baseline_sigma, surf_thr,
+     dyn_hint, n_tiles_total, n_surface_tiles, tile_records, ...)`.
+* `code/dev_code/03_image_based_surface_run.py`
+  — driver over `BENCHMARK_SUBJECTS`; HCR combined + CZ.
+* `code/dev_code/03_image_based_surface_figs.py`
+  — walkthrough figures: XZ / YZ MIPs + fitted surface (red) + global
+  intensity profile with the baseline threshold.
+* `code/sessions/03_image_based_surface_estimation/results.csv`
+  — per-subject scalars (quadratic coefficients, tilt, residual MAD,
+  baseline_mean, baseline_sigma, surf_thr, above_frac, onset_depth_um).
+* `code/sessions/03_image_based_surface_estimation/figures/`
+  — `walkthrough_<sid>.png` for all six subjects.
+
+## Per-subject results
+
+| subject | HCR resid MAD | HCR above% | HCR onset µm | HCR tilt° | CZ resid MAD | CZ above% | CZ onset µm | CZ tilt° |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 755252 | 66.1 |  3.5 | 2.5 | — | 3.22 |  1.0 | 22.5 | — |
+| 767018 |  7.8 |  1.4 | 2.5 | — | 1.56 |  1.3 |  2.5 | — |
+| 767022 | 74.0 |  3.0 | 2.5 | — | 1.83 |  0.6 |  7.5 | — |
+| 782149 |  6.9 |  1.6 | 2.5 | — | 0.93 |  8.3 |  2.5 | — |
+| 788406 | 45.0 | 10.1 | 2.5 | — | 2.56 |  2.6 |  7.5 | — |
+| 790322 | 32.9 |  8.6 | 2.5 | — | 1.43 |  0.1 |  2.5 | — |
+
+(tilt column left blank — dominated by the quadratic curvature terms;
+read off the walkthrough plots.)
+
+### Interpretation
+
+* **HCR onset collapsed to 2.5 µm on every subject** — the quadratic
+  fit now hugs the tissue top everywhere.  Visual inspection of the
+  walkthroughs confirms the red surface sits exactly at the first
+  bright band in HCR XZ / YZ MIPs, including the 790322 x≈2000 µm dip
+  that defeated the plane fit.
+* **CZ residual MAD 0.9–3.2 µm** — effectively matches the z-step.
+  CZ surface tracks the top of the GFP layer on all six subjects.
+* **HCR residual MAD still variable** (7–74 µm) because HCR has
+  ~800 tiles per subject at 80 µm; shiny debris and per-tile first-rise
+  noise inflate the spread even when the fit itself is good.  A
+  larger `xy_tile_um` (150 µm) tightens resid MAD but coarsens the
+  curvature — deferred.
+* **HCR above_frac** still 1.4–10.1 % (788406 / 790322 highest).  The
+  gap to N22's ≤ 0.08 % is the missing ROI envelope clamp; N22 lifts
+  the fit until ≤ 10 % of per-tile cells sit above, and that requires
+  centroid data this session deliberately excludes.
+
+## Parameters
+
+| knob | HCR | CZ | source |
+|---|---|---|---|
+| n_top_planes | 2 | 2 | always-blank slices at top |
+| k_surface | 6.0 | 6.0 | robust-σ multiplier above baseline |
+| relative_margin_min | 0.02 | 0.02 | floor vs dyn_hint (rescues HCR where σ≈0) |
+| max_pad_frac | 0.95 | 0.95 | drop pure-padding planes |
+| xy_tile_um | 80 | 60 | CZ volume is smaller in µm |
+| surface_search_frac | 0.30 | 0.30 | only search top 30 % of z |
+| min_thick_surface_um | 12 | 10 | suppress single-plane spikes |
+| smooth_sigma_um | 6 | 4 | matches z-step resolution |
+
+All distribution-driven — no hand-tuned absolute intensities.
+
+## What works, what doesn't
+
+### Works
+* HCR quadratic surface tracks curvature (790322 x-dip, 788406 tilt).
+* CZ surface excellent (resid MAD < 3.3 µm, onset ≤ 22.5 µm).
+* All six subjects converge.
+* No per-column / in-band machinery — global top-of-volume baseline
+  suffices because top slices are always outside tissue.
+* HCR fallback (sigma from dyn_hint) handles the pure-padding case
+  cleanly.
+
+### Doesn't yet
+* **Above_frac without the ROI clamp** still sits at 1.4–10 % for HCR
+  (N22 with clamp: ≤ 0.08 %).  Closing the gap requires either the
+  ROI clamp (rules out image-only) or biasing the fit deeper
+  (e.g. quantile loss at q = 0.80).
+* **782149 CZ above_frac = 8.3 %** is the CZ outlier; manual
+  inspection shows a handful of unusually bright upper-layer GFP+
+  cells the fit (correctly) sits above.
+
+## Next step candidates
+
+1. **Quantile-loss fallback** (q = 0.75–0.80) for HCR only, to lower
+   above_frac without breaking CZ (which is already fine).
+2. **Larger HCR tiles (150 µm)** to tighten resid MAD, at the cost of
+   fewer curvature samples.
+3. Promote into `benchmark_analysis.py` as an image-driven
+   cross-check alongside N22 (complementary: N22 uses centroids,
+   this uses intensity).

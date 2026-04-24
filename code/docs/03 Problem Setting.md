@@ -1,7 +1,7 @@
 # Problem Setting
 
 ## Core
-Volume-in-volume localization + registration
+Partial volume-to-volume localization + registration
 Cell to cell mapping QC by orphology & context matching
 
 ## Challenges

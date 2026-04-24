@@ -1,0 +1,29 @@
+---
+name: 03 image-based surface + L2 estimator
+description: Session 03_image_based_surface_estimation — new intensity-jump surface + L2 fitter (CZ and HCR), complementary to N22.
+type: project
+originSessionId: cabb1567-11f8-49c0-8a28-82d7327a0415
+---
+Session `03_image_based_surface_estimation` adds
+`estimate_surface_and_l2_image_based()` in
+`code/dev_code/03_image_based_surface.py`.  Tile-wise intensity-jump
+detection → IRLS-Huber plane for pia; parallel-plane fit for L2.
+Driver + figures in `03_image_based_surface_run.py` /
+`03_image_based_surface_figs.py`; results in
+`sessions/03_image_based_surface_estimation/`.
+
+**Why:** User asked for a purely image-intensity approach with L2
+added.  CZ L2 uses background-only (segmentation_mask == 0) as
+instructed.  Distribution-driven thresholds: baseline from truly-blank
+top slices (≤5 % of dyn_hint) with dynamic-range fallback when the blank
+pool is too small.
+
+**How to apply:** Treat it as *complementary* to N22, not a
+replacement.  CZ surface here is near-perfect (resid MAD ≤ 1.3 µm,
+above_frac ≈ 0).  HCR surface is looser (MAD 32–120 µm); for HCR pia,
+`analyze_subject` with `quantile_ceiling` (N22) remains the default.
+
+**Open issues (2026-04-17):** CZ L2 floors at `min_l1=40 µm` on 4/6
+subjects because bg-only L1 window is too sparse — next try
+segmentation-density jump instead of bg intensity.  HCR above_frac
+3–7 % (vs N22 ≤0.08 %) — per-tile adaptive threshold may close the gap.

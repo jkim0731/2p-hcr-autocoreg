@@ -1,0 +1,112 @@
+# Session 06 — Local distance-based scaling estimator (feasibility test)
+
+## Context
+
+R1-revised emits minimal `(R, t)` on every benchmark subject but
+cannot recover per-axis scale via density-map NCC
+(`sessions/05_R1_revised/log.md` §Deviation 2). This session tests a
+different signal: **estimate `sxy` and `sz` from local ROI-to-ROI
+distance statistics (or local volume density)** — CZ GCaMP+ centroids
+vs HCR GFP+ centroids localized inside HCR via R1.
+
+Scope: **estimate `(sxy, sz)` only, verify against the known
+anisotropic expansion table in `code/docs/01 Data Description.md`
+(sxy ∈ 1.64–1.92, sz ∈ 2.13–3.58).** No R1 wiring in this session.
+If the estimator clears the stopping bar (all 6 subjects within
+± 20 %), it becomes the candidate scale source for the continued R1
+effort in a follow-up session.
+
+## Files
+
+```
+code/dev_code/local_distance_scale.py          (estimator — NEW)
+code/dev_code/06_local_distance_benchmark.py   (driver — NEW)
+code/sessions/06_local_distance_scale/
+    log.md
+    results.json
+```
+
+## Reused infrastructure
+
+- `benchmark_data_loader.load_subject` (v2.2 GFP+ defaults already in
+  place: `peakgauss3_density_p0.1` / `peakgauss3_mean_bg_p1`) +
+  `cz_px_to_um`, `hcr_px_to_um`.
+- `benchmark_analysis.analyze_subject` — surface fits.
+- `r1_revised.coarse_align_revised`, `apply_coarse_affine` — produces
+  minimal `(R, t)` used for localization.
+- `benchmark_analysis.fit_anisotropic_similarity` +
+  `landmark_pairs_um(s, active_only=True)` — **validation only**,
+  mirrors the per-subject expansion numbers in `01 Data Description.md`.
+
+## Method
+
+Two variants, both evaluated per subject.
+
+**M1 — per-axis k-NN distance ratio.**
+
+1. Apply R1 minimal `(R, t)` to CZ (scales = [1,1,1]). Crop HCR GFP+
+   to an AABB around the mapped CZ centroid, inflated by
+   `sxy_upper = L_hcr_xy / L_cz_xy` in xy and `sz_upper = 6.0` in z
+   (R1's own feasibility bounds; no benchmark priors).
+2. For each cloud (raw µm, native frame — k-NN distances are
+   rotation-invariant) build a `cKDTree`, take k=5 nearest neighbors
+   per cell (skip self).
+3. For every (cell, nbr) pair record `|dx|`, `|dy|`, `|dz|`,
+   `dxy = √(dx²+dy²)`. Summary = median over all N·k pairs.
+4. `sxy = median_dxy_hcr / median_dxy_cz`,
+   `sz  = median_dz_hcr  / median_dz_cz`.
+
+**M2 — local volume density ratio (isotropic baseline).**
+
+1. Same crop as M1.
+2. For each cloud, mean local density ρ = k / V_knn, where V_knn is
+   the volume of the sphere of radius = mean k-th-NN distance
+   (standard density estimate; `k=10`).
+3. `s_iso = (ρ_cz / ρ_hcr)^(1/3)` — isotropic volume-scale estimate.
+
+M1 gives anisotropic `(sxy, sz)`; M2 gives a scalar for sanity check
+(should be close to `(sxy·sxy·sz)^(1/3)` in the matched-population
+limit).
+
+## Driver — `dev_code/06_local_distance_benchmark.py`
+
+Mirror `05_r1_revised_benchmark.py`. Per subject in the six-subject
+`EVAL_ORDER`:
+
+1. `load_subject` → CZ, HCR GFP+ in µm.
+2. `coarse_align_revised` → minimal `(R, t)`.
+3. Compute `sxy`, `sz` via M1 and `s_iso` via M2.
+4. GT: `sxy_gt = sqrt(sx · sy)`, `sz_gt = sz` from
+   `fit_anisotropic_similarity(landmark_pairs_um(s, active_only=True))`
+   — cross-checked against the table in `01 Data Description.md`.
+5. Record `subject, n_cz, n_hcr_local, sxy_est, sz_est, s_iso_est,
+   sxy_gt, sz_gt, rel_err_sxy, rel_err_sz, rel_err_siso`.
+6. Dump `results.json` + a rendered markdown table into `log.md`.
+
+## Verification
+
+1. **Synthetic sanity.** Stretch a CZ copy by `(1.77, 1.77, 2.82)`;
+   estimator should return sxy ≈ 1.77, sz ≈ 2.82 (within a few %).
+2. **Benchmark run.**
+   `python dev_code/06_local_distance_benchmark.py` →
+   `sessions/06_local_distance_scale/results.json`.
+3. **Judge.** Per-subject table vs GT from `01 Data Description.md`.
+   Report absolute errors, anisotropy ratio preservation.
+
+## Self-critique
+
+- **Weakest assumption.** CZ GCaMP+ and HCR GFP+ sample comparable
+  fractions of the same underlying neurons within the localized
+  volume. v2.2 threshold was calibrated for this (coreg coverage
+  0.93–0.99); if it holds, the ratio of per-axis k-NN medians is the
+  true anisotropic scale.
+- **Residual bias source.** Any detection-rate mismatch between CZ
+  and HCR inside the overlap enters as a uniform factor on all axes
+  (via the cube-rooted density ratio); anisotropy `sxy/sz` should
+  survive.
+- **Stopping condition.** Per-subject `sxy` **and** `sz` within ± 20 %
+  of GT on **all 6/6 subjects**, M1. If met, the estimator is accepted
+  and carried forward into the continued R1 effort (promotion into
+  `CoarseAffineV2.scales` / `scale_known`). If any subject misses by
+  > 20 % on either axis, the method is not sufficient for R1 use;
+  log the per-subject bias and stop.

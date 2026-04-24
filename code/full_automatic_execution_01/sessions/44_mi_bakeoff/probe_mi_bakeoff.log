@@ -1,0 +1,82 @@
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  788406 P1   rec_id=0.202 r@5=0.202 r@10=0.202 r@20=0.210 n_pred=623/787 med=81 wall=55.0s
+  788406 M1   rec_id=0.000 r@5=0.000 r@10=0.000 r@20=0.000 n_pred=0/787 med=nan wall=12.2s
+  788406 M3   rec_id=0.000 r@5=0.000 r@10=0.000 r@20=0.000 n_pred=518/787 med=436 wall=18.7s
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  788406 C1   rec_id=0.202 r@5=0.202 r@10=0.202 r@20=0.210 n_pred=623/787 med=81 wall=24.8s
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  788406 I2   rec_id=0.000 r@5=0.000 r@10=0.000 r@20=0.000 n_pred=0/787 med=nan wall=6.9s
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  755252 P1   rec_id=0.033 r@5=0.033 r@10=0.033 r@20=0.044 n_pred=542/639 med=103 wall=52.8s
+  755252 M1   rec_id=0.000 r@5=0.000 r@10=0.000 r@20=0.000 n_pred=0/639 med=nan wall=6.5s
+  755252 M3   rec_id=0.000 r@5=0.000 r@10=0.000 r@20=0.000 n_pred=499/639 med=898 wall=16.3s
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  755252 C1   rec_id=0.033 r@5=0.033 r@10=0.033 r@20=0.044 n_pred=542/639 med=103 wall=32.3s
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  755252 I2   rec_id=0.000 r@5=0.000 r@10=0.000 r@20=0.000 n_pred=0/639 med=nan wall=9.4s
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  767022 P1   rec_id=0.081 r@5=0.081 r@10=0.082 r@20=0.108 n_pred=654/793 med=107 wall=37.0s
+  767022 M1   rec_id=0.000 r@5=0.000 r@10=0.000 r@20=0.000 n_pred=0/793 med=nan wall=6.2s
+  767022 M3   rec_id=0.000 r@5=0.000 r@10=0.000 r@20=0.000 n_pred=543/793 med=664 wall=10.7s
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  767022 C1   rec_id=0.081 r@5=0.081 r@10=0.082 r@20=0.108 n_pred=654/793 med=107 wall=17.7s
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  767022 I2   rec_id=0.000 r@5=0.000 r@10=0.000 r@20=0.000 n_pred=0/793 med=nan wall=7.6s
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  782149 P1   rec_id=0.000 r@5=0.000 r@10=0.000 r@20=0.000 n_pred=145/303 med=1136 wall=35.0s
+  782149 M1   rec_id=0.000 r@5=0.000 r@10=0.000 r@20=0.000 n_pred=0/303 med=nan wall=1.9s
+  782149 M3   rec_id=0.000 r@5=0.000 r@10=0.000 r@20=0.000 n_pred=145/303 med=1136 wall=7.3s
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  782149 C1   rec_id=0.000 r@5=0.000 r@10=0.000 r@20=0.000 n_pred=145/303 med=1136 wall=11.6s
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  782149 I2   rec_id=0.000 r@5=0.000 r@10=0.000 r@20=0.000 n_pred=0/303 med=nan wall=6.0s
+
+=== SUBJECT × CANDIDATE r@20 MATRIX ===
+candidate        C1   I2   M1   M3        P1
+subject                                     
+755252     0.043818  0.0  0.0  0.0  0.043818
+767022     0.108449  0.0  0.0  0.0  0.108449
+782149     0.000000  0.0  0.0  0.0  0.000000
+788406     0.209657  0.0  0.0  0.0  0.209657
+
+=== SUBJECT × CANDIDATE recall_id MATRIX ===
+candidate        C1   I2   M1   M3        P1
+subject                                     
+755252     0.032864  0.0  0.0  0.0  0.032864
+767022     0.080706  0.0  0.0  0.0  0.080706
+782149     0.000000  0.0  0.0  0.0  0.000000
+788406     0.202033  0.0  0.0  0.0  0.202033
+
+=== SUBJECT × CANDIDATE median_err MATRIX ===
+candidate           C1  I2  M1           M3           P1
+subject                                                 
+755252      102.748633 NaN NaN   897.855669   102.748633
+767022      107.337531 NaN NaN   664.339017   107.337531
+782149     1135.545684 NaN NaN  1135.545684  1135.545684
+788406       81.129091 NaN NaN   436.293264    81.129091
+
+=== PER SUBJECT BEST CANDIDATE (r@20) ===
+  788406: P1 r@20=0.210 rec_id=0.202 med=81
+  755252: P1 r@20=0.044 rec_id=0.033 med=103
+  767022: P1 r@20=0.108 rec_id=0.081 med=107
+  782149: P1 r@20=0.000 rec_id=0.000 med=1136

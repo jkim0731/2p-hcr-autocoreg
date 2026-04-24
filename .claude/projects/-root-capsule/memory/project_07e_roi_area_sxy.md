@@ -1,0 +1,63 @@
+---
+name: Session 07e — sxy from ROI xy-area (WORKS after level-0 seg-zarr fix)
+description: Per-cell tight-bbox xy-area ratio CZ↔HCR recovers sxy within ~5 % on 3/4 spot subjects after fixing level-0 voxel-size conversion.
+type: project
+originSessionId: 8eb265e4-f4d7-4d2c-8cdb-955d3a0c44d8
+---
+**Fact (2026-04-23).** `sxy = sqrt(median(area_HCR) / median(area_CZ))`
+from per-cell tight xy bounding-box area recovers GT sxy within:
+- 788406: est 1.749 vs GT 1.778 → −1.6 %
+- 790322: est 1.785 vs GT 1.763 → +1.2 %
+- 767018: est 1.812 vs GT 1.702 → +6.5 %
+- 782149: est 1.631 vs GT 1.924 → −15.2 %  (HCR_span=566 µm,
+          half the other subjects — surface or FOV truncation issue,
+          NOT the scale bug).
+Mean-area variant tighter: 788406 −2.0 %, 790322 −0.4 %, 767018 +3.8 %.
+Intensity subjects (755252, 767022) unsupported — no
+`cell_body_segmentation/metrics.pickle`.
+
+**Why — the bug that was blocking it.** HCR segmentation pipeline
+writes TWO arrays:
+ - `cell_body_segmentation/segmentation_mask_orig_res.zarr`  level-2
+   (matches `hcr_centroids` pixel frame; xy = 0.988 µm/vox)
+ - `cell_body_segmentation/segmentation_mask.zarr`           level-0
+   (xy = 0.247 µm/vox, 4× finer; z unchanged = 1 µm)
+`metrics.pickle` `global_bbox` entries reference the LEVEL-0 array.
+`benchmark_data_loader._read_hcr_resolution` returns the level-2
+scale (dims.x[0] * 4e6). Multiplying level-0 voxel spans by the
+level-2 µm/vox inflates each xy extent 4×, area 16×, so
+centroid-area sxy comes out 4× too big (~7 instead of ~1.75).
+
+**Why — how to apply.** When reading from `segmentation_mask.zarr`:
+use `seg_xy_um = s.hcr_xy_um / 4`, `seg_z_um = s.hcr_z_um` (z same).
+Before feeding seg-zarr voxel centroids to `hcr_px_to_um`, divide
+the y and x components by 4 to return them to the level-2 pixel
+frame the loader is parameterised for. Both are done in
+`dev_code/07e_sxy_from_roi_area.py :: hcr_gfp_areas` (search for
+`HCR_SEG_XY_DOWNSAMPLE`).
+
+**Why — distinct from 07e σ_z failure.** This is a DIFFERENT
+estimator than the σ_z(d)-profile one (which is exhausted, see
+`project_07e_zvar_profile.md`). ROI-area uses lateral cell shape
+(xy bbox), not pia-normal radial statistics, consistent with the
+σ_z post-mortem's suggestion that "the information required to
+distinguish stretch is lateral, not depth-radial."
+
+**How to apply.** PROMOTED 2026-04-23. Call
+`roi_area_sxy.estimate_sxy_roi_area(sid)` for the main-pipeline
+entry point; `SubjectData.hcr_seg_xy_um` / `.hcr_seg_z_um` are the
+level-0 µm/vox to use whenever reading from
+`cell_body_segmentation/segmentation_mask.zarr`. Session driver
+`dev_code/07e_sxy_from_roi_area.py` delegates to the promoted
+module. Outputs:
+ - `sessions/07e_sz_from_zvar_profile/roi_area_sxy_log.md` (finding)
+ - `sessions/07e_sz_from_zvar_profile/roi_area_sxy.json` (numbers)
+ - `sessions/07e_sz_from_zvar_profile/figures_roi_area/`
+ - cache: `dev_code/cached_hcr_cell_tight_bbox/{sid}_hcr_cell_tight_bbox_v1.parquet`
+
+Open work: (i) 782149 HCR span anomaly — diagnose HCR surface or
+crop truncation for this subject; (ii) extend to intensity
+subjects 755252/767022 (need alternative to
+`cell_body_segmentation/metrics.pickle`); (iii) the estimator
+does not address sz — σ_z-profile approach is exhausted, orthogonal
+sz estimator still needed.

@@ -1,0 +1,7 @@
+- [HCR surface fitter default](surface_fitter_choice.md) — `analyze_subject` now defaults to `quantile_ceiling` (N22); treat the returned surface as a feature, not a diagnostic.
+- [03 image-based surface + L2](project_03_image_based_surface.md) — image-only pia: v2.1 single-fit + v2.2 `estimate_pia_surface_image_autoselect` candidate-bank + iter07 patch-MAX detector with IRLS-Huber cubic polynomial surface (6/6 HCR, 4–30 µm below N22).
+- [Threshold methods must be distribution-driven](feedback_threshold_generalisability.md) — never default to a fixed percentile/fraction; coreg table is validation-only.
+- [Subgoal 04/R1 01+02 GFP+ thresholds landed](project_subgoal_01_02_gfp_thresholds.md) — v2.2 defaults: `peakgauss3_density_p0.1` (spot) and `peakgauss3_mean_bg_p1` (intensity).
+- [Session 07 ICP scales REVOKED](project_07_anisotropic_icp_scales.md) — ICP pass was GT-tuned; depth-density shows HCR GFP+ is subject/depth-biased; centroid-based scale is blocked until GFP+ threshold is re-characterised.
+- [Session 07b strict-GFP+ scale FAILED](project_07b_strict_gfp_scale.md) — GMM-intersection cutoff didn't make GFP+ uniform; M1 sz always ~70 % low, M3 sxy always ~3× high; all centroid-only scale methods blocked. Next candidate: image-level 488 NCC.
+- [Session 07c BIC-GFP+ + CZ-density gate FAILED](project_07c_bic_gfp_cz_gate.md) — BIC-selected K∈[2,6] + CZ-mapped reference; CV 0.30–0.60 still > 0.20 bar; integrated mean tracks 1/(sxy²·sz) within ±43 % but per-bin still non-uniform; M1 sxy improved but sz unchanged; centroid-only doubly falsified.

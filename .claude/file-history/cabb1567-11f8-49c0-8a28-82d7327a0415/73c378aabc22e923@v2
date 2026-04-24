@@ -1,0 +1,107 @@
+"""Adaptive clamp: cap max lift based on deficit distribution shape.
+
+Strategy: compute max_lift but cap at Q75 + k*IQR to reject outlier tiles.
+This behaves like maxlift when distribution is tight (no outliers) but
+like lq<1 when a single tile has extreme deficit.
+"""
+from __future__ import annotations
+import sys, importlib.util, os
+from pathlib import Path
+import numpy as np
+import pandas as pd
+os.environ["PYTHONUNBUFFERED"] = "1"
+
+sys.path.insert(0, "/root/capsule/code/dev_code")
+_spec = importlib.util.spec_from_file_location(
+    "img_surface_l2",
+    str(Path("/root/capsule/code/dev_code") / "03_image_based_surface.py"))
+_mod = importlib.util.module_from_spec(_spec); sys.modules["img_surface_l2"] = _mod
+_spec.loader.exec_module(_mod)
+
+from benchmark_analysis import load_hcr_combined
+from benchmark_data_loader import hcr_px_to_um, load_subject
+
+
+def sz(s, x, y):
+    return (s["a"]*x + s["b"]*y + s["c"]
+            + s.get("p",0)*x*x + s.get("q",0)*x*y + s.get("r",0)*y*y)
+
+
+def eval_surf(s, pts):
+    zs = sz(s, pts[:,0], pts[:,1])
+    depth = pts[:,2] - zs
+    n = len(depth)
+    above = (depth < 0).sum() / n
+    edges = np.arange(-200, 404, 5.0)
+    h, _ = np.histogram(depth, bins=edges)
+    density = h / (5.0 * max(n, 1))
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    bulk = density[(centers >= 50) & (centers <= 200)].mean()
+    onset = np.nan
+    if bulk > 0:
+        for c, d in zip(centers, density):
+            if c >= 0 and d >= 0.5 * bulk:
+                onset = float(c); break
+    return above, onset
+
+
+def adaptive_clamp(surface, xs, ys, zs, *, tile_um=120.0, within_tile_q=0.10,
+                    safety_offset_um=3.0, min_per_tile=5, iqr_k=3.0,
+                    density_radius_um=30.0, density_min_neighbors=3):
+    # Filter tops by density first (same as main)
+    keep = _mod._filter_tops_by_density(
+        xs, ys, zs, radius_um=density_radius_um,
+        min_neighbors=density_min_neighbors)
+    if keep.sum() < 50:
+        return surface, 0.0, 0, "no-tops"
+    xs_f = xs[keep]; ys_f = ys[keep]; zs_f = zs[keep]
+    xb = (xs_f // tile_um).astype(int)
+    yb = (ys_f // tile_um).astype(int)
+    key = yb * 100000 + xb
+    df = pd.DataFrame({"k": key, "x": xs_f, "y": ys_f, "z": zs_f})
+    agg = df.groupby("k").agg(
+        x=("x", "median"), y=("y", "median"),
+        z=("z", lambda v: float(np.quantile(v, within_tile_q))),
+        n=("z", "size"))
+    agg = agg[agg["n"] >= int(min_per_tile)]
+    if agg.empty:
+        return surface, 0.0, 0, "no-tiles"
+    tx, ty, tz = agg["x"].values, agg["y"].values, agg["z"].values
+    plane_z = sz(surface, tx, ty)
+    deficit = plane_z - tz
+    pos = deficit[deficit > 0]
+    if len(pos) == 0:
+        return surface, 0.0, int(len(agg)), "no-pos"
+    # Adaptive: cap max lift at Q75 + k*IQR (Tukey-style outlier fence)
+    q25, q75 = np.quantile(pos, [0.25, 0.75])
+    iqr = q75 - q25
+    fence = q75 + float(iqr_k) * iqr
+    lift_max = float(pos.max())
+    lift = min(lift_max, fence)
+    out = dict(surface)
+    out["c"] = float(out["c"] - lift - safety_offset_um)
+    n_capped = int((pos > fence).sum())
+    note = f"fence={fence:.1f} raw={lift_max:.1f} capped={n_capped}/{len(pos)}"
+    return out, float(lift), int(len(agg)), note
+
+
+SUBJECTS = ["755252", "767018", "767022", "782149", "788406", "790322"]
+for sid in SUBJECTS:
+    print(f"=== {sid} ===", flush=True)
+    s = load_subject(sid)
+    vol, xy_um, z_um, channels = load_hcr_combined(s, level=4)
+    pts = hcr_px_to_um(s.hcr_centroids[["z_px","y_px","x_px"]].values, s)[:, [2,1,0]]
+
+    res = _mod.estimate_surface_and_l2_image_based(
+        vol, z_um, xy_um, clamp_min_per_tile=100000)
+    if res.surface is None:
+        continue
+    tr = res.tile_records
+    xs, ys, zs = tr.x_um.values, tr.y_um.values, tr.z_onset_um.values
+
+    for iqr_k in [1.5, 2.5, 3.0, 5.0]:
+        s2, lift, nt, note = adaptive_clamp(
+            res.surface, xs, ys, zs, iqr_k=iqr_k)
+        a, o = eval_surf(s2, pts)
+        print(f"  iqr_k={iqr_k:.1f}: c={s2['c']:6.1f} lift={lift:5.1f} "
+              f"above={a:.4f} onset={o} [{note}]", flush=True)

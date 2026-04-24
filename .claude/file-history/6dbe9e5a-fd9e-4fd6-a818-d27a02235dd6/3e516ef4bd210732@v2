@@ -1,0 +1,82 @@
+"""Test per-channel and subset combinations on 755252.
+
+Hypothesis: AF may be channel-selective. 405 (DAPI-adjacent) often carries
+strong tissue AF. Excluding 405 from the combined volume might leave pia
+as the dominant bright band and push the surface deeper.
+
+Also tries single channels to see if any one sees the pia cleanly.
+"""
+from __future__ import annotations
+import sys, importlib.util, os
+from pathlib import Path
+import numpy as np
+os.environ["PYTHONUNBUFFERED"] = "1"
+
+sys.path.insert(0, "/root/capsule/code/dev_code")
+_spec = importlib.util.spec_from_file_location(
+    "img_surface_l2",
+    str(Path("/root/capsule/code/dev_code") / "03_image_based_surface.py"))
+_mod = importlib.util.module_from_spec(_spec); sys.modules["img_surface_l2"] = _mod
+_spec.loader.exec_module(_mod)
+
+from benchmark_analysis import load_hcr_combined
+from benchmark_data_loader import hcr_px_to_um, load_subject
+
+
+def sz(s, x, y):
+    return (s["a"]*x + s["b"]*y + s["c"]
+            + s.get("p", 0.0)*x*x + s.get("q", 0.0)*x*y + s.get("r", 0.0)*y*y)
+
+
+def eval_surf(s, pts):
+    if s is None: return np.nan, np.nan, np.nan
+    zs = sz(s, pts[:,0], pts[:,1])
+    depth = pts[:,2] - zs
+    n = len(depth); above = (depth < 0).sum() / n
+    edges = np.arange(-200, 404, 5.0)
+    h, _ = np.histogram(depth, bins=edges)
+    density = h / (5.0 * max(n, 1))
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    bulk = density[(centers >= 50) & (centers <= 200)].mean()
+    onset = np.nan
+    if bulk > 0:
+        for c, d in zip(centers, density):
+            if c >= 0 and d >= 0.5 * bulk:
+                onset = float(c); break
+    return s["c"], above, onset
+
+
+HCR = ["755252", "767018", "767022", "782149", "788406", "790322"]
+# Channel subsets - each subject has 4 channels. Common to all: 405, 488, 594.
+# Middle: 514 (755252/767022) or 561 (others).
+SUBSETS = [
+    ("combined (all)",  None),
+    ("no 405",          ["488", "_mid_", "594"]),
+    ("488+_mid_",       ["488", "_mid_"]),
+    ("594 only",        ["594"]),
+    ("488 only",        ["488"]),
+    ("405 only",        ["405"]),
+]
+
+
+def resolve_mid(sid):
+    return "514" if sid in ("755252", "767022") else "561"
+
+
+for sid in HCR:
+    print(f"=== {sid} ===", flush=True)
+    s = load_subject(sid)
+    pts = hcr_px_to_um(s.hcr_centroids[["z_px","y_px","x_px"]].values, s)[:, [2,1,0]]
+    mid = resolve_mid(sid)
+    for name, chs_raw in SUBSETS:
+        chs = None if chs_raw is None else [mid if c == "_mid_" else c for c in chs_raw]
+        try:
+            vol, xy_um, z_um, used = load_hcr_combined(s, channels=chs, level=4)
+        except Exception as exc:
+            print(f"  {name:<20}: load failed: {exc}", flush=True)
+            continue
+        res = _mod.estimate_surface_and_l2_image_based(
+            vol, z_um, xy_um, target_quantile=0.85)
+        c, a, o = eval_surf(res.surface, pts)
+        print(f"  {name:<20}: used={used} c={c:6.1f} lift={res.clamp_lift_um:5.1f} "
+              f"above={a:.4f} onset={o}", flush=True)

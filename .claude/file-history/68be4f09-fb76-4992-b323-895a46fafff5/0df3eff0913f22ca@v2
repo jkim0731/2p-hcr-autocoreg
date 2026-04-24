@@ -1,0 +1,63 @@
+"""Diagnose iter07 failure: compare combined vs 488 column profiles."""
+import sys
+from pathlib import Path
+sys.path.insert(0, '/root/capsule/code/dev_code')
+from benchmark_analysis import load_hcr_combined, load_hcr_volume
+from benchmark_data_loader import load_subject
+import numpy as np
+import matplotlib.pyplot as plt
+
+EPS = 1e-3
+
+for sid in ['755252', '790322']:
+    s = load_subject(sid)
+    v_cmb, xy_um, z_um, _ = load_hcr_combined(s, level=4)
+    v_488, _, _ = load_hcr_volume(s, channel='488', level=4)
+    Z, Y, X = v_cmb.shape
+    zs = np.arange(Z) * z_um
+
+    # 5 columns at interior grid
+    y_ps = np.linspace(Y*0.25, Y*0.75, 5).astype(int)
+    x_ps = np.linspace(X*0.25, X*0.75, 5).astype(int)
+    fig, axs = plt.subplots(5, 2, figsize=(12, 14), sharex=True, sharey=True)
+    for k, (iy, ix) in enumerate(zip(y_ps, x_ps)):
+        lc = np.log(v_cmb[:, iy, ix] + EPS)
+        l4 = np.log(v_488[:, iy, ix] + EPS)
+        axs[k, 0].plot(lc, zs, color='k', lw=0.8)
+        axs[k, 0].set_title(f'{sid} log(combined+eps) col (y={iy*xy_um:.0f},x={ix*xy_um:.0f})')
+        axs[k, 0].invert_yaxis()
+        axs[k, 0].set_ylabel('z (µm)')
+        axs[k, 1].plot(l4, zs, color='k', lw=0.8)
+        axs[k, 1].set_title(f'{sid} log(488+eps) col')
+        axs[k, 1].invert_yaxis()
+    axs[-1, 0].set_xlabel('log(intensity+eps)')
+    axs[-1, 1].set_xlabel('log(intensity+eps)')
+    plt.tight_layout()
+    out = Path(f'/tmp/iter07_col_diag_{sid}.png')
+    plt.savefig(out, dpi=100)
+    plt.close(fig)
+    print(f'wrote {out}')
+
+    # quantiles at each z across all columns
+    log_cmb = np.log(v_cmb + EPS)
+    log_488 = np.log(v_488 + EPS)
+    q_cmb = np.percentile(log_cmb, [10, 50, 90], axis=(1, 2))
+    q_488 = np.percentile(log_488, [10, 50, 90], axis=(1, 2))
+    fig2, ax2 = plt.subplots(1, 2, figsize=(12, 5), sharey=True)
+    ax2[0].fill_betweenx(zs, q_cmb[0], q_cmb[2], alpha=0.3, color='tab:blue')
+    ax2[0].plot(q_cmb[1], zs, color='tab:blue', lw=1.2, label='median log(combined)')
+    ax2[0].set_title(f'{sid} combined log-int vs z')
+    ax2[0].invert_yaxis()
+    ax2[0].set_xlabel('log(vol+eps)'); ax2[0].set_ylabel('z (µm)')
+    ax2[0].legend()
+    ax2[1].fill_betweenx(zs, q_488[0], q_488[2], alpha=0.3, color='tab:orange')
+    ax2[1].plot(q_488[1], zs, color='tab:orange', lw=1.2, label='median log(488)')
+    ax2[1].set_title(f'{sid} 488 log-int vs z')
+    ax2[1].invert_yaxis()
+    ax2[1].set_xlabel('log(vol+eps)')
+    ax2[1].legend()
+    plt.tight_layout()
+    out2 = Path(f'/tmp/iter07_quantile_diag_{sid}.png')
+    plt.savefig(out2, dpi=100)
+    plt.close(fig2)
+    print(f'wrote {out2}')

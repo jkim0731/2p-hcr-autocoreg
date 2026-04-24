@@ -1,0 +1,172 @@
+=== PRELOAD all 6 subjects (one HCR L2 load each) ===
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  c2_preload sid=755252 t=94.3s cz=835 hcr_crop=20093/30804 pairs=571
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  c2_preload sid=767018 t=95.3s cz=785 hcr_crop=4869/9161 pairs=270
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  c2_preload sid=767022 t=74.0s cz=926 hcr_crop=10736/14239 pairs=731
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  c2_preload sid=782149 t=61.9s cz=894 hcr_crop=1492/3831 pairs=78
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  c2_preload sid=788406 t=92.3s cz=932 hcr_crop=8818/17427 pairs=784
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  c2_preload sid=790322 t=90.6s cz=1016 hcr_crop=4447/10131 pairs=769
+  preload done in 512.6s
+
+=== 788406 (held-out) ===
+  C2 model hand_dim=20 patch_dim=64 total_params=443,378
+  c2_stage2 it=50/2000 loss=7.573 t=666.9s sid=782149 Na=894 Nb=1492 n_pairs=78
+  c2_stage2 it=100/2000 loss=6.291 t=1116.1s sid=790322 Na=1016 Nb=4447 n_pairs=769
+  c2_stage2 it=150/2000 loss=5.779 t=1680.9s sid=767022 Na=926 Nb=10736 n_pairs=731
+  c2_stage2 it=200/2000 loss=4.967 t=2198.7s sid=790322 Na=1016 Nb=4447 n_pairs=769
+  c2_stage2 it=250/2000 loss=4.311 t=2789.9s sid=767018 Na=785 Nb=4869 n_pairs=270
+  c2_stage2 it=300/2000 loss=3.790 t=3356.3s sid=790322 Na=1016 Nb=4447 n_pairs=769
+  c2_stage2 it=350/2000 loss=3.271 t=3962.3s sid=790322 Na=1016 Nb=4447 n_pairs=769
+  c2_stage2 it=400/2000 loss=2.987 t=4512.6s sid=767022 Na=926 Nb=10736 n_pairs=731
+  c2_stage2 it=450/2000 loss=2.648 t=5103.6s sid=790322 Na=1016 Nb=4447 n_pairs=769
+  c2_stage2 it=500/2000 loss=2.678 t=5678.4s sid=790322 Na=1016 Nb=4447 n_pairs=769
+  c2_stage2 it=550/2000 loss=2.033 t=6243.1s sid=790322 Na=1016 Nb=4447 n_pairs=769
+  c2_stage2 it=600/2000 loss=1.970 t=6911.4s sid=790322 Na=1016 Nb=4447 n_pairs=769
+  c2_stage2 it=650/2000 loss=1.603 t=7623.1s sid=782149 Na=894 Nb=1492 n_pairs=78
+  c2_stage2 it=700/2000 loss=1.328 t=8320.1s sid=790322 Na=1016 Nb=4447 n_pairs=769
+  c2_stage2 it=750/2000 loss=1.357 t=9085.6s sid=782149 Na=894 Nb=1492 n_pairs=78
+  c2_stage2 it=800/2000 loss=1.209 t=9878.9s sid=767018 Na=785 Nb=4869 n_pairs=270
+  c2_stage2 it=850/2000 loss=1.075 t=10614.9s sid=767022 Na=926 Nb=10736 n_pairs=731
+  c2_stage2 it=900/2000 loss=0.959 t=11319.8s sid=755252 Na=835 Nb=20093 n_pairs=571
+  c2_stage2 it=950/2000 loss=1.036 t=12230.6s sid=755252 Na=835 Nb=20093 n_pairs=571
+  c2_stage2 it=1000/2000 loss=0.856 t=12833.3s sid=790322 Na=1016 Nb=4447 n_pairs=769
+  c2_stage2 it=1050/2000 loss=0.846 t=13697.2s sid=767022 Na=926 Nb=10736 n_pairs=731
+  c2_stage2 it=1100/2000 loss=0.538 t=14353.1s sid=790322 Na=1016 Nb=4447 n_pairs=769
+  c2_stage2 it=1150/2000 loss=0.606 t=15057.4s sid=767018 Na=785 Nb=4869 n_pairs=270
+  c2_stage2 it=1200/2000 loss=0.529 t=15604.3s sid=767018 Na=785 Nb=4869 n_pairs=270
+  c2_stage2 it=1250/2000 loss=0.524 t=16262.0s sid=782149 Na=894 Nb=1492 n_pairs=78
+  c2_stage2 it=1300/2000 loss=0.500 t=16853.7s sid=767018 Na=785 Nb=4869 n_pairs=270
+  c2_stage2 it=1350/2000 loss=0.472 t=17643.0s sid=755252 Na=835 Nb=20093 n_pairs=571
+  c2_stage2 it=1400/2000 loss=0.340 t=18321.1s sid=767022 Na=926 Nb=10736 n_pairs=731
+  c2_stage2 it=1450/2000 loss=0.266 t=18965.5s sid=755252 Na=835 Nb=20093 n_pairs=571
+  c2_stage2 it=1500/2000 loss=0.231 t=19615.7s sid=767018 Na=785 Nb=4869 n_pairs=270
+  c2_stage2 it=1550/2000 loss=0.237 t=20238.7s sid=767022 Na=926 Nb=10736 n_pairs=731
+  c2_stage2 it=1600/2000 loss=0.201 t=20969.1s sid=790322 Na=1016 Nb=4447 n_pairs=769
+  c2_stage2 it=1650/2000 loss=0.201 t=21773.4s sid=782149 Na=894 Nb=1492 n_pairs=78
+  c2_stage2 it=1700/2000 loss=0.169 t=22496.1s sid=790322 Na=1016 Nb=4447 n_pairs=769
+  c2_stage2 it=1750/2000 loss=0.122 t=23023.0s sid=782149 Na=894 Nb=1492 n_pairs=78
+  c2_stage2 it=1800/2000 loss=0.170 t=23650.5s sid=782149 Na=894 Nb=1492 n_pairs=78
+  c2_stage2 it=1850/2000 loss=0.139 t=24313.4s sid=755252 Na=835 Nb=20093 n_pairs=571
+  c2_stage2 it=1900/2000 loss=0.245 t=24893.6s sid=755252 Na=835 Nb=20093 n_pairs=571
+  c2_stage2 it=1950/2000 loss=0.245 t=25536.3s sid=782149 Na=894 Nb=1492 n_pairs=78
+  c2_stage2 it=2000/2000 loss=0.133 t=26266.7s sid=767018 Na=785 Nb=4869 n_pairs=270
+  C2-LOSO r@20=0.005 med=315.3µm hits=4/749 emitted=887 train_t=26267.7s infer_t=4.7s train_loss_mean50=0.1326133541762829
+  C5        r@20=0.262 (baseline)
+  G1-LOSO   r@20=0.013 (baseline)
+  Δr@20 (C2 - C5)      = -0.257
+  Δr@20 (C2 - G1-LOSO) = -0.008
+
+=== 790322 (held-out) ===
+  C2 model hand_dim=20 patch_dim=64 total_params=443,378
+  c2_stage2 it=50/2000 loss=7.612 t=790.9s sid=782149 Na=894 Nb=1492 n_pairs=78
+  c2_stage2 it=100/2000 loss=6.509 t=1376.8s sid=788406 Na=932 Nb=8818 n_pairs=784
+  c2_stage2 it=150/2000 loss=6.100 t=2112.8s sid=767022 Na=926 Nb=10736 n_pairs=731
+  c2_stage2 it=200/2000 loss=5.336 t=2869.8s sid=788406 Na=932 Nb=8818 n_pairs=784
+  c2_stage2 it=250/2000 loss=4.622 t=3638.0s sid=767018 Na=785 Nb=4869 n_pairs=270
+  c2_stage2 it=300/2000 loss=4.280 t=4491.0s sid=788406 Na=932 Nb=8818 n_pairs=784
+  c2_stage2 it=350/2000 loss=3.524 t=5342.4s sid=788406 Na=932 Nb=8818 n_pairs=784
+  c2_stage2 it=400/2000 loss=3.000 t=6141.7s sid=767022 Na=926 Nb=10736 n_pairs=731
+  c2_stage2 it=450/2000 loss=2.827 t=6999.7s sid=788406 Na=932 Nb=8818 n_pairs=784
+  c2_stage2 it=500/2000 loss=2.461 t=7814.2s sid=788406 Na=932 Nb=8818 n_pairs=784
+  c2_stage2 it=550/2000 loss=1.961 t=8555.7s sid=788406 Na=932 Nb=8818 n_pairs=784
+  c2_stage2 it=600/2000 loss=2.014 t=9321.0s sid=788406 Na=932 Nb=8818 n_pairs=784
+  c2_stage2 it=650/2000 loss=1.615 t=10018.0s sid=782149 Na=894 Nb=1492 n_pairs=78
+  c2_stage2 it=700/2000 loss=1.378 t=10679.8s sid=788406 Na=932 Nb=8818 n_pairs=784
+  c2_stage2 it=750/2000 loss=1.364 t=11430.1s sid=782149 Na=894 Nb=1492 n_pairs=78
+  c2_stage2 it=800/2000 loss=1.177 t=12208.5s sid=767018 Na=785 Nb=4869 n_pairs=270
+  c2_stage2 it=850/2000 loss=1.098 t=12933.1s sid=767022 Na=926 Nb=10736 n_pairs=731
+  c2_stage2 it=900/2000 loss=0.969 t=13583.4s sid=755252 Na=835 Nb=20093 n_pairs=571
+  c2_stage2 it=950/2000 loss=1.225 t=14430.9s sid=755252 Na=835 Nb=20093 n_pairs=571
+  c2_stage2 it=1000/2000 loss=0.901 t=15011.1s sid=788406 Na=932 Nb=8818 n_pairs=784
+  c2_stage2 it=1050/2000 loss=0.804 t=15844.1s sid=767022 Na=926 Nb=10736 n_pairs=731
+  c2_stage2 it=1100/2000 loss=0.536 t=16520.7s sid=788406 Na=932 Nb=8818 n_pairs=784
+  c2_stage2 it=1150/2000 loss=0.731 t=17277.5s sid=767018 Na=785 Nb=4869 n_pairs=270
+  c2_stage2 it=1200/2000 loss=0.572 t=17896.5s sid=767018 Na=785 Nb=4869 n_pairs=270
+  c2_stage2 it=1250/2000 loss=0.527 t=18601.5s sid=782149 Na=894 Nb=1492 n_pairs=78
+  c2_stage2 it=1300/2000 loss=0.507 t=19311.4s sid=767018 Na=785 Nb=4869 n_pairs=270
+  c2_stage2 it=1350/2000 loss=0.500 t=20228.7s sid=755252 Na=835 Nb=20093 n_pairs=571
+  c2_stage2 it=1400/2000 loss=0.389 t=20966.9s sid=767022 Na=926 Nb=10736 n_pairs=731
+  c2_stage2 it=1450/2000 loss=0.335 t=21706.5s sid=755252 Na=835 Nb=20093 n_pairs=571
+  c2_stage2 it=1500/2000 loss=0.278 t=22419.0s sid=767018 Na=785 Nb=4869 n_pairs=270
+  c2_stage2 it=1550/2000 loss=0.239 t=23098.0s sid=767022 Na=926 Nb=10736 n_pairs=731
+  c2_stage2 it=1600/2000 loss=0.309 t=23854.2s sid=788406 Na=932 Nb=8818 n_pairs=784
+  c2_stage2 it=1650/2000 loss=0.544 t=24655.4s sid=782149 Na=894 Nb=1492 n_pairs=78
+  c2_stage2 it=1700/2000 loss=0.261 t=25409.5s sid=788406 Na=932 Nb=8818 n_pairs=784
+  c2_stage2 it=1750/2000 loss=0.182 t=25959.3s sid=782149 Na=894 Nb=1492 n_pairs=78
+  c2_stage2 it=1800/2000 loss=0.233 t=26665.9s sid=782149 Na=894 Nb=1492 n_pairs=78
+  c2_stage2 it=1850/2000 loss=0.173 t=27381.8s sid=755252 Na=835 Nb=20093 n_pairs=571
+  c2_stage2 it=1900/2000 loss=0.140 t=28040.9s sid=755252 Na=835 Nb=20093 n_pairs=571
+  c2_stage2 it=1950/2000 loss=0.151 t=28762.5s sid=782149 Na=894 Nb=1492 n_pairs=78
+  c2_stage2 it=2000/2000 loss=0.216 t=29545.2s sid=767018 Na=785 Nb=4869 n_pairs=270
+  C2-LOSO r@20=0.006 med=383.5µm hits=5/679 emitted=890 train_t=29545.2s infer_t=2.5s train_loss_mean50=0.21611629135906696
+  C5        r@20=0.289 (baseline)
+  G1-LOSO   r@20=0.113 (baseline)
+  Δr@20 (C2 - C5)      = -0.283
+  Δr@20 (C2 - G1-LOSO) = -0.107
+
+=== 767018 (held-out) ===
+  C2 model hand_dim=20 patch_dim=64 total_params=443,378
+  c2_stage2 it=50/2000 loss=7.668 t=782.2s sid=788406 Na=932 Nb=8818 n_pairs=784
+  c2_stage2 it=100/2000 loss=6.681 t=1424.5s sid=790322 Na=1016 Nb=4447 n_pairs=769
+  c2_stage2 it=150/2000 loss=6.013 t=2112.3s sid=782149 Na=894 Nb=1492 n_pairs=78
+  c2_stage2 it=200/2000 loss=5.306 t=2796.8s sid=790322 Na=1016 Nb=4447 n_pairs=769
+  c2_stage2 it=250/2000 loss=4.724 t=3528.2s sid=767022 Na=926 Nb=10736 n_pairs=731
+  c2_stage2 it=300/2000 loss=3.889 t=4168.2s sid=790322 Na=1016 Nb=4447 n_pairs=769
+  c2_stage2 it=350/2000 loss=3.572 t=4928.1s sid=790322 Na=1016 Nb=4447 n_pairs=769
+  c2_stage2 it=400/2000 loss=2.859 t=5552.3s sid=782149 Na=894 Nb=1492 n_pairs=78
+  c2_stage2 it=450/2000 loss=2.871 t=6322.0s sid=790322 Na=1016 Nb=4447 n_pairs=769
+  c2_stage2 it=500/2000 loss=2.372 t=7028.8s sid=790322 Na=1016 Nb=4447 n_pairs=769
+  c2_stage2 it=550/2000 loss=2.070 t=7775.6s sid=790322 Na=1016 Nb=4447 n_pairs=769
+  c2_stage2 it=600/2000 loss=1.716 t=8456.9s sid=790322 Na=1016 Nb=4447 n_pairs=769
+  c2_stage2 it=650/2000 loss=1.594 t=9169.1s sid=788406 Na=932 Nb=8818 n_pairs=784
+  c2_stage2 it=700/2000 loss=1.621 t=9957.8s sid=790322 Na=1016 Nb=4447 n_pairs=769
+  c2_stage2 it=750/2000 loss=1.277 t=10681.7s sid=788406 Na=932 Nb=8818 n_pairs=784
+  c2_stage2 it=800/2000 loss=1.207 t=11463.6s sid=767022 Na=926 Nb=10736 n_pairs=731
+  c2_stage2 it=850/2000 loss=0.969 t=12238.0s sid=782149 Na=894 Nb=1492 n_pairs=78
+  c2_stage2 it=900/2000 loss=0.920 t=13008.8s sid=755252 Na=835 Nb=20093 n_pairs=571
+  c2_stage2 it=950/2000 loss=0.917 t=13909.8s sid=755252 Na=835 Nb=20093 n_pairs=571
+  c2_stage2 it=1000/2000 loss=0.727 t=14565.4s sid=790322 Na=1016 Nb=4447 n_pairs=769
+  c2_stage2 it=1050/2000 loss=0.697 t=15336.3s sid=782149 Na=894 Nb=1492 n_pairs=78
+  c2_stage2 it=1100/2000 loss=0.739 t=16157.7s sid=790322 Na=1016 Nb=4447 n_pairs=769
+  c2_stage2 it=1150/2000 loss=0.793 t=16939.5s sid=767022 Na=926 Nb=10736 n_pairs=731
+  c2_stage2 it=1200/2000 loss=0.565 t=17644.1s sid=767022 Na=926 Nb=10736 n_pairs=731
+  c2_stage2 it=1250/2000 loss=0.401 t=18410.0s sid=788406 Na=932 Nb=8818 n_pairs=784
+  c2_stage2 it=1300/2000 loss=0.357 t=19151.3s sid=767022 Na=926 Nb=10736 n_pairs=731
+  c2_stage2 it=1350/2000 loss=0.258 t=19799.6s sid=755252 Na=835 Nb=20093 n_pairs=571
+  c2_stage2 it=1400/2000 loss=0.300 t=20455.5s sid=782149 Na=894 Nb=1492 n_pairs=78
+  c2_stage2 it=1450/2000 loss=0.409 t=21197.1s sid=755252 Na=835 Nb=20093 n_pairs=571
+  c2_stage2 it=1500/2000 loss=0.288 t=21919.0s sid=767022 Na=926 Nb=10736 n_pairs=731
+  c2_stage2 it=1550/2000 loss=0.244 t=22672.5s sid=782149 Na=894 Nb=1492 n_pairs=78
+  c2_stage2 it=1600/2000 loss=0.190 t=23505.0s sid=790322 Na=1016 Nb=4447 n_pairs=769
+  c2_stage2 it=1650/2000 loss=0.157 t=24245.0s sid=788406 Na=932 Nb=8818 n_pairs=784
+  c2_stage2 it=1700/2000 loss=0.133 t=24969.3s sid=790322 Na=1016 Nb=4447 n_pairs=769
+  c2_stage2 it=1750/2000 loss=0.137 t=25686.0s sid=788406 Na=932 Nb=8818 n_pairs=784
+  c2_stage2 it=1800/2000 loss=0.111 t=26338.3s sid=788406 Na=932 Nb=8818 n_pairs=784
+  c2_stage2 it=1850/2000 loss=0.499 t=26981.3s sid=755252 Na=835 Nb=20093 n_pairs=571
+  c2_stage2 it=1900/2000 loss=0.563 t=27697.8s sid=755252 Na=835 Nb=20093 n_pairs=571
+  c2_stage2 it=1950/2000 loss=0.167 t=28429.6s sid=788406 Na=932 Nb=8818 n_pairs=784
+  c2_stage2 it=2000/2000 loss=0.114 t=29274.5s sid=767022 Na=926 Nb=10736 n_pairs=731
+  C2-LOSO r@20=0.000 med=362.3µm hits=0/250 emitted=713 train_t=29274.5s infer_t=2.2s train_loss_mean50=0.11443077562376856
+  C5        r@20=0.315 (baseline)
+  G1-LOSO   r@20=0.055 (baseline)
+  Δr@20 (C2 - C5)      = -0.315
+  Δr@20 (C2 - G1-LOSO) = -0.055
+
+=== SUMS (3-subject roster) ===
+  Sum C5       r@20 = 0.866
+  Sum G1-LOSO  r@20 = 0.181
+  Sum C2-LOSO  r@20 = 0.012
+  Δ (C2 - C5)      = -0.854
+  Δ (C2 - G1-LOSO) = -0.169
+  Decision (§9.6): CLOSE G-series on centroid+patch

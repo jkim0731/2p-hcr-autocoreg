@@ -1,0 +1,69 @@
+  c5: n_hcr_gfp=17427 [10000,20000) method=auto → chosen=up_p1_p4_p6
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  p6[cpd_nonrigid]: cz=932 hcr_gfp_total=17427 hcr_crop=4440 (pad=150.0µm)
+  p6[cpd_nonrigid]: solver 6.2s rigid_scale=1.000 warped_extent_zyx=[1395.5, 734.7, 724.7]
+788406 C5-auto r@5=0.252 r@10=0.252 r@20=0.263 n_pred=777 med=86.5µm wall=153.7s
+  c5: n_hcr_gfp=10131 [10000,20000) method=auto → chosen=up_p1_p4_p6
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  p6[cpd_nonrigid]: cz=1016 hcr_gfp_total=10131 hcr_crop=2047 (pad=150.0µm)
+  p6[cpd_nonrigid]: solver 3.1s rigid_scale=1.000 warped_extent_zyx=[911.3, 693.2, 688.4]
+790322 C5-auto r@5=0.285 r@10=0.285 r@20=0.289 n_pred=691 med=72.8µm wall=131.7s
+  c5: n_hcr_gfp=30804 [10000,20000) method=auto → chosen=up_p4_p1_p6
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  p6[cpd_nonrigid]: cz=835 hcr_gfp_total=30804 hcr_crop=8346 (pad=150.0µm)
+  p6[cpd_nonrigid]: solver 8.0s rigid_scale=1.000 warped_extent_zyx=[988.8, 619.0, 624.0]
+755252 C5-auto r@5=0.083 r@10=0.083 r@20=0.095 n_pred=625 med=102.2µm wall=152.2s
+  c5: n_hcr_gfp=14239 [10000,20000) method=auto → chosen=up_p1_p4_p6
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  p6[cpd_nonrigid]: cz=926 hcr_gfp_total=14239 hcr_crop=5184 (pad=150.0µm)
+  p6[cpd_nonrigid]: solver 6.6s rigid_scale=1.000 warped_extent_zyx=[1512.4, 781.2, 778.9]
+767022 C5-auto r@5=0.108 r@10=0.111 r@20=0.117 n_pred=748 med=114.3µm wall=106.2s
+  c5: n_hcr_gfp=9161 [10000,20000) method=auto → chosen=union_conf
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  p6[cpd_nonrigid]: cz=785 hcr_gfp_total=9161 hcr_crop=2419 (pad=150.0µm)
+  p6[cpd_nonrigid]: solver 2.3s rigid_scale=1.000 warped_extent_zyx=[1480.8, 807.8, 787.5]
+767018 C5-auto r@5=0.311 r@10=0.311 r@20=0.315 n_pred=270 med=71.5µm wall=141.9s
+  c5: n_hcr_gfp=3831 [10000,20000) method=auto → chosen=union_conf
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  p6[cpd_nonrigid]: cz=894 hcr_gfp_total=3831 hcr_crop=962 (pad=150.0µm)
+  p6[cpd_nonrigid]: solver 1.6s rigid_scale=1.000 warped_extent_zyx=[1026.5, 770.1, 772.7]
+782149 C5-auto r@5=0.000 r@10=0.000 r@20=0.000 n_pred=237 med=1139.9µm wall=94.7s
+
+Summary (C5 auto):
+  788406: r@20=0.263 med=86.5µm wall=153.7s
+  790322: r@20=0.289 med=72.8µm wall=131.7s
+  755252: r@20=0.095 med=102.2µm wall=152.2s
+  767022: r@20=0.117 med=114.3µm wall=106.2s
+  767018: r@20=0.315 med=71.5µm wall=141.9s
+  782149: r@20=0.000 med=1139.9µm wall=94.7s
+  SUM r@20 = 1.080

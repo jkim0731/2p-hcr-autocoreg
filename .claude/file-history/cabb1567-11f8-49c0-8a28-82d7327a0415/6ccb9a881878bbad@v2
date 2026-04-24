@@ -1,0 +1,63 @@
+"""Sweep target_quantile and clamp settings across all subjects."""
+from __future__ import annotations
+import sys
+import importlib.util
+from pathlib import Path
+import numpy as np
+
+ROOT = Path("/root/capsule")
+DEV = ROOT / "code" / "dev_code"
+sys.path.insert(0, str(DEV))
+
+_spec = importlib.util.spec_from_file_location(
+    "img_surface_l2", str(DEV / "03_image_based_surface.py"))
+_mod = importlib.util.module_from_spec(_spec)
+sys.modules["img_surface_l2"] = _mod
+_spec.loader.exec_module(_mod)
+
+from benchmark_analysis import load_hcr_combined
+from benchmark_data_loader import hcr_px_to_um, load_subject
+
+def sz(surf, x, y):
+    return (surf["a"]*x + surf["b"]*y + surf["c"] +
+            surf.get("p",0)*x*x + surf.get("q",0)*x*y + surf.get("r",0)*y*y)
+
+def eval_surf(surf, pts):
+    z_surf = sz(surf, pts[:,0], pts[:,1])
+    depth = pts[:,2] - z_surf
+    n = len(depth)
+    above = (depth < 0).sum() / n
+    above5 = (depth < -5).sum() / n
+    edges = np.arange(-200, 404, 5.0)
+    h, _ = np.histogram(depth, bins=edges)
+    density = h / (5.0 * max(n, 1))
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    bulk = density[(centers >= 50) & (centers <= 200)].mean()
+    onset = np.nan
+    if bulk > 0:
+        halfmax = 0.5 * bulk
+        for c, d in zip(centers, density):
+            if c >= 0 and d >= halfmax:
+                onset = float(c); break
+    return above, above5, onset
+
+for sid in ["755252", "767018", "767022", "782149", "788406", "790322"]:
+    s = load_subject(sid)
+    vol, xy_um, z_um, channels = load_hcr_combined(s, level=4)
+    pts = hcr_px_to_um(s.hcr_centroids[["z_px","y_px","x_px"]].values, s)[:, [2,1,0]]
+    print(f"--- {sid} ---")
+    for q in [0.25, 0.35, 0.50, 0.70]:
+        for wtq, clamp_label in [(0.99, "no_clamp"), (0.10, "wtq10"), (0.30, "wtq30"), (0.50, "wtq50")]:
+            res = _mod.estimate_surface_and_l2_image_based(
+                vol, z_um, xy_um,
+                target_quantile=q,
+                column_margin=0.25,
+                clamp_within_tile_q=wtq,
+                clamp_min_per_tile=100000 if wtq == 0.99 else 5,
+                band_um=150.0,
+            )
+            if res.surface is None:
+                continue
+            above, a5, onset = eval_surf(res.surface, pts)
+            print(f" q={q:.2f} {clamp_label:>9}: c={res.surface['c']:6.1f} lift={res.clamp_lift_um:6.1f} "
+                  f"above={above:.4f} a5={a5:.4f} onset={onset:.1f}")

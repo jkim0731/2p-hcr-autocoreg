@@ -1,0 +1,48 @@
+"""Shared helpers for getting CZ / HCR-GFP+ centroids in µm.
+
+Handles the fact that ``hcr_gfp_df`` contains only hcr_id + spot/density
+metadata, not voxel coordinates — coordinates live in ``hcr_centroids``.
+
+Also provides ``apply_aniso_fit`` which maps points through a
+``ProcrustesFit`` (R, scales, translation).  The canonical formula from
+``fit_anisotropic_similarity`` is ``dst = (src * scales) @ R.T + translation``;
+candidates should call this instead of re-deriving it.
+"""
+from __future__ import annotations
+
+from typing import Optional
+
+import numpy as np
+import pandas as pd
+
+
+def apply_aniso_fit(pts: np.ndarray, fit) -> np.ndarray:
+    """Apply a ``ProcrustesFit`` to ``pts`` (N, 3)."""
+    R = np.asarray(fit.R); S = np.asarray(fit.scales); t = np.asarray(fit.translation)
+    return (pts * S) @ R.T + t
+
+
+def centroids_um(s, modality: str = "cz") -> tuple[np.ndarray, np.ndarray]:
+    """Return ``(points_um, ids)`` for the requested modality.
+
+    ``modality`` ∈ {"cz", "hcr_gfp", "hcr_all"}.
+    """
+    from benchmark_data_loader import cz_px_to_um, hcr_px_to_um
+
+    if modality == "cz":
+        cz = s.cz_centroids
+        pts = cz_px_to_um(cz[["z_px", "y_px", "x_px"]].values, s)
+        return pts, cz["cz_id"].astype(int).values
+    if modality == "hcr_all":
+        hc = s.hcr_centroids
+        pts = hcr_px_to_um(hc[["z_px", "y_px", "x_px"]].values, s)
+        return pts, hc["hcr_id"].astype(int).values
+    if modality == "hcr_gfp":
+        # Join hcr_gfp_df with hcr_centroids on hcr_id to recover coordinates.
+        df = s.hcr_gfp_df[["hcr_id"]].merge(
+            s.hcr_centroids[["hcr_id", "z_px", "y_px", "x_px"]],
+            on="hcr_id", how="inner",
+        )
+        pts = hcr_px_to_um(df[["z_px", "y_px", "x_px"]].values, s)
+        return pts, df["hcr_id"].astype(int).values
+    raise ValueError(f"unknown modality {modality}")

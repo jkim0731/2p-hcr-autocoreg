@@ -1,0 +1,60 @@
+"""Diagnose why HCR 755252 clamp lifts 189um and onset is 82.5um."""
+from __future__ import annotations
+import sys
+import importlib.util
+from pathlib import Path
+import numpy as np
+import pandas as pd
+
+ROOT = Path("/root/capsule")
+DEV = ROOT / "code" / "dev_code"
+sys.path.insert(0, str(DEV))
+
+_spec = importlib.util.spec_from_file_location(
+    "img_surface_l2", str(DEV / "03_image_based_surface.py"))
+_mod = importlib.util.module_from_spec(_spec)
+sys.modules["img_surface_l2"] = _mod
+_spec.loader.exec_module(_mod)
+
+from benchmark_analysis import load_hcr_combined
+from benchmark_data_loader import hcr_px_to_um, load_subject
+
+sid = "755252"
+s = load_subject(sid)
+vol, xy_um, z_um, channels = load_hcr_combined(s, level=4)
+print(f"vol shape {vol.shape}, xy_um={xy_um}, z_um={z_um}")
+
+res = _mod.estimate_surface_and_l2_image_based(
+    vol, z_um, xy_um,
+    band_um=150.0, column_margin=0.25,
+    clamp_within_tile_q=0.10,
+    safety_offset_um=3.0,
+)
+print(f"anchor c={res.anchor['c']:.1f} tilt={res.anchor['tilt_deg']:.2f}")
+print(f"surface c={res.surface['c']:.1f} tilt={res.surface['tilt_deg']:.2f}")
+print(f"lift={res.clamp_lift_um:.1f} clamp_tiles={res.n_clamp_tiles}")
+print(f"tops n={res.n_column_tops}")
+
+# Distribution of tops
+tops = res.tile_records["z_onset_um"].values
+print(f"tops min/p5/p10/p25/p50/p75/p95/max: {np.percentile(tops, [0,5,10,25,50,75,95,100])}")
+
+# Without clamp
+surf0 = {k: res.surface[k] for k in "abcpqr"}
+surf0["c"] = res.surface["c"] + res.clamp_lift_um + res.safety_offset_um
+print(f"pre-clamp c={surf0['c']:.1f}")
+
+# Centroids
+hcr_xyz = hcr_px_to_um(s.hcr_centroids[["z_px","y_px","x_px"]].values, s)[:, [2,1,0]]
+print(f"centroids n={len(hcr_xyz)} z min/p1/p5/p50/p95/max: {np.percentile(hcr_xyz[:,2], [0,1,5,50,95,100])}")
+
+# Depth vs pre-clamp surface
+def sz(surf, x, y):
+    return (surf["a"]*x + surf["b"]*y + surf["c"] +
+            surf.get("p",0)*x*x + surf.get("q",0)*x*y + surf.get("r",0)*y*y)
+
+for label, surf in [("pre-clamp", surf0), ("post-clamp", res.surface)]:
+    z_surf = sz(surf, hcr_xyz[:,0], hcr_xyz[:,1])
+    depth = hcr_xyz[:,2] - z_surf
+    above = (depth < 0).sum() / len(depth)
+    print(f"{label}: depth p1/p5/p50/p95: {np.percentile(depth, [1,5,50,95])}, above_frac={above:.4f}")

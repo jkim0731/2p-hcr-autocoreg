@@ -1,0 +1,41 @@
+"""M3 — Mask-NCC warm-start + P1 centroid refinement (hybrid).
+
+Run M1 to get a coarse (R, S, t), then feed that as a warm-start into the P1
+correspondence-generation (restricts HCR search to a tighter crop and
+initialises the affine fit).
+
+If M1 fails, falls through to P1 as-is.
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+import numpy as np
+import pandas as pd
+
+_THIS = Path(__file__).resolve().parent
+_ROOT = _THIS.parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+if str(_ROOT.parent / "dev_code") not in sys.path:
+    sys.path.insert(0, str(_ROOT.parent / "dev_code"))
+
+from bench.harness import register_candidate, CoregResult
+from bench.candidate_impls._m1_mask_ncc import run_m1
+from bench.candidate_impls._p1_teaser import run_p1
+
+
+@register_candidate("M3")
+def run_m3(s) -> CoregResult:
+    r_m1 = run_m1(s)
+    # For the MVP: use P1's own putative generator; use M1's transform as a
+    # diagnostic cross-check. A full hybrid variant would feed M1's scale
+    # as putative initialisation — left as an extension after the M1 sweep
+    # shows whether its transform is trustworthy.
+    r_p1 = run_p1(s)
+    diag = dict(m1=r_m1.diagnostics, p1=r_p1.diagnostics,
+                 m1_scales=r_m1.transform.scales.tolist() if r_m1.transform is not None else None)
+    return CoregResult(
+        pairs_df=r_p1.pairs_df, confidence=r_p1.confidence,
+        transform=r_p1.transform, diagnostics=diag,
+    )

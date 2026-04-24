@@ -1,0 +1,22 @@
+{
+  "landmark_fit_rms_um": 43.41025545528274,
+  "gt_partner_dist_at_cz_init": {
+    "p50": 1102.5689287156808,
+    "p95": 1624.4885850608084,
+    "p99": 1797.5755634906714,
+    "max": 1921.7903927408724
+  },
+  "rank_pure_distance": {
+    "p50": 6782,
+    "lt_1": 0,
+    "lt_5": 0,
+    "lt_10": 0,
+    "lt_20": 1,
+    "lt_50": 2,
+    "lt_100": 4
+  },
+  "greedy_correct": 0,
+  "hungarian_correct": 0,
+  "n_gt": 784,
+  "hungarian_runtime_s": 1.145545482635498
+}
