@@ -1,0 +1,76 @@
+# v2-S01 — Stage A locked-prior warm-start
+
+**Date:** 2026-04-27
+**Owner:** automatic
+**Status:** in-progress
+**Companion docs:** `/root/capsule/code/docs/09 Full automatic v2 plan.md` §2 Stage A
+
+## Goal
+
+Build a single, deterministic `LockedPriorWarmStart` per subject that
+consumes the three v2 artefacts (surface_registration_v2 PWR fit,
+roi_area_sxy, surfaces_iter08) and emits a warped CZ centroid cloud in
+HCR µm. Re-bench P1 / P4 / P6 / C5 with this warm-start replacing
+`default_warmstart_zyx` and verify the locked-prior matches or beats v1
+on ≥ 4/6 subjects.
+
+## Inputs (cached for all 6 subjects, no re-computation needed)
+
+* `dev_code/cached_surface_registration/<sid>.json`
+* `dev_code/cached_surfaces/<sid>_*_iter0[78].json`
+* (spot subjects only) `cached_hcr_cell_tight_bbox/<sid>_*.parquet` for
+  `roi_area_sxy`
+
+## Method
+
+`full_automatic_execution_02/lib/locked_prior_warm.py`:
+
+1. **R = R_180 @ R_tilt @ R_pwr_θ**.  R_180 is the structural prior;
+   R_tilt aligns CZ pia normal onto HCR pia normal (uses
+   `r1_revised._plane_normal_from_surface`); R_pwr_θ is the rigid θ
+   recovered by `surface_registration_v2`'s stage-1 FFT-NCC sweep.
+2. **sxy** from `roi_area_sxy.estimate_sxy_roi_area` for the three
+   well-validated spot subjects (788406, 790322, 767018); for 782149
+   and the two intensity subjects (755252, 767022), fall back to the
+   PWR stage-2 image-derived sxy `base_sxy * exp(d_log_scale)`.
+3. **(t_x, t_y)** by composing the CZ centroid mean through the
+   180°-rotation + sxy-zoom + PWR rigid+affine offset, then converting
+   from level-4 pixel coordinates back to HCR µm. The `cz_warm` pixel
+   grid spans `cz_fov_um * sxy / hcr_xy_um` pixels exactly (matches the
+   `warm_start_cz_binary` zoom factor).
+4. **t_z** so that the (rotated, scaled) CZ centroid maps onto the HCR
+   pia surface at the registered xy.
+5. **sz_init = 1.0** (Stage B sets the real value; for Stage A the goal
+   is just to position the cloud sensibly).
+
+## Subject-level run
+
+Below is filled in after the CLI / F9 runs complete.
+
+### Stage A locked-prior dump
+
+| sid | sxy | sxy_source | θ_z (deg) | t (z, y, x) µm | PWR NCC [method] |
+|-----|-----|------------|-----------|-----------------|------------------|
+| 755252 | TBD | TBD | TBD | TBD | TBD |
+| 767018 | TBD | TBD | TBD | TBD | TBD |
+| 767022 | TBD | TBD | TBD | TBD | TBD |
+| 782149 | TBD | TBD | TBD | TBD | TBD |
+| 788406 | TBD | TBD | TBD | TBD | TBD |
+| 790322 | TBD | TBD | TBD | TBD | TBD |
+
+### F9 re-bench (P1 / P4 / P6 / C5 with locked vs default warm-start)
+
+TBD.
+
+## Stop / pivot rule (from docs/09 §6)
+
+If the locked-prior warm-start does not match or beat the v1 default
+warm-start on ≥ 4/6 subjects (in median residual against GT after one
+ICP step), halt — Stage A's priors are wrong somewhere upstream
+(surface fits, sxy, or surface registration). Do not chain to v2-S02.
+The right next step is to debug the prior, not to add fallbacks.
+
+## Iteration log
+
+* **2026-04-27 — iter 1.** Built `LockedPriorWarmStart` and the CLI
+  driver. About to run on all 6 subjects.

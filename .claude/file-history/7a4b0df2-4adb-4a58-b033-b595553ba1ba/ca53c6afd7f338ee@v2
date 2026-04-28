@@ -1,0 +1,533 @@
+"""Session 08 — V3 constellation-RANSAC registration (GFP+ centroids).
+
+Idea: register two cell point clouds via RANSAC similarity (4-DOF:
+rotation + uniform scale + translation). The constellations are built
+from per-cell centroids (CZ active ROIs ↔ HCR GFP+ cells), depth-
+filtered to the same physical slab beneath the pia surface, then
+projected to xy.
+
+  1. CZ side: ``s.cz_centroids`` (active ROIs in CZ pixel frame) →
+     3D µm via ``cz_px_to_um`` → keep depth ∈ [0, 50] µm beneath CZ
+     pia surface → take xy.
+  2. HCR side: ``s.hcr_centroids`` filtered to GFP+ ids in
+     ``s.hcr_gfp_df`` → 3D µm via ``hcr_px_to_um`` → keep depth ∈
+     [0, 100] µm beneath HCR top surface → take xy.
+  3. Warm-start CZ xy: 180° around CZ-MIP centre, then scale by sxy
+     → CZ-µm in the HCR scale.
+  4. RANSAC similarity (scale ∈ [0.90, 1.10], |θ| ≤ 10°, tol 12 µm),
+     refined LSQ on inliers.
+  5. Score: binary NCC of the recovered transform applied to the CZ
+     binary MIP, identical to the binary pipeline's NCC.
+"""
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.ndimage import (
+    affine_transform,
+    binary_fill_holes,
+    binary_opening,
+    gaussian_filter,
+    label,
+    center_of_mass,
+)
+
+sys.path.insert(0, "/root/capsule/code/dev_code")
+from benchmark_analysis import (  # type: ignore  # noqa: E402
+    depth_from_surface,
+    load_hcr_volume,
+)
+from benchmark_data_loader import (  # type: ignore  # noqa: E402
+    cz_px_to_um, hcr_px_to_um, load_subject,
+)
+from roi_area_sxy import estimate_sxy_roi_area  # type: ignore  # noqa: E402
+from surfaces_iter08 import (  # type: ignore  # noqa: E402
+    get_cz_surface_iter08,
+    get_hcr_top_surface_iter07,
+)
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from compute_projections import top_slab_projection  # type: ignore  # noqa: E402
+from register_binary import (  # type: ignore  # noqa: E402
+    cz_binary_top_mip,
+    detect_objects_binary,
+    get_sxy_with_fallback,
+    hcr488_top_mip,
+    ncc_overlap,
+)
+
+HERE = Path(__file__).resolve().parent
+FIG = HERE / "figures"
+FIG.mkdir(parents=True, exist_ok=True)
+SUBJECTS = ["788406", "790322", "767018", "782149", "755252", "767022"]
+HCR_LEVEL = 4
+
+CZ_SLAB = (0.0, 50.0)
+HCR_SLAB = (0.0, 100.0)
+
+
+# --------------------------------------------------------------
+# Per-cell centroid extraction (CZ active ROIs, HCR GFP+ cells)
+# --------------------------------------------------------------
+def cz_active_xy_um(s, cz_surface, depth_lo_um: float, depth_hi_um: float) -> np.ndarray:
+    """Active CZ ROI centroids → (N, 2) xy in CZ µm, depth-filtered to
+    [depth_lo, depth_hi] beneath the CZ pia surface."""
+    if s.cz_centroids.empty:
+        return np.zeros((0, 2), dtype=np.float64)
+    px = s.cz_centroids[["z_px", "y_px", "x_px"]].to_numpy(float)
+    zyx_um = cz_px_to_um(px, s)            # (N, 3) as (z, y, x) µm
+    xyz_um = zyx_um[:, [2, 1, 0]]          # (N, 3) as (x, y, z) µm
+    depth = depth_from_surface(xyz_um, cz_surface)
+    keep = (depth >= depth_lo_um) & (depth <= depth_hi_um)
+    return xyz_um[keep, :2]
+
+
+def hcr_gfp_xy_um(s, hcr_surface, depth_lo_um: float, depth_hi_um: float) -> np.ndarray:
+    """HCR GFP+ centroids → (N, 2) xy in HCR µm, depth-filtered to
+    [depth_lo, depth_hi] beneath the HCR top surface."""
+    if s.hcr_centroids.empty or s.hcr_gfp_df.empty:
+        return np.zeros((0, 2), dtype=np.float64)
+    gfp_ids = set(int(x) for x in s.hcr_gfp_df["hcr_id"].astype(int))
+    cents = s.hcr_centroids[s.hcr_centroids["hcr_id"].astype(int).isin(gfp_ids)]
+    if cents.empty:
+        return np.zeros((0, 2), dtype=np.float64)
+    px = cents[["z_px", "y_px", "x_px"]].to_numpy(float)
+    zyx_um = hcr_px_to_um(px, s)
+    xyz_um = zyx_um[:, [2, 1, 0]]
+    depth = depth_from_surface(xyz_um, hcr_surface)
+    keep = (depth >= depth_lo_um) & (depth <= depth_hi_um)
+    return xyz_um[keep, :2]
+
+
+# --------------------------------------------------------------
+# Warm-start centroids: 180° around CZ-MIP centre, then scale by sxy
+# --------------------------------------------------------------
+def warm_start_centroids(
+    cz_pts_um: np.ndarray, cz_mip_shape, cz_xy_um: float, sxy: float,
+) -> np.ndarray:
+    """Rotate 180° around the CZ-MIP centre (in µm), then scale by sxy.
+
+    After this the centroids are in the same physical µm scale as HCR
+    centroids; only a residual (θ_small, tx, ty) remains. Output is
+    centred so origin is the warm-CZ-MIP centre.
+    """
+    Y, X = cz_mip_shape
+    cx_um = (X / 2.0) * cz_xy_um
+    cy_um = (Y / 2.0) * cz_xy_um
+    centred = cz_pts_um - np.array([cx_um, cy_um])
+    rot180 = -centred  # 180° rotation
+    scaled = rot180 * sxy
+    return scaled  # (x_um, y_um) in HCR-frame µm, origin at warm-CZ centre
+
+
+# --------------------------------------------------------------
+# RANSAC similarity transform on point pairs
+# --------------------------------------------------------------
+def similarity_from_two_pairs(
+    src: np.ndarray, dst: np.ndarray,
+):
+    """Closed-form 4-DOF similarity (rotation + uniform scale + translation)
+    from 2 src↔dst pairs.
+
+    src/dst: (2, 2) arrays of (x, y) coordinates.
+    Returns (s, theta, t) with `dst ≈ s · R(theta) · src + t`, or None
+    if pairs degenerate.
+    """
+    a, b = src
+    c, d = dst
+    v_src = b - a
+    v_dst = d - c
+    n_src = np.linalg.norm(v_src)
+    if n_src < 1e-6:
+        return None
+    s = np.linalg.norm(v_dst) / n_src
+    th_src = np.arctan2(v_src[1], v_src[0])
+    th_dst = np.arctan2(v_dst[1], v_dst[0])
+    theta = th_dst - th_src
+    R = np.array([[np.cos(theta), -np.sin(theta)],
+                  [np.sin(theta),  np.cos(theta)]])
+    t = c - s * R @ a
+    return float(s), float(theta), t
+
+
+def apply_similarity(pts: np.ndarray, s: float, theta: float, t: np.ndarray) -> np.ndarray:
+    R = np.array([[np.cos(theta), -np.sin(theta)],
+                  [np.sin(theta),  np.cos(theta)]])
+    return s * (pts @ R.T) + t
+
+
+def fit_similarity_lsq(src: np.ndarray, dst: np.ndarray):
+    """Least-squares 4-DOF similarity (Horn / Umeyama).
+    Returns (s, theta, t) minimising sum ||s R src + t - dst||^2.
+    """
+    src_c = src - src.mean(axis=0)
+    dst_c = dst - dst.mean(axis=0)
+    H = src_c.T @ dst_c
+    U, S, Vt = np.linalg.svd(H)
+    Rmat = Vt.T @ U.T
+    if np.linalg.det(Rmat) < 0:
+        Vt[-1] *= -1
+        Rmat = Vt.T @ U.T
+    var_src = (src_c ** 2).sum() / len(src_c)
+    s = np.trace(np.diag(S)) / (var_src * len(src_c))
+    theta = float(np.arctan2(Rmat[1, 0], Rmat[0, 0]))
+    t = dst.mean(axis=0) - s * Rmat @ src.mean(axis=0)
+    return float(s), theta, t
+
+
+def ransac_similarity(
+    src_pts: np.ndarray, dst_pts: np.ndarray,
+    tol_um: float = 12.0, n_iter: int = 8000,
+    scale_min: float = 0.90, scale_max: float = 1.10,
+    theta_max_deg: float = 10.0,
+    rng_seed: int = 0,
+) -> dict:
+    """Vanilla RANSAC similarity with rotation + scale gates."""
+    rng = np.random.default_rng(rng_seed)
+    n_src, n_dst = len(src_pts), len(dst_pts)
+    if n_src < 2 or n_dst < 2:
+        return {"ok": False, "n_inliers": 0}
+
+    best = {"n_inliers": -1}
+    theta_max = np.deg2rad(theta_max_deg)
+
+    for _ in range(n_iter):
+        i_src = rng.choice(n_src, size=2, replace=False)
+        i_dst = rng.choice(n_dst, size=2, replace=False)
+        sol = similarity_from_two_pairs(src_pts[i_src], dst_pts[i_dst])
+        if sol is None:
+            continue
+        s, theta, t = sol
+        if not (scale_min <= s <= scale_max):
+            continue
+        # wrap theta to [-pi, pi]
+        th_n = np.mod(theta + np.pi, 2 * np.pi) - np.pi
+        if abs(th_n) > theta_max:
+            continue
+
+        warped = apply_similarity(src_pts, s, theta, t)
+        # nearest-neighbour to dst
+        d2 = ((warped[:, None, :] - dst_pts[None, :, :]) ** 2).sum(axis=2)
+        nn = np.min(d2, axis=1)
+        inlier_mask = nn < tol_um ** 2
+        n_in = int(inlier_mask.sum())
+        if n_in > best["n_inliers"]:
+            best = {
+                "n_inliers": n_in,
+                "scale": float(s),
+                "theta": float(theta),
+                "t": t.copy(),
+                "inlier_mask": inlier_mask.copy(),
+            }
+
+    if best["n_inliers"] < 3:
+        return {"ok": False, **best, "src_pts": src_pts, "dst_pts": dst_pts}
+
+    # Refine: pair each inlier src with its nearest dst, re-solve LSQ
+    s0, th0, t0 = best["scale"], best["theta"], best["t"]
+    warped = apply_similarity(src_pts, s0, th0, t0)
+    d2 = ((warped[best["inlier_mask"]][:, None, :]
+           - dst_pts[None, :, :]) ** 2).sum(axis=2)
+    nn_idx = np.argmin(d2, axis=1)
+    inlier_src = src_pts[best["inlier_mask"]]
+    inlier_dst = dst_pts[nn_idx]
+    s, theta, t = fit_similarity_lsq(inlier_src, inlier_dst)
+    return {
+        "ok": True,
+        "scale": float(s), "theta": float(theta), "t": t,
+        "n_inliers": int(best["n_inliers"]),
+        "n_inliers_refined": int(best["n_inliers"]),
+        "inlier_mask": best["inlier_mask"],
+        "src_pts": src_pts, "dst_pts": dst_pts,
+    }
+
+
+# --------------------------------------------------------------
+# Apply RANSAC result back to the binary mask + score NCC
+# --------------------------------------------------------------
+def warp_cz_binary_via_ransac(
+    cz_bin: np.ndarray, cz_xy_um: float, hcr_xy_um: float, sxy: float,
+    res: dict, hcr_shape,
+) -> np.ndarray:
+    """Apply (warm-start 180° + sxy) ⊕ (residual similarity from RANSAC)
+    to the CZ binary MIP, resampled onto the HCR pixel grid.
+
+    The full transform from CZ-pixel → HCR-µm:
+      cz_um = pix * cz_xy_um
+      pre   = warm_start_centroids(cz_um) (180° + sxy)
+      post  = apply_similarity(pre, s_res, th_res, t_res)
+
+    For dense resampling, build the inverse map: for each HCR pixel
+    (in µm), find which CZ pixel feeds it.
+    """
+    H, W = hcr_shape
+    Yc, Xc = cz_bin.shape
+    cx_um = (Xc / 2.0) * cz_xy_um
+    cy_um = (Yc / 2.0) * cz_xy_um
+
+    # Forward (cz_pixel → hcr_pixel) is non-trivial; build a 2x3 affine
+    # via the chain rule.
+    # Step A: cz_pixel(yp, xp) → cz_um (xp*cz, yp*cz)
+    # Step B: → centred (cz_um - (cx_um, cy_um))
+    # Step C: 180° = ×(-1) → -centred
+    # Step D: × sxy
+    # Step E: rotate by theta with scale s about origin
+    # Step F: + t
+    # Step G: hcr_um → hcr_pixel (/hcr_xy)
+
+    s_res, th_res, t_res = res["scale"], res["theta"], res["t"]
+    R_res = np.array([[np.cos(th_res), -np.sin(th_res)],
+                      [np.sin(th_res),  np.cos(th_res)]])
+
+    # Build forward 2D affine: hcr_px = A_fwd @ cz_px + b_fwd
+    # cz_px = (xp, yp) → cz_um = (xp*cz, yp*cz)
+    # → centred = (xp*cz - cx_um, yp*cz - cy_um)
+    # → -centred * sxy = (-xp*cz + cx_um, -yp*cz + cy_um) * sxy
+    # → R s = R s · -centred·sxy = (cz_um → coords): scale_combined = -sxy
+    #   so vector_in_HCR_um = R s_res · -sxy · ([xp; yp]·cz_xy - [cx_um; cy_um])
+    # Add t_res, then divide by hcr_xy:
+    # hcr_px = (R s_res · -sxy · [xp; yp]·cz_xy + R s_res · -sxy · -[cx_um; cy_um] + t_res) / hcr_xy
+    # But our coords are (x, y) → (col, row); image-space we want (row, col).
+    # So switch rows/cols at the end via flip.
+
+    # Linear part for vec=(x_um, y_um): A_um = R s_res · -sxy
+    A_um = R_res * s_res * (-sxy)  # 2x2, acts on (x_um, y_um)
+    # cz_pixel (yp, xp) → (xp, yp) → (xp*cz, yp*cz)  (vector V_xy)
+    # = ([cz_xy, 0], [0, cz_xy]) @ (xp, yp)
+    # We carry centring as part of constant offset.
+    # vec_xy = cz_xy_um · (xp, yp) - (cx_um, cy_um)
+    # hcr_xy_um_vec = A_um @ vec_xy + t_res
+    # hcr_pixel_xy = hcr_xy_um_vec / hcr_xy_um
+    # Then (row, col) = (y_pix, x_pix).
+    # Combine: A_xy_pix = (A_um @ [cz_xy_um*I]) / hcr_xy_um
+    A_xy_pix = (A_um * cz_xy_um) / hcr_xy_um  # 2x2 on (xp, yp) → (x_pix, y_pix)
+    b_xy_pix = (-A_um @ np.array([cx_um, cy_um]) + t_res) / hcr_xy_um  # (x_pix, y_pix)
+
+    # We want to use scipy.ndimage.affine_transform which expects:
+    #   input_coords = M @ output_coords + offset
+    # where coords are (row, col) = (y_pix, x_pix).
+    # Forward: out_pix_xy = A_xy_pix @ in_pix_xy + b_xy_pix
+    # Inverse: in_pix_xy = A_inv @ (out_pix_xy - b_xy_pix)
+    # Convert to (row, col): swap x↔y at both ends.
+    A_inv = np.linalg.inv(A_xy_pix)
+    # In (row, col):
+    #   in_rc = SWAP @ A_inv @ SWAP @ (out_rc - SWAP @ b_xy_pix)
+    SWAP = np.array([[0, 1], [1, 0]], dtype=np.float64)
+    M_rc = SWAP @ A_inv @ SWAP
+    offset_rc = -SWAP @ A_inv @ SWAP @ (SWAP @ b_xy_pix)  # = -M_rc @ swap(b)
+    # Equivalent: offset_rc = -M_rc @ (b_xy_pix[::-1])
+    offset_rc = -M_rc @ b_xy_pix[::-1]
+
+    warped = affine_transform(
+        cz_bin.astype(np.float32),
+        M_rc, offset=offset_rc,
+        output_shape=(H, W), order=0, mode="constant", cval=0.0,
+    )
+    return (warped > 0.5).astype(np.float32)
+
+
+# --------------------------------------------------------------
+# Visualisation
+# --------------------------------------------------------------
+def render(
+    sid: str, hcr_bin, cz_bin, cz_warm_pts, hcr_pts, ransac, warped,
+    hcr_xy_um, cz_xy_um, sxy, ncc, out_path: Path,
+):
+    H, W = hcr_bin.shape
+    Yc, Xc = cz_bin.shape
+    fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+    extent = [0, W * hcr_xy_um, H * hcr_xy_um, 0]
+
+    axes[0, 0].imshow(hcr_bin, cmap="gray", extent=extent, origin="upper")
+    axes[0, 0].plot(hcr_pts[:, 0], hcr_pts[:, 1], "rx", ms=4, mew=1)
+    axes[0, 0].set_title(f"HCR ch488 binary  ·  GFP+={len(hcr_pts)}")
+    axes[0, 0].set_xlabel("x (µm)"); axes[0, 0].set_ylabel("y (µm)")
+
+    extent_cz = [0, Xc * cz_xy_um, Yc * cz_xy_um, 0]
+    axes[0, 1].imshow(cz_bin, cmap="gray", extent=extent_cz, origin="upper")
+    axes[0, 1].set_title(f"CZ ROI binary  ·  active={len(cz_warm_pts)}")
+    axes[0, 1].set_xlabel("x (µm)"); axes[0, 1].set_ylabel("y (µm)")
+
+    if ransac.get("ok"):
+        s_r, th_r, t_r = ransac["scale"], ransac["theta"], ransac["t"]
+        warped_pts = apply_similarity(cz_warm_pts, s_r, th_r, t_r)
+    else:
+        warped_pts = cz_warm_pts.copy()
+
+    axes[0, 2].plot(hcr_pts[:, 0], hcr_pts[:, 1], "rx", ms=6, mew=1.5, label=f"HCR ({len(hcr_pts)})")
+    axes[0, 2].plot(warped_pts[:, 0], warped_pts[:, 1], "go", ms=4, mfc="none",
+                    label=f"CZ warped ({len(warped_pts)})")
+    axes[0, 2].invert_yaxis(); axes[0, 2].set_aspect("equal")
+    axes[0, 2].set_title(
+        f"point-cloud match · inliers={ransac.get('n_inliers',0)}/{len(cz_warm_pts)}"
+        f"  ok={ransac.get('ok')}"
+    )
+    axes[0, 2].set_xlabel("x_HCR (µm)"); axes[0, 2].set_ylabel("y_HCR (µm)")
+    axes[0, 2].legend(loc="upper right", fontsize=8)
+    axes[0, 2].grid(True, alpha=0.3)
+
+    rgb = np.zeros((H, W, 3), dtype=np.float32)
+    rgb[..., 0] = np.clip(hcr_bin, 0, 1)
+    rgb[..., 1] = np.clip(warped, 0, 1)
+    axes[1, 0].imshow(rgb, extent=extent, origin="upper")
+    axes[1, 0].set_title(f"binary overlay · NCC={ncc:.3f}")
+    axes[1, 0].set_xlabel("x (µm)")
+
+    if ransac.get("ok"):
+        s_r, th_r = ransac["scale"], np.rad2deg(ransac["theta"])
+        text = (
+            f"RANSAC similarity\n"
+            f"  scale_residual = {s_r:.3f}\n"
+            f"  theta_residual = {th_r:+.2f}°\n"
+            f"  translation_um = ({ransac['t'][0]:+.0f}, {ransac['t'][1]:+.0f})\n"
+            f"  inliers = {ransac['n_inliers']} / {len(cz_warm_pts)}"
+            f" ({100*ransac['n_inliers']/max(1,len(cz_warm_pts)):.0f}%)\n"
+            f"  binary NCC after warp = {ncc:.3f}\n\n"
+            f"warm start used\n"
+            f"  rotation = 180°\n"
+            f"  sxy = {sxy:.3f}"
+        )
+    else:
+        text = "RANSAC failed — too few inliers"
+    axes[1, 1].text(0.05, 0.95, text, transform=axes[1, 1].transAxes,
+                    family="monospace", fontsize=10, va="top")
+    axes[1, 1].axis("off")
+
+    # Show the inlier point pairs (lines from src warped → nearest dst)
+    if ransac.get("ok"):
+        in_mask = ransac["inlier_mask"]
+        warped_in = warped_pts[in_mask]
+        d2 = ((warped_in[:, None, :] - hcr_pts[None, :, :]) ** 2).sum(axis=2)
+        nn_idx = np.argmin(d2, axis=1)
+        for w, h_idx in zip(warped_in, nn_idx):
+            h_pt = hcr_pts[h_idx]
+            axes[1, 2].plot([w[0], h_pt[0]], [w[1], h_pt[1]], "-", lw=0.5, color="cyan")
+        axes[1, 2].plot(hcr_pts[:, 0], hcr_pts[:, 1], "rx", ms=4, mew=1)
+        axes[1, 2].plot(warped_pts[:, 0], warped_pts[:, 1], "go", ms=3, mfc="none")
+        axes[1, 2].set_title(f"inlier pairs ({ransac['n_inliers']})")
+    else:
+        axes[1, 2].set_title("inlier pairs — n/a")
+    axes[1, 2].invert_yaxis(); axes[1, 2].set_aspect("equal")
+    axes[1, 2].set_xlabel("x_HCR (µm)"); axes[1, 2].set_ylabel("y_HCR (µm)")
+    axes[1, 2].grid(True, alpha=0.3)
+
+    fig.suptitle(f"{sid} — V3 constellation (RANSAC similarity)")
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=110, bbox_inches="tight")
+    plt.close(fig)
+
+
+# --------------------------------------------------------------
+# Driver
+# --------------------------------------------------------------
+def process_subject(sid: str) -> dict:
+    print(f"\n=== {sid} ===", flush=True)
+    s = load_subject(sid)
+    sxy, sxy_src = get_sxy_with_fallback(sid, s)
+    print(f"  sxy={sxy:.4f}  source={sxy_src}", flush=True)
+
+    hcr_surf = get_hcr_top_surface_iter07(s, level=HCR_LEVEL)
+    cz_surf = get_cz_surface_iter08(s)
+
+    # CZ binary MIP (still used for the final NCC scoring)
+    cz_bin = cz_binary_top_mip(s, cz_surf, *CZ_SLAB)
+    # HCR binary MIP for the same NCC scoring
+    hcr_mip, hcr_xy_um = hcr488_top_mip(s, hcr_surf, *HCR_SLAB)
+    hcr_bin = detect_objects_binary(hcr_mip, hcr_xy_um)
+
+    # Constellations from per-cell centroids (NEW)
+    hcr_pts = hcr_gfp_xy_um(s, hcr_surf, *HCR_SLAB)
+    cz_pts = cz_active_xy_um(s, cz_surf, *CZ_SLAB)
+    if len(hcr_pts) < 3 or len(cz_pts) < 3:
+        raise RuntimeError(
+            f"{sid}: insufficient centroids — HCR GFP+ {len(hcr_pts)}, "
+            f"CZ active {len(cz_pts)} (need ≥3 each)"
+        )
+
+    cz_warm_pts = warm_start_centroids(
+        cz_pts, cz_bin.shape, cz_xy_um=float(s.cz_xy_um), sxy=sxy,
+    )
+    # Re-centre warm CZ centroids onto HCR-image centre to give RANSAC a
+    # reasonable seed (HCR image centre in µm = (W*hcr_xy / 2, H*hcr_xy / 2))
+    H_im, W_im = hcr_bin.shape
+    hcr_centre = np.array([(W_im * hcr_xy_um) / 2.0, (H_im * hcr_xy_um) / 2.0])
+    cz_warm_pts_seeded = cz_warm_pts + hcr_centre  # so warm centroids near HCR centre
+    print(
+        f"  HCR GFP+ centroids: {len(hcr_pts)}   CZ active centroids: {len(cz_pts)}",
+        flush=True,
+    )
+
+    res = ransac_similarity(cz_warm_pts_seeded, hcr_pts, tol_um=12.0, n_iter=12000)
+
+    # Score binary NCC using the recovered transform
+    if res.get("ok"):
+        # Build full transform that includes the centring offset:
+        # warmed_seeded = warm + hcr_centre; res maps warmed_seeded → hcr.
+        # So actual cz_um → hcr_um is: warm + hcr_centre, then s·R·(.) + t
+        # = s·R·warm + s·R·hcr_centre + t   (since warm is centred at origin)
+        # We can just shift t accordingly.
+        s_r, th_r, t_r = res["scale"], res["theta"], res["t"]
+        R_r = np.array([[np.cos(th_r), -np.sin(th_r)],
+                        [np.sin(th_r),  np.cos(th_r)]])
+        t_eff = s_r * R_r @ hcr_centre + t_r
+        res_for_warp = dict(res); res_for_warp["t"] = t_eff
+        warped = warp_cz_binary_via_ransac(
+            cz_bin, cz_xy_um=float(s.cz_xy_um), hcr_xy_um=hcr_xy_um, sxy=sxy,
+            res=res_for_warp, hcr_shape=hcr_bin.shape,
+        )
+        ncc = ncc_overlap(warped.astype(np.float32),
+                          hcr_bin.astype(np.float32),
+                          np.ones(hcr_bin.shape, dtype=bool))
+    else:
+        warped = np.zeros_like(hcr_bin, dtype=np.float32)
+        ncc = -1.0
+
+    out_png = FIG / f"register_constellation_{sid}_V3.png"
+    render(sid, hcr_bin, cz_bin, cz_warm_pts_seeded, hcr_pts, res,
+           warped, hcr_xy_um, float(s.cz_xy_um), sxy, ncc, out_png)
+
+    if res.get("ok"):
+        print(
+            f"  RANSAC: inliers={res['n_inliers']}/{len(cz_warm_pts)}  "
+            f"scale={res['scale']:.3f}  θ={np.rad2deg(res['theta']):+.2f}°  "
+            f"t=({res['t'][0]:+.0f},{res['t'][1]:+.0f}) µm   binary NCC={ncc:.3f}",
+            flush=True,
+        )
+    else:
+        print(f"  RANSAC: FAILED (n_inliers={res.get('n_inliers',0)})", flush=True)
+
+    out = {
+        "sid": sid, "sxy": sxy, "hcr_xy_um": hcr_xy_um,
+        "n_hcr_blobs": int(len(hcr_pts)), "n_cz_blobs": int(len(cz_pts)),
+        "ransac": {
+            "ok": bool(res.get("ok", False)),
+            "scale": float(res.get("scale", float("nan"))) if res.get("ok") else None,
+            "theta_deg": (float(np.rad2deg(res["theta"])) if res.get("ok") else None),
+            "t_um": (res["t"].tolist() if res.get("ok") else None),
+            "n_inliers": int(res.get("n_inliers", 0)),
+        },
+        "binary_ncc_after_ransac": float(ncc),
+        "wrote": str(out_png.relative_to(HERE)),
+    }
+    return out
+
+
+def main():
+    all_results = {}
+    for sid in SUBJECTS:
+        try:
+            all_results[sid] = process_subject(sid)
+        except Exception as e:
+            print(f"  ERROR {sid}: {e}", flush=True)
+            all_results[sid] = {"sid": sid, "error": str(e)}
+    summary = HERE / "register_constellation_summary.json"
+    summary.write_text(json.dumps(all_results, indent=2, default=float))
+    print(f"\nwrote {summary.name}")
+
+
+if __name__ == "__main__":
+    main()

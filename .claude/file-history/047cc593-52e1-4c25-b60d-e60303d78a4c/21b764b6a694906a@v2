@@ -1,0 +1,170 @@
+"""HCR GFP+ ROI top-slab MIP from `segmentation_mask_orig_res.zarr`.
+
+The orig-res zarr is at HCR level-2 in xy (≈ 0.99 µm/vox; same xy as
+``s.hcr_xy_um``) and 1 µm in z.  We
+
+  1. read the level-2 zarr one z-slice at a time,
+  2. apply a GFP+-ID lookup (boolean per label),
+  3. max-pool 4× in xy → level-4 grid (matches ``hcr488_top_mip`` shape),
+  4. for every (y, x) at level-4, OR the boolean into a depth-slab MIP
+     iff ``z * z_um_l2 - z_pia(y, x)`` ∈ ``[d_lo, d_hi]``.
+
+Result is a binary mask at the same level-4 xy grid as the 488 MIP, so
+it is a drop-in replacement HCR target.  Output is cached at
+``cached_gfp_seg_mip/<sid>_d{lo}_{hi}.npz``.
+"""
+from __future__ import annotations
+
+from pathlib import Path
+import numpy as np
+import zarr
+
+HERE = Path(__file__).resolve().parent
+CACHE = HERE / "cached_gfp_seg_mip"
+CACHE.mkdir(parents=True, exist_ok=True)
+
+L2_TO_L4_XY = 4  # level-4 xy = level-2 xy * 4
+
+
+def _evaluate_surface_um(surf: dict, X: int, Y: int, xy_um: float) -> np.ndarray:
+    """Eval pia surface (µm) on a (Y, X) grid spaced by ``xy_um``."""
+    xs = np.arange(X, dtype=np.float32) * xy_um
+    ys = np.arange(Y, dtype=np.float32) * xy_um
+    xx, yy = np.meshgrid(xs, ys)
+    a, b, c = surf["a"], surf["b"], surf["c"]
+    p = surf.get("p", 0.0); q = surf.get("q", 0.0); r = surf.get("r", 0.0)
+    return (a * xx + b * yy + c
+            + p * xx * xx + q * xx * yy + r * yy * yy).astype(np.float32)
+
+
+def _max_pool_xy(arr: np.ndarray, factor: int) -> np.ndarray:
+    """2D max-pool by ``factor`` (truncate to multiple of factor)."""
+    H, W = arr.shape
+    Hc = (H // factor) * factor
+    Wc = (W // factor) * factor
+    a = arr[:Hc, :Wc]
+    a = a.reshape(Hc // factor, factor, Wc // factor, factor)
+    return a.max(axis=(1, 3))
+
+
+def hcr_gfp_seg_mip(
+    s, hcr_surf, *,
+    out_shape: tuple[int, int],
+    d_lo: float = 0.0, d_hi: float = 100.0,
+    cache: bool = True,
+    verbose: bool = False,
+) -> np.ndarray:
+    """Binary level-4 MIP of GFP+ HCR cell-body voxels in [d_lo, d_hi] µm
+    beneath the HCR top surface.  Falls back to a centroid-disk mask of
+    the same shape if the orig-res zarr is missing.
+
+    Returns ``mask`` of shape ``out_shape`` (matches ``hcr488_top_mip``
+    grid).  Cached on disk by (sid, d_lo, d_hi).
+    """
+    sid = s.coreg_dir.name.split("_")[0]
+    cache_path = CACHE / f"{sid}_d{int(d_lo)}_{int(d_hi)}.npz"
+    if cache and cache_path.exists():
+        z = np.load(cache_path)
+        m = z["mask"]
+        if m.shape == out_shape:
+            if verbose:
+                print(f"  [gfp_seg_mip] cache hit {cache_path.name}")
+            return m
+        if verbose:
+            print(f"  [gfp_seg_mip] cache shape mismatch — recomputing")
+
+    seg_path = s.hcr_dir / "cell_body_segmentation" / "segmentation_mask_orig_res.zarr"
+    if not seg_path.exists():
+        raise FileNotFoundError(f"no orig-res seg zarr at {seg_path}")
+
+    # GFP+ ID lookup
+    if s.hcr_gfp_df.empty:
+        return np.zeros(out_shape, dtype=np.uint8)
+    gfp_ids = np.asarray(
+        sorted(set(int(x) for x in s.hcr_gfp_df["hcr_id"].unique())),
+        dtype=np.int64,
+    )
+
+    z_root = zarr.open(str(seg_path), mode="r")
+    seg = z_root if hasattr(z_root, "shape") else z_root["0"]
+    Zn, Yn, Xn = seg.shape[2], seg.shape[3], seg.shape[4]
+    xy_um_l2 = float(s.hcr_xy_um)
+    z_um_l2 = float(s.hcr_z_um)
+    H_l4, W_l4 = out_shape
+    xy_um_l4 = xy_um_l2 * L2_TO_L4_XY
+
+    # Pia at level-4 grid
+    z_pia_l4 = _evaluate_surface_um(hcr_surf, X=W_l4, Y=H_l4, xy_um=xy_um_l4)
+
+    # iz range covering [d_lo, d_hi]
+    iz_lo = int(np.floor((float(z_pia_l4.min()) + d_lo) / z_um_l2))
+    iz_hi = int(np.ceil((float(z_pia_l4.max()) + d_hi) / z_um_l2))
+    iz_lo = max(0, iz_lo)
+    iz_hi = min(Zn - 1, iz_hi)
+    if verbose:
+        print(f"  [gfp_seg_mip] {sid} GFP+={len(gfp_ids)}  iz∈[{iz_lo},{iz_hi}] "
+              f"of {Zn}  out_shape={out_shape}")
+
+    # Build a boolean lookup. Max ID at level-2 is the same as level-0.
+    # `gfp_ids.max()` may be huge; if so, fall back to set-based lookup.
+    max_id = int(gfp_ids.max())
+    use_lut = max_id < 5_000_000  # ~5MB bool LUT
+    if use_lut:
+        lut = np.zeros(max_id + 1, dtype=bool)
+        lut[gfp_ids] = True
+    else:
+        gfp_set = set(gfp_ids.tolist())
+
+    mip = np.zeros((H_l4, W_l4), dtype=np.uint8)
+
+    # Pre-compute per-(y,x) slab bounds in iz (inclusive) — all level-4.
+    iz_per_lo = np.round((z_pia_l4 + d_lo) / z_um_l2).astype(np.int64)
+    iz_per_hi = np.round((z_pia_l4 + d_hi) / z_um_l2).astype(np.int64)
+
+    for iz in range(iz_lo, iz_hi + 1):
+        in_slab = (iz >= iz_per_lo) & (iz <= iz_per_hi)
+        if not in_slab.any():
+            continue
+        # Read one z-slice at level-2.
+        sl = np.asarray(seg[0, 0, iz, :, :])  # (Yn, Xn) uint32
+        if use_lut:
+            ids = sl.ravel().astype(np.int64, copy=False)
+            ids = np.clip(ids, 0, max_id)
+            bool_l2 = lut[ids].reshape(sl.shape)
+        else:
+            bool_l2 = np.isin(sl, gfp_ids)
+        bool_l4 = _max_pool_xy(bool_l2.astype(np.uint8), L2_TO_L4_XY).astype(bool)
+        # Crop / pad to out_shape (level-2 // 4 may be ±1 vs out_shape).
+        bh = min(bool_l4.shape[0], H_l4)
+        bw = min(bool_l4.shape[1], W_l4)
+        update = bool_l4[:bh, :bw] & in_slab[:bh, :bw]
+        mip[:bh, :bw] |= update.astype(np.uint8)
+
+        if verbose and (iz - iz_lo) % 25 == 0:
+            print(f"    iz={iz}  cumulative fill={mip.mean()*100:.2f}%")
+
+    if cache:
+        np.savez_compressed(cache_path, mask=mip,
+                            d_lo=np.float32(d_lo), d_hi=np.float32(d_hi))
+    return mip
+
+
+if __name__ == "__main__":
+    import sys
+    sys.path.insert(0, "/root/capsule/code/dev_code")
+    from benchmark_data_loader import load_subject  # type: ignore
+    from surfaces_iter08 import (  # type: ignore
+        get_hcr_top_surface_iter07,
+    )
+    sys.path.insert(0, str(HERE))
+    from register_binary import hcr488_top_mip  # type: ignore
+
+    sid = sys.argv[1] if len(sys.argv) > 1 else "788406"
+    s = load_subject(sid)
+    surf = get_hcr_top_surface_iter07(s, level=4)
+    mip488, _ = hcr488_top_mip(s, surf, 0.0, 100.0)
+    m = hcr_gfp_seg_mip(
+        s, surf, out_shape=mip488.shape, d_lo=0.0, d_hi=100.0,
+        cache=True, verbose=True,
+    )
+    print(f"{sid}: gfp_seg fill={m.mean()*100:.2f}%  shape={m.shape}")

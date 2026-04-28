@@ -1,9 +1,0 @@
-
-=== 782149 ===
-  CZ bbox voxels (hz,hy,hx)=(2,4,4); n=894
-  CZ image features in 1.4s  nan rows=0/894
-  HCR bbox voxels (hz,hy,hx)=(2,3,3); n=3831 level=2 xy_um=0.980
-  HCR image features in 46.5s  nan rows=0/3831
-  P1 putatives in 36.7s  K=5  n_cz=894 n_hcr=3831
-  GT in top-5: 0/303
-  no pairs — skipping AUC.

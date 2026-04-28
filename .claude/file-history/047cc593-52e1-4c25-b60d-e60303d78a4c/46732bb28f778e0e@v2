@@ -1,0 +1,191 @@
+"""Build ``notebook.ipynb`` for session 08.
+
+Shows, for 788406 and 790322:
+  * Raw Y-slab MIP of each HCR channel with the **fitted iter07 pia
+    surface** overlaid — visualises the tilted surface we're
+    correcting for.
+  * Tilt-corrected top-slab projections (max + mean) at 0-30, 30-60,
+    60-100 µm below the pia, for each HCR channel and for CZ.
+
+Run with::
+
+    python _build_notebook.py
+    jupyter nbconvert --execute --inplace notebook.ipynb
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+import nbformat as nbf
+
+HERE = Path(__file__).resolve().parent
+OUT = HERE / "notebook.ipynb"
+
+nb = nbf.v4.new_notebook()
+cells = []
+
+
+def md(s: str):
+    cells.append(nbf.v4.new_markdown_cell(s))
+
+
+def code(s: str):
+    cells.append(nbf.v4.new_code_cell(s))
+
+
+md(r"""# Session 08 — Surface-vascular match
+
+**Goal.** Find CZ↔HCR rotation + translation from vascular features
+visible **just under the pia**, after each modality is flattened to
+its own pia surface.
+
+**Input pipeline (already validated).**
+* ``surfaces_iter08.get_hcr_top_surface_iter07(s)`` — HCR pia (top).
+* ``surfaces_iter08.get_cz_surface_iter08(s)`` — CZ pia.
+* ``roi_area_sxy.estimate_sxy_roi_area(sid)`` — sxy.
+
+**This notebook's job.** Show the HCR top-of-tissue slab in every
+available channel (405 / 488 / 561 / 594) after tilt-correction, plus
+the matching CZ top slab. The user picks the best channel for visual
+vascular matching; an NCC-based registration around it comes next.
+
+**Reading guide per subject:**
+1. Raw Y-slab MIP of HCR per channel **with iter07 pia curve overlaid**
+   — shows the tilt visually.
+2. Tilt-corrected top 0-30 µm projection (max and mean), per channel + CZ.
+3. Same at 30-60 µm.
+4. Same at 60-100 µm.
+""")
+
+code(r"""import json
+import math
+import sys
+from pathlib import Path
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+sys.path.insert(0, "/root/capsule/code/dev_code")
+
+HERE = Path("/root/capsule/code/sessions/08_surface_vascular_match")
+SLABS = [(0, 30), (30, 60), (60, 100)]
+HCR_CHANNELS = ["405", "488", "561", "594"]
+
+
+def stretch(img, p_lo=1, p_hi=99):
+    a = np.asarray(img, dtype=np.float32)
+    finite = np.isfinite(a)
+    if not finite.any():
+        return np.zeros_like(a)
+    lo, hi = np.percentile(a[finite], [p_lo, p_hi])
+    return np.clip((a - lo) / max(hi - lo, 1e-6), 0, 1)
+
+
+def load_subject_projections(sid):
+    arr = np.load(HERE / f"projections_{sid}.npz")
+    return {k: arr[k] for k in arr.files}
+
+
+def describe_tilt(surf):
+    a, b = surf["a"], surf["b"]
+    tilt_deg = math.degrees(math.atan2(math.hypot(a, b), 1.0))
+    return (f"tilt_xy={tilt_deg:.2f}° (a={a:.4f}, b={b:.4f}); "
+            f"quad p={surf['p']:.2e} q={surf['q']:.2e} r={surf['r']:.2e}")
+
+
+def eval_surface_along_x(surf, xs_um, y_um):
+    a, b, c = surf["a"], surf["b"], surf["c"]
+    p, q, r = surf.get("p", 0), surf.get("q", 0), surf.get("r", 0)
+    return a * xs_um + b * y_um + c + p * xs_um**2 + q * xs_um * y_um + r * y_um**2
+""")
+
+for sid in ["788406", "790322"]:
+    md(f"## Subject {sid}\n\nSurface fits used for flattening:")
+
+    code(f"""sid = "{sid}"
+meta = json.loads((HERE / f"meta_{{sid}}.json").read_text())
+print(f"HCR top surface:  {{describe_tilt(meta['hcr_top_surface'])}}  | median_col_z={{meta['hcr_top_median_z_um']:.1f}} µm")
+print(f"CZ      surface:  {{describe_tilt(meta['cz_surface'])}}       | median_col_z={{meta['cz_median_z_um']:.1f}} µm")
+print(f"HCR voxel: {{meta['hcr_xy_um']:.3f}} × {{meta['hcr_xy_um']:.3f}} × {{meta['hcr_z_um']:.3f}} µm/vox  |  "
+      f"CZ voxel:  {{meta['cz_xy_um']:.3f}} × {{meta['cz_xy_um']:.3f}} × {{meta['cz_z_um']:.3f}} µm/vox")
+projs = load_subject_projections(sid)
+print("first few projection keys:", sorted(projs.keys())[:6], "… total", len(projs))
+""")
+
+    md(f"### {sid} · Row 1 — Raw Y-slab MIPs of HCR (tilted pia overlaid in red)")
+
+    code(f"""sid = "{sid}"
+projs = load_subject_projections(sid)
+meta = json.loads((HERE / f"meta_{{sid}}.json").read_text())
+xy_um = meta["hcr_xy_um"]; z_um = meta["hcr_z_um"]
+surf = meta["hcr_top_surface"]
+y_center_um = meta["hcr_y_center_um"]
+
+fig, axes = plt.subplots(1, len(HCR_CHANNELS), figsize=(4.0*len(HCR_CHANNELS), 5.0))
+for ax, ch in zip(axes, HCR_CHANNELS):
+    key = f"HCR_ch{{ch}}_yMIP"
+    img = projs[key]                          # (Z, X)
+    Z, X = img.shape
+    extent = [0, X*xy_um, Z*z_um, 0]
+    ax.imshow(stretch(img), extent=extent, cmap="gray", aspect="auto", origin="upper")
+    # Overlay pia curve z(x) at y = y_center
+    xs_plot = np.linspace(0, X*xy_um, 400)
+    zs_plot = eval_surface_along_x(surf, xs_plot, y_center_um)
+    ax.plot(xs_plot, zs_plot, color="red", lw=1.2, label="iter07 pia")
+    ax.set_xlim(0, X*xy_um); ax.set_ylim(Z*z_um, 0)
+    ax.set_title(f"HCR ch{{ch}}  (Y-slab MIP, Z-X)")
+    ax.set_xlabel("x (µm)"); ax.set_ylabel("z (µm)")
+    if ch == HCR_CHANNELS[0]:
+        ax.legend(loc="lower left")
+fig.suptitle(f"{{sid}} — raw HCR Y-slab MIPs with fitted pia curve")
+fig.tight_layout()
+plt.show()
+""")
+
+    md(f"### {sid} · Row 2 — Top-slab projections after pia-flattening")
+
+    code(f"""sid = "{sid}"
+projs = load_subject_projections(sid)
+meta = json.loads((HERE / f"meta_{{sid}}.json").read_text())
+
+for (d_lo, d_hi) in SLABS:
+    for mode in ("max", "mean"):
+        fig, axes = plt.subplots(
+            1, len(HCR_CHANNELS) + 1,
+            figsize=(3.8 * (len(HCR_CHANNELS) + 1), 4.0)
+        )
+        for ax, ch in zip(axes[:-1], HCR_CHANNELS):
+            key = f"HCR_ch{{ch}}_{{d_lo}}-{{d_hi}}_{{mode}}"
+            img = projs[key]
+            Y, X = img.shape
+            xy_um = meta["hcr_xy_um"]
+            extent = [0, X*xy_um, Y*xy_um, 0]
+            ax.imshow(stretch(img), extent=extent, cmap="gray", aspect="equal", origin="upper")
+            ax.set_title(f"HCR ch{{ch}}")
+            ax.set_xlabel("x (µm)"); ax.set_ylabel("y (µm)")
+        cz_key = f"CZ_{{d_lo}}-{{d_hi}}_{{mode}}"
+        cz_img = projs[cz_key]
+        Y, X = cz_img.shape
+        cz_xy = meta["cz_xy_um"]
+        extent = [0, X*cz_xy, Y*cz_xy, 0]
+        axes[-1].imshow(stretch(cz_img), extent=extent, cmap="gray", aspect="equal", origin="upper")
+        axes[-1].set_title("CZ (2P)")
+        axes[-1].set_xlabel("x (µm)"); axes[-1].set_ylabel("y (µm)")
+        fig.suptitle(f"{{sid}} — depth {{d_lo}}-{{d_hi}} µm — {{mode}} projection (per-channel p1-p99 stretched)")
+        fig.tight_layout()
+        plt.show()
+""")
+
+    md(f"""### {sid} · Observations
+
+Writable observation placeholders:
+
+* **Best HCR channel for vascular contrast at 0-30 µm:** ?
+* **Best HCR channel at 30-60 µm:** ?
+* **Vessel features visible in CZ that match HCR:** ?
+* **Notes on pia-flattening quality:** ?
+""")
+
+nb["cells"] = cells
+OUT.write_text(nbf.writes(nb))
+print(f"wrote {OUT}")

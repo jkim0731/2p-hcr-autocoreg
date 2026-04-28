@@ -1,0 +1,282 @@
+# sz estimator design — after 07-series, avoiding the thickness trap
+
+**Date:** 2026-04-24
+**Written against:** sessions 07 / 07b / 07c / 07d / 07e logs + `roi_area_sxy.py`
+
+## TL;DR
+
+My earlier Session-A proposal (`sz ∈ [0.75, 1.10] × H_hcr / cz_span`) is
+the **thickness-ratio prior**. The 07-series already ran this variant
+(as `sz_thickness_only` in `roi_sz_density.json`) — it produced
+`+27.8 %, +0.8 %, −9.3 %, −44.8 %` on the 4 spot subjects. One good
+subject (790322) lands fortuitously near zero; the other (788406) is
++28 % off the bound's midpoint. The bound itself is conjectural. So
+the thickness prior is not a clean answer; it's one signal in a basket.
+
+The **new signal I want to try** is **per-cell z-bbox ratio**:
+
+> `sz ≈ median(bbox_dz_HCR) / median(bbox_dz_CZ)`
+
+on the same per-cell tight bboxes that already power the successful
+`roi_area_sxy`. This is *not* in any 07-series result. It is the
+axial analogue of the xy-area estimator, and it inherits its strengths:
+per-cell (not global) statistics, immune to depth-coverage mismatch,
+immune to detection-count bias, no shape matching.
+
+Two other unexplored avenues worth recording: (3) a bound-ensemble
+that *brackets* sz from three independent priors (thickness + density
++ sigma-ratio) and takes the intersection, and (4) a surface-anchored
+sigma ratio that uses the HCR bottom surface to clip per xy, not via
+a global p99 crop.
+
+## What the 07-series already ruled out
+
+| attempt | signal | method | best result on 788406 / 790322 | why it fails |
+|---------|--------|--------|-------------------------------|--------------|
+| 06 | centroid counts | k-NN distance ratio per axis | sz err always −70 % | GFP+ depth-density CV 0.3–0.6 |
+| 07 | same | anisotropic ICP on matched pairs | GT-tuned, revoked | scoring function needed ±20 % boundary penalty calibrated against GT |
+| 07b | centroid counts under strict GMM-intersection GFP+ | k-NN (M1) + span ratio (M3) | M1 sz: +8 % sxy paired with −72 % sz on 788406 | same density bias |
+| 07c | same, BIC-selected K per subject | k-NN + CZ-density gate | CV floor 0.30–0.60; 0/6 clear 5 % | same bias, tighter diagnosis |
+| 07d | 488 image intensity along pia-normal | 1D NCC of I(d) | best 2/6 across 3 preprocessings | GCaMP vs 488 shape mismatch + Z-truncation (782149) |
+| 07e | σ_z(d) of centroids | 1D NCC of σ_z profile | 0/2 (788406 −31 %, 790322 −42 %) | σ_z is near-flat inside cortex (CV 6–10 %) — no shape to match |
+| 07e-extra | σ_z globally | `sigma_hcr / sigma_cz` on xy-matched crop | 788406 +29.7 %, 790322 +4.3 % | HCR depth extent ≠ CZ-stretched depth extent |
+| 07e-extra | cell-count density conservation (`sz = (N_cz/N_hcr × V_hcr/V_cz)/sxy²`) | `estimate_sz_roi_density()` | 788406 −20 %, 790322 −14 % | CZ stack ends before cortex bottom → T_CZ truncated |
+| Session A proposal (reassessment.md) | cortex thickness | `sz ∼ H_hcr / cz_span` | 788406 +28 %, 790322 +1 % (`sz_thickness_only`) | H_hcr dominated by bottom-surface placement; cz_span by imaging-depth cap |
+
+Across 7 independent signal/method pairs, 0 pass the ±5 % bar on both
+good subjects without using GT inside the estimator. Every
+centroid-count and 1D-profile family has been exhausted.
+
+## Why thickness ratio is a bad default (the user's point)
+
+HCR cortex thickness `H_hcr = d_bottom(x, y) − d_pia(x, y)` and CZ
+cortex span `cz_span = p99(depth_CZ)` are **not the same physical
+quantity**:
+
+- `H_hcr` is set by where the HCR *bottom surface estimator* lands.
+  Iter08 fits a polynomial to the deepest-imaged voxel envelope. If
+  the light-sheet stopped before the cortex WM boundary (lens WD /
+  aberration / bleach), `H_hcr` = imaging cap, not cortex thickness.
+  If the fit under-includes deep sparse cells, `H_hcr` under-shoots.
+- `cz_span` is the 99th percentile of CZ-detected cell pia-depth.
+  CZ-2P has a hard ~450 µm imaging cap (water-dipping objective WD,
+  aberration). If the true cortex is deeper, `cz_span` is clipped by
+  the imaging depth, not by biology.
+- Their ratio mixes two truncation regimes. The 07d Z-extent table
+  shows `hcr_z / cz_z ∈ [2.23, 3.64]` across subjects while GT sz
+  spans [2.13, 3.58]. They correlate, but noisily (782149 GT=2.93
+  vs hcr_z/cz_z=2.23 — thickness ratio is **less** than GT, impossible
+  without truncation on the HCR side).
+
+So the thickness prior is a **noisy prior** with both-sided bias —
+useful as one vote, not as a point estimate.
+
+## The signal that nobody tried — per-cell z-bbox ratio
+
+Under pure axial expansion `sz`, the physical z-height of a single
+cell body scales by `sz`:
+
+    Δz_physical_HCR = sz · Δz_physical_CZ
+
+Per-cell tight z-bbox in µm is already computed in both modalities by
+`roi_area_sxy.cz_cell_tight_bboxes` → column `bbox_dz_um` (CZ, from
+`segmentation_masks.tif` regionprops) and
+`roi_area_sxy.hcr_cell_tight_bboxes` → column `bbox_dz_um` (HCR, from
+`segmentation_mask.zarr` level-0, using `s.hcr_seg_z_um`). So the
+estimator is one line:
+
+    sz_cell = median(bbox_dz_HCR) / median(bbox_dz_CZ)
+
+### Why this might pass where 07b/07c/07e failed
+
+1. **Not a density statistic.** Depth-dependent detection bias
+   (07c ceiling: CV 0.30–0.60) changes *which* cells are observed,
+   not each observed cell's physical z-extent. So the 07c ceiling
+   doesn't apply.
+2. **Not a profile-shape statistic.** 07d/07e needed CZ and HCR to
+   have similar 1D depth shapes. A per-cell median doesn't need a
+   shape — just local measurements.
+3. **Not a thickness statistic.** Each cell is local; the global
+   tissue extents never enter. So CZ imaging cap and HCR bottom-surface
+   placement drop out.
+4. **Axial analogue of a method that works.** `roi_area_sxy`
+   (lateral) already delivers 788406 −1.6 %, 790322 +1.2 %, 767018
+   +6.5 % on the same cell tables. If the same per-cell framework
+   carries through in z, we get a known-good structure for both axes.
+
+### Where it could still fail — and how to check before investing
+
+1. **CZ z-sampling too coarse.** `benchmark_data_loader.CZ_Z_UM` default
+   is 1.0 µm/plane (usually overridden by `_read_cz_resolution` from
+   the metadata; true value is subject-specific, typically ~1 µm). A
+   15 µm cell → ~15 voxels → negligible quantisation. **Low risk but
+   verify on 788406 first**: plot histogram of `bbox_dz_um` for both
+   modalities, check that CZ distribution has at least ~5 distinct
+   values.
+2. **Segmentation-boundary definition differs.** Cellpose (HCR) and
+   the multiplane-ophys 2P cell segmenter (CZ) may draw cell
+   boundaries at different intensity thresholds. Systematic bias
+   would scale both medians by the same factor if the segmenters
+   are stain- and modality-consistent — but if HCR trims tighter
+   than CZ, the ratio is biased low.  **Diagnostic:** compare
+   `bbox_dz_um / bbox_dx_um` per cell (aspect ratio) across the two
+   modalities — it should be ≈ 1 in both if the segmenters agree on
+   shape. Any systematic anisotropy hints at modality-specific trim.
+3. **Partial cells at slab edges.** A cell clipped by the top or
+   bottom plane has a z-bbox ≤ its true height. CZ-side clipping
+   shrinks `bbox_dz_CZ` → sz_cell overshoots; HCR-side clipping
+   shrinks `bbox_dz_HCR` → sz_cell undershoots. **Mitigation:**
+   exclude cells whose bbox touches the top/bottom slab in either
+   volume; the d_skin=100 µm and p99 filter from the sxy estimator
+   already does most of this.
+4. **Depth-dependent cell size.** L5 pyramidals are larger than L2/3
+   GABAergics. If CZ and HCR sample different depth distributions
+   (which they do — CZ is shallower-biased by the 450 µm cap, HCR
+   GFP+ depth distribution varies per subject), the medians are
+   drawn from different layer mixes → ratio ≠ sz. **Mitigation:**
+   match depth histograms before taking ratio; use quantile-per-bin
+   median, or stratify by depth-band (pia+100 to pia+300 band for
+   both sides) and take the ratio there only.
+5. **Cell merge/split inconsistency.** Occasionally a cellpose blob
+   is two cells merged or one cell split. xy-area sxy is robust to
+   these because sxy is a √ (halves the effect); sz is linear in
+   the ratio, so mergers/splits propagate at full strength.
+   **Mitigation:** IQR-robust estimator (median + trimmed-mean
+   check).
+
+### Minimal experiment — one morning, 6 sanity checks before building
+
+Run once on 788406 + 790322:
+
+1. Load `cz_cell_tight_bboxes` and `hcr_cell_tight_bboxes` via
+   `roi_area_sxy` (cached).
+2. Plot:
+   a. Histogram `bbox_dz_um` for CZ and HCR (overlay; log x).
+   b. Scatter of `bbox_dz_um` vs depth for each modality.
+   c. Aspect-ratio `bbox_dz / sqrt(bbox_dx · bbox_dy)` for each
+      modality — should be similar if segmenters agree on shape.
+3. Compute `sz_cell_med = median(bbox_dz_HCR) / median(bbox_dz_CZ)`
+   with d_skin=100 µm and depth-band crop.
+4. Compare to `sz_GT` from `fit_anisotropic_similarity`.
+5. If `|err|` ≤ 10 % on both subjects, proceed to (6). If ≥ 20 %
+   on either, halt and reconsider.
+6. Extend to all 4 spot subjects with depth-band matching before
+   the ratio; target ±10 % on 4/4.
+
+Target bar for this reassessment: **not 5 % (07b's unreachable bar);
+≤ 10 % is good enough** because the downstream prior-locked warm-start
+doesn't need a point estimate — it needs an interval narrow enough to
+make ICP's 3D search tractable. At ±10 % on sz ≈ 3, the interval is
+±0.3 — tighter than the current thickness bound (±0.7).
+
+## Two other unexplored avenues, worth recording
+
+### Avenue B — bound ensemble (not a point estimator)
+
+Three independent sz signals that make *different* structural
+assumptions:
+
+| signal | assumes | breaks when |
+|--------|---------|-------------|
+| `sz_thick = H_hcr / cz_span` | both surfaces at cortex ends | imaging caps |
+| `sz_density = (N_cz / N_hcr × V_hcr / V_cz) / sxy²` | detection fractions match in bulk | CZ truncated (T_CZ shorter than HCR cortex-equivalent) |
+| `sz_sigma_bandmatched = σ_z_HCR(in band [d_pia, sz · cz_span]) / σ_z_CZ` | xy crop matches; band matches | self-referential in sz; iterate |
+
+If `sz_cell` (per-cell) passes in isolation, it's the best answer.
+If it doesn't, combine the four as follows:
+
+- **Intersection check**: compute all four, plot on a number-line per
+  subject, take their median as the point estimate and `[p25, p75]`
+  as the interval. If the four agree within ±10 %, confidence is
+  high. If they disagree by > 20 %, take the consensus-rejecting
+  pair as an uncertainty flag.
+
+This is the honest-uncertainty fallback: instead of picking one
+sz, expose "here's our bracket and these are the reasons it's
+wide."
+
+### Avenue C — surface-anchored per-xy sigma ratio
+
+Issue with the naive sigma-ratio (07e simple): it uses a global
+xy-AABB crop, but HCR depth extent *per (x,y)* varies with the
+bottom surface tilt. The scalar `sigma_hcr / sigma_cz` averages
+across a depth range that's subject-specific.
+
+Proposal: bin the xy plane into ~30 µm bins. In each bin, compute
+`sigma_z_HCR_bin` over HCR cells whose depth < d_bottom(x, y), and
+`sigma_z_CZ_bin` over CZ cells in the matched bin. Take the per-bin
+ratio, median across bins. The per-bin crop automatically respects
+the curved HCR bottom surface (already estimated by iter08), so the
+truncation bias becomes local and averages out. Needs the cached
+surface evaluator but no new per-cell data — can be built on
+centroids alone.
+
+Risk: per-bin sample size is small (~20–50 cells/bin) → bin-level
+sigma is noisy. Mitigation: median across ~100 bins.
+
+Skip this if Avenue A (per-cell z-bbox) works.
+
+### Avenue D — layer-boundary depth matching (own project)
+
+Already described in 07d/07e as "separate session". Requires cortical
+layer segmentation in both modalities. Not a one-afternoon task; defer
+until all the cheaper avenues have been tried.
+
+## Recommended path forward
+
+1. **Avenue A first (per-cell z-bbox ratio)** — ~2 hours of work,
+   zero new data loads (all cached via `roi_area_sxy`), sharp yes/no
+   answer. If it passes ±10 %, ship as default sz estimator; the
+   reassessment's Session-A warm-start uses `sz_cell` as the pin,
+   not a thickness bound.
+2. **If Avenue A fails** ±10 %: run Avenue B (bound ensemble) to get
+   an honest interval and use it as the sz search range in the
+   prior-locked warm-start.
+3. **If both fail** to bracket: ship the thickness prior with a
+   wider `[0.6, 1.3] × H_hcr / cz_span` interval and accept that sz
+   is underdetermined for this benchmark. Mark as open research
+   question and defer to Avenue D in its own session.
+
+## Why I am not recommending what 07-series already ruled out
+
+- No more centroid-count statistics (06, 07b, 07c all failed by
+  the same mechanism).
+- No more pia-normal 1D profiles (07d, 07e both failed by
+  shape mismatch or profile flatness).
+- No more ICP / multi-start with post-hoc scoring (07 was revoked
+  as GT-tuned).
+- No more density-conservation with T_CZ from CZ imaging cap
+  (07e `estimate_sz_roi_density` already tried, −14 % to −43 %).
+
+The proposed Avenue A is structurally different from all eight
+variants above — it's per-cell and doesn't require density parity,
+profile similarity, or full-extent observation.
+
+## Caveats
+
+- The per-cell z-bbox approach has never been tested. The risks in
+  §"Where it could still fail" are hypotheses to check, not known
+  safe behaviour.
+- Intensity-subject support (755252, 767022) is blocked by the
+  missing `cell_body_segmentation/metrics.pickle` — same limitation
+  as `roi_area_sxy`. Any Avenue-A result would only cover the 4
+  spot subjects.
+- The ±10 % target is a reassessment choice, not an established
+  project-wide acceptance bar. The downstream warm-start needs to
+  accept that sz lands within [0.9, 1.1] × sz_true.
+
+## Files referenced
+
+- `sessions/07_scale_failure_diagnosis/log.md` — Part D: why centroid
+  features cannot carry scale (depth-dependent detection bias).
+- `sessions/07b_scale_clean_gfp/log.md` — strict GMM GFP+ ceiling.
+- `sessions/07c_gfp_bic_cz_density/log.md` — BIC-K + CZ-density gate;
+  integrated-mean tracks `1/(sxy²·sz)` to ±43 %.
+- `sessions/07d_image_ncc_scale/log.md` — Z-extent table + shape
+  mismatch + truncation analysis.
+- `sessions/07e_sz_from_zvar_profile/{log.md, scalar_sz_check.json,
+  simple_sigma_ratio.json, roi_sz_density.json}` — σ_z flatness,
+  band-matched sigma ratio (GT-defined), density conservation.
+- `dev_code/roi_area_sxy.py` — existing per-cell bbox infrastructure
+  (lines 243–306); column `bbox_dz_um` already computed for both
+  modalities but never consumed.

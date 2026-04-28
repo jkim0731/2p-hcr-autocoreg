@@ -1,0 +1,325 @@
+"""Per-subject diagnostics for the reassessment notebook.
+
+Two "good" subjects (788406, 790322):
+  * quantify the current ``default_warmstart_zyx`` residual on GT coreg pairs,
+  * show per-axis error decomposition (z vs xy),
+  * evaluate three counter-factual transforms that plug in the new
+    surface + sxy artefacts:
+       A. sxy from ROI-area (07e)           — leaves sz, t_z to ICP.
+       B. A + surface-based Z translation    — pins CZ-pia→HCR-pia in Z.
+       C. B + surface-based sz prior         — cortical thickness ratio.
+  * emit a compact JSON + figures for the reassessment notebook.
+"""
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+sys.path.insert(0, "/root/capsule/code/dev_code")
+sys.path.insert(0, "/root/capsule/code/full_automatic_execution_01/lib")
+
+from benchmark_data_loader import (  # noqa: E402
+    load_subject,
+    cz_px_to_um,
+    hcr_px_to_um,
+    landmark_pairs_um,
+)
+from benchmark_analysis import (  # noqa: E402
+    fit_anisotropic_similarity,
+    depth_from_surface,
+)
+from centroid_helpers import (  # noqa: E402
+    default_warmstart_zyx,
+    centroids_um,
+    apply_aniso_fit,
+)
+from surfaces_iter08 import load_cached_surface  # noqa: E402
+
+OUT = Path("/root/capsule/code/full_automatic_execution_01/reassess_with_surfaces")
+FIG = OUT / "figures"
+FIG.mkdir(parents=True, exist_ok=True)
+
+SUBJECTS = ["788406", "790322"]
+ROI_JSON = "/root/capsule/code/sessions/07e_sz_from_zvar_profile/roi_area_sxy.json"
+
+
+# ---------- surface helpers ----------
+def surface_z(surf: dict, x_um: np.ndarray, y_um: np.ndarray) -> np.ndarray:
+    """Evaluate z(x, y) = a x + b y + c + p x^2 + q x y + r y^2 (µm in, µm out)."""
+    a, b, c = surf["a"], surf["b"], surf["c"]
+    p, q, r = surf["p"], surf["q"], surf["r"]
+    x, y = np.asarray(x_um, float), np.asarray(y_um, float)
+    return a * x + b * y + c + p * x * x + q * x * y + r * y * y
+
+
+# ---------- transform families ----------
+def rot180z() -> np.ndarray:
+    """180° about Z (x, y flipped)."""
+    return np.array([[-1, 0, 0], [0, -1, 0], [0, 0, 1]], dtype=float)
+
+
+def warp_aniso(src_xyz: np.ndarray,
+               R: np.ndarray,
+               scales_xyz: np.ndarray,
+               src_mean_xyz: np.ndarray,
+               dst_mean_xyz: np.ndarray) -> np.ndarray:
+    """Canonical: (src * scales) @ R.T + t, where t = dst_mean - R @ (src_mean*scales)."""
+    S = np.asarray(scales_xyz, float)
+    sm = np.asarray(src_mean_xyz, float)
+    dm = np.asarray(dst_mean_xyz, float)
+    t = dm - R @ (sm * S)
+    return (src_xyz * S) @ R.T + t
+
+
+def pia_anchored_tz(cz_top_surf: dict,
+                    hcr_top_surf: dict,
+                    cz_pts_xyz: np.ndarray,
+                    sxy: float,
+                    sz: float,
+                    R: np.ndarray) -> np.ndarray:
+    """Returns a Z-translation that makes warped CZ-pia (at CZ centroid)
+    coincide with HCR-pia (at rotated warped x, y of CZ centroid)."""
+    cz_c_xy = cz_pts_xyz[:, :2].mean(0)
+    z_cz_top = surface_z(cz_top_surf, cz_c_xy[0], cz_c_xy[1])
+    # after rotation + scaling the CZ centroid's (x, y) flips sign, then we
+    # need to add the HCR centroid later — but the anchor here is just: the
+    # warped CZ pia should hit the HCR pia z at the warped centroid's (x, y).
+    # We compute the HCR top at the HCR-centroid approximation (using HCR-GFP
+    # centroid x, y).
+    return z_cz_top, None  # handled in full fit below
+
+
+# ---------- per-subject pipeline ----------
+def run_subject(sid: str) -> dict:
+    s = load_subject(sid)
+    cz_zyx, cz_ids = centroids_um(s, "cz")
+    hcr_gfp_zyx, _ = centroids_um(s, "hcr_gfp")
+
+    # ground truth anisotropic similarity from active landmarks
+    cz_lm_xyz, hc_lm_xyz = landmark_pairs_um(s, active_only=True)
+    gt_fit = fit_anisotropic_similarity(cz_lm_xyz, hc_lm_xyz)
+
+    # cached surface fits (all in µm on the HCR level-4 grid and CZ native)
+    cz_top = load_cached_surface(sid, "cz_iter08")
+    hcr_top = load_cached_surface(sid, "hcr_top_iter07")
+    hcr_bot = load_cached_surface(sid, "hcr_bottom_iter08")
+
+    with open(ROI_JSON) as f:
+        roi = json.load(f)
+    roi_rec = roi[sid]
+    sxy_roi = float(roi_rec.get("sxy_from_median") or roi_rec.get("sxy_median"))
+
+    # default warm-start
+    ws_zyx, info = default_warmstart_zyx(cz_zyx, hcr_gfp_zyx,
+                                         use_icp=True, multistart=True)
+
+    # coreg GT
+    ct = s.coreg_table.merge(s.cz_centroids, on="cz_id").merge(
+        s.hcr_centroids, on="hcr_id", suffixes=("_cz", "_hc"))
+    cz_gt_zyx = cz_px_to_um(ct[["z_px_cz", "y_px_cz", "x_px_cz"]].values, s)
+    hc_gt_zyx = hcr_px_to_um(ct[["z_px_hc", "y_px_hc", "x_px_hc"]].values, s)
+    cz_gt_xyz = cz_gt_zyx[:, [2, 1, 0]]
+    hc_gt_xyz = hc_gt_zyx[:, [2, 1, 0]]
+
+    # WARM-START residual at GT
+    cz_id_to_idx = {cid: i for i, cid in enumerate(cz_ids)}
+    idx = np.array([cz_id_to_idx[c] for c in ct["cz_id"].values])
+    ws_gt_xyz = ws_zyx[idx][:, [2, 1, 0]]
+    r_ws = ws_gt_xyz - hc_gt_xyz
+    d_ws = np.linalg.norm(r_ws, axis=1)
+
+    # LM-PERFECT residual
+    lm_gt_xyz = apply_aniso_fit(cz_gt_xyz, gt_fit)
+    r_lm = lm_gt_xyz - hc_gt_xyz
+    d_lm = np.linalg.norm(r_lm, axis=1)
+
+    # cortex thicknesses (median values from the fitted surfaces)
+    H_hcr = hcr_bot["median_col_z_um"] - hcr_top["median_col_z_um"]  # µm
+    # CZ max cortical depth in CZ coords = max CZ z - cz_top median
+    cz_cortex_span = float(cz_zyx[:, 0].max()) - cz_top["median_col_z_um"]
+
+    sz_surface = H_hcr / cz_cortex_span  # assumes CZ reaches HCR bottom
+    # de-scope: CZ often only covers top 80-90% of cortex → sz is an UPPER
+    # bound. A realistic prior sets sz = 0.85 * H_hcr / cz_cortex_span.
+    sz_surface_0p90 = 0.90 * H_hcr / cz_cortex_span
+
+    # Counter-factual transforms.  R is fixed 180°-about-Z.
+    # For translation we borrow the warm-start's XY anchor (ICP + grid search
+    # already found the sub-ROI's correct XY offset inside the HCR volume);
+    # our counter-factuals only override (sxy, sz, t_z).
+    R = rot180z()
+    cz_all_xyz = cz_zyx[:, [2, 1, 0]]
+    cz_mean_xyz = cz_all_xyz.mean(0)
+    ws_xyz_all = ws_zyx[:, [2, 1, 0]]
+    hcr_mean_xyz = ws_xyz_all.mean(0)
+
+    # Replace the HCR destination mean's Z with a pia-anchored estimate:
+    # put CZ-pia at HCR-pia.  CZ-pia (in CZ µm, at CZ centroid XY) → after
+    # rotation + isotropic XY scale, its (x,y) is hcr_mean_xy; its z under
+    # sz and t_z such that warped (cz_mean_z + (cz_top_z - cz_mean_z)*sz ...)
+    # aligns with hcr_top(hcr_mean_xy).  Cleaner: compute t_z so that the
+    # warped CZ-top at the CZ-centroid XY has Z = HCR-top at the corresponding
+    # HCR XY = hcr_mean_xy (after rotation flip, the HCR XY under the warp is
+    # just the HCR centroid).
+
+    def warp_xyz(src_xyz, sxy, sz, t_shift_z=0.0):
+        """Anisotropic similarity with per-axis scale + 180°-Z + pia-anchored t."""
+        S = np.array([sxy, sxy, sz], float)
+        # translation: t = dst_mean - R @ (src_mean * S)
+        t = hcr_mean_xyz - R @ (cz_mean_xyz * S)
+        # override z by pia-anchor:
+        #   warped CZ-top z at XY=cz_mean_xy should be hcr_top at XY=hcr_mean_xy
+        z_cz_top_at_cz = float(surface_z(cz_top, cz_mean_xyz[0], cz_mean_xyz[1]))
+        z_hcr_top_at_hcr = float(surface_z(hcr_top, hcr_mean_xyz[0], hcr_mean_xyz[1]))
+        warped_z = z_cz_top_at_cz * sz + t[2]
+        dz_pia_align = z_hcr_top_at_hcr - warped_z
+        t_new = t.copy()
+        t_new[2] = t[2] + dz_pia_align + t_shift_z
+        return (src_xyz * S) @ R.T + t_new
+
+    # (A) sxy from ROI-area, sz from ICP, t Z from pia anchor
+    sxy_A = sxy_roi
+    sz_A = info.get("icp_sz") if info.get("icp_sz") else float(gt_fit.scales[2])
+    A_xyz = warp_xyz(cz_gt_xyz, sxy_A, sz_A)
+    d_A = np.linalg.norm(A_xyz - hc_gt_xyz, axis=1)
+
+    # (B) sxy from ROI-area, sz from surface-cortex-thickness at 0.90 coverage, t Z pia anchor
+    sxy_B = sxy_roi
+    sz_B = sz_surface_0p90
+    B_xyz = warp_xyz(cz_gt_xyz, sxy_B, sz_B)
+    d_B = np.linalg.norm(B_xyz - hc_gt_xyz, axis=1)
+
+    # (C) sxy ROI-area, sz = GT (sanity check: best reachable with perfect sz + pia anchor)
+    sxy_C = sxy_roi
+    sz_C = float(gt_fit.scales[2])
+    C_xyz = warp_xyz(cz_gt_xyz, sxy_C, sz_C)
+    d_C = np.linalg.norm(C_xyz - hc_gt_xyz, axis=1)
+
+    summary = dict(
+        sid=sid,
+        gt_sxy=float(np.mean(gt_fit.scales[:2])),
+        gt_sz=float(gt_fit.scales[2]),
+        sxy_roi_area=sxy_roi,
+        icp_sxy=float(info.get("icp_sxy") or np.nan),
+        icp_sz=float(info.get("icp_sz") or np.nan),
+        sz_surface_100pct=sz_surface,
+        sz_surface_90pct=sz_surface_0p90,
+        H_hcr_thickness=H_hcr,
+        cz_cortex_span=cz_cortex_span,
+        cz_top_c=cz_top["median_col_z_um"],
+        hcr_top_c=hcr_top["median_col_z_um"],
+        hcr_bot_c=hcr_bot["median_col_z_um"],
+        n_gt=int(len(d_ws)),
+        warmstart_median=float(np.median(d_ws)),
+        warmstart_r20=float((d_ws < 20).mean()),
+        warmstart_r30=float((d_ws < 30).mean()),
+        warmstart_r50=float((d_ws < 50).mean()),
+        warmstart_median_per_axis_xyz=[
+            float(np.median(np.abs(r_ws[:, 0]))),
+            float(np.median(np.abs(r_ws[:, 1]))),
+            float(np.median(np.abs(r_ws[:, 2]))),
+        ],
+        lm_perfect_median=float(np.median(d_lm)),
+        lm_perfect_r20=float((d_lm < 20).mean()),
+        lm_perfect_r30=float((d_lm < 30).mean()),
+        A_median=float(np.median(d_A)),
+        A_r20=float((d_A < 20).mean()),
+        A_r30=float((d_A < 30).mean()),
+        B_median=float(np.median(d_B)),
+        B_r20=float((d_B < 20).mean()),
+        B_r30=float((d_B < 30).mean()),
+        C_median=float(np.median(d_C)),
+        C_r20=float((d_C < 20).mean()),
+        C_r30=float((d_C < 30).mean()),
+    )
+
+    # ---------- plots ----------
+    # 1) residual histogram: warm-start vs A vs B vs C vs LM-perfect
+    fig, ax = plt.subplots(figsize=(8, 4.5))
+    bins = np.arange(0, 301, 10)
+    for arr, lab, style in [
+        (d_ws, f"warm-start  med={np.median(d_ws):.0f}µm", dict(color="#d62728", lw=2)),
+        (d_A, f"A: sxy=ROI + pia-anchor Z  med={np.median(d_A):.0f}µm",
+         dict(color="#ff9896")),
+        (d_B, f"B: sxy=ROI + sz=surface90% + pia-anchor Z  med={np.median(d_B):.0f}µm",
+         dict(color="#ff7f0e")),
+        (d_C, f"C: sxy=ROI + sz=GT + pia-anchor Z  med={np.median(d_C):.0f}µm",
+         dict(color="#2ca02c")),
+        (d_lm, f"LM-perfect  med={np.median(d_lm):.0f}µm",
+         dict(color="#1f77b4", lw=2, ls="--")),
+    ]:
+        ax.hist(arr.clip(0, 300), bins=bins, histtype="step", label=lab,
+                density=True, **style)
+    ax.axvline(20, color="red", ls=":", alpha=0.5, label="20 µm bar")
+    ax.set_xlabel("GT-pair residual (µm)")
+    ax.set_ylabel("density")
+    ax.set_title(f"{sid}: per-GT residual under counter-factual transforms")
+    ax.legend(fontsize=8, loc="upper right")
+    plt.tight_layout()
+    plt.savefig(FIG / f"{sid}_residual_hist.png", dpi=130)
+    plt.close(fig)
+
+    # 2) bar chart: r@20 and r@30 across scenarios
+    scens = ["warm-start", "A (sxy)", "B (sxy+sz surf)", "C (sxy+sz GT)", "LM-perfect"]
+    r20 = [summary["warmstart_r20"], summary["A_r20"], summary["B_r20"],
+           summary["C_r20"], summary["lm_perfect_r20"]]
+    r30 = [summary["warmstart_r30"], summary["A_r30"], summary["B_r30"],
+           summary["C_r30"], summary["lm_perfect_r30"]]
+    x = np.arange(len(scens))
+    fig, ax = plt.subplots(figsize=(8, 4))
+    ax.bar(x - 0.2, r20, width=0.4, label="r@20 µm", color="#d62728")
+    ax.bar(x + 0.2, r30, width=0.4, label="r@30 µm", color="#1f77b4")
+    ax.set_xticks(x)
+    ax.set_xticklabels(scens, fontsize=9, rotation=10)
+    ax.set_ylabel("fraction of GT pairs")
+    ax.set_title(f"{sid}: recall at 20/30 µm across transform variants")
+    ax.legend()
+    ax.set_ylim(0, max(0.8, max(r30) * 1.1))
+    plt.tight_layout()
+    plt.savefig(FIG / f"{sid}_recall_bar.png", dpi=130)
+    plt.close(fig)
+
+    # 3) per-axis residual decomposition
+    fig, ax = plt.subplots(1, 3, figsize=(10, 3.5), sharey=True)
+    for ax_i, axis_name in zip(ax, ["x", "y", "z"]):
+        axis_idx = "xyz".index(axis_name)
+        for arr, lab, col in [
+            (r_ws[:, axis_idx], "warm-start", "#d62728"),
+            (A_xyz[:, axis_idx] - hc_gt_xyz[:, axis_idx], "A", "#ff9896"),
+            (B_xyz[:, axis_idx] - hc_gt_xyz[:, axis_idx], "B", "#ff7f0e"),
+            (C_xyz[:, axis_idx] - hc_gt_xyz[:, axis_idx], "C", "#2ca02c"),
+            (r_lm[:, axis_idx], "LM-perfect", "#1f77b4"),
+        ]:
+            ax_i.hist(arr, bins=np.linspace(-200, 200, 60), histtype="step",
+                      color=col, label=lab, density=True)
+        ax_i.set_xlabel(f"{axis_name} residual (µm)")
+        ax_i.set_title(f"{axis_name}")
+        ax_i.axvline(0, color="k", ls=":", alpha=0.4)
+    ax[0].set_ylabel("density")
+    ax[0].legend(fontsize=7, loc="upper left")
+    fig.suptitle(f"{sid}: per-axis residual decomposition")
+    plt.tight_layout()
+    plt.savefig(FIG / f"{sid}_per_axis_residual.png", dpi=130)
+    plt.close(fig)
+
+    return summary
+
+
+if __name__ == "__main__":
+    out = {}
+    for sid in SUBJECTS:
+        print("running", sid, "…")
+        out[sid] = run_subject(sid)
+    (OUT / "diagnostics.json").write_text(json.dumps(out, indent=2))
+    for k, v in out.items():
+        print()
+        print(f"=== {k} ===")
+        for kk, vv in v.items():
+            if isinstance(vv, float):
+                print(f"  {kk}: {vv:.3f}")
+            else:
+                print(f"  {kk}: {vv}")

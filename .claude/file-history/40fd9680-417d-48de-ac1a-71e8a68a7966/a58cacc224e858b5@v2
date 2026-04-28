@@ -1,0 +1,403 @@
+"""v2-S02 iter 7 — slab-wise side-view rigid-translation NCC sweep.
+
+Per-user direction (2026-04-27):
+  * Per sz, warp the **binarized CZ ROI segmentation** (not the raw CZ
+    image) with the surface-anchored locked prior.
+  * Take the central 500 µm of x as 5 contiguous slabs of 100 µm each.
+  * Per slab: x-MIP side view (z×y) of warped CZ binary AND raw HCR-488.
+  * Apply 2-D rigid translation (FFT matched-filter cross-correlation;
+    no rotation) of warped CZ binary onto HCR side view.
+  * Compute NCC under the **actual nonzero pixel mask of the warped CZ
+    binary** (after shift). The strict mask has constant CZ=1 → fall
+    back to the bbox-aware variant: dilate the mask by a few pixels so
+    the CZ side-view has 0/1 variance for Pearson.
+  * Aggregate mean ± SEM across the 5 slabs per sz; plot.
+  * Save per-(sz, slab) registration figures and a per-subject summary.
+
+Output:
+  iter7_slabs/iter7_<sid>_summary.png        — mean ± SEM NCC vs sz
+  iter7_slabs/iter7_<sid>_slab<i>_panels.png — per-slab registration grid
+  results_iter7.csv                           — long-format per-(sz, slab)
+  results_iter7_summary.csv                   — best sz per subject
+"""
+from __future__ import annotations
+
+import glob
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, "/root/capsule/code/full_automatic_execution_02/lib")
+sys.path.insert(0, "/root/capsule/code/dev_code")
+sys.path.insert(0, "/root/capsule/code/sessions/03c_onset_features/iterations")
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import tifffile
+from scipy.ndimage import binary_dilation, shift as ndi_shift
+from scipy.signal import fftconvolve
+
+from benchmark_data_loader import (  # noqa: E402
+    BENCHMARK_SUBJECTS, landmark_pairs_um, load_subject,
+)
+from benchmark_analysis import (  # noqa: E402
+    depth_from_surface, fit_anisotropic_similarity, load_hcr_volume,
+)
+from sz_estimator import HCR_LEVEL, _warp_cz_into_hcr_crop  # noqa: E402
+from locked_prior_warm import compute_locked_prior_warm_start  # noqa: E402
+from surface_registration_v2 import get_surface_registration  # noqa: E402
+from surfaces_iter08 import get_cz_surface_iter08  # noqa: E402
+
+OUT = Path(
+    "/root/capsule/code/full_automatic_execution_02/sessions/v2_S02_sz_image_sweep"
+)
+SLAB_DIR = OUT / "iter7_slabs"
+SLAB_DIR.mkdir(exist_ok=True)
+
+SZ_GRID = np.arange(1.5, 4.01, 0.10)
+SLAB_THICKNESS_UM = 100.0
+N_SLABS = 5
+TOTAL_X_UM = N_SLABS * SLAB_THICKNESS_UM  # 500
+
+# Translation search window (per axis)
+SHIFT_HALF_UM_Z = 60.0
+SHIFT_HALF_UM_Y = 40.0
+MASK_DILATION_PX = 5  # add ~5 µm ring around CZ binary for variance
+
+
+def find_cz_seg_tiff(sid: str) -> str:
+    pat = (
+        f"/data/multiplane-ophys_{sid}_*-segmentation_*/"
+        "channel_0_ref_0/segmentation_masks.tif"
+    )
+    paths = sorted(glob.glob(pat))
+    if not paths:
+        raise FileNotFoundError(f"No CZ seg TIFF for {sid}: {pat}")
+    return paths[-1]
+
+
+def load_cz_seg_binary(sid: str) -> np.ndarray:
+    """Load CZ ROI segmentation TIFF and binarize."""
+    p = find_cz_seg_tiff(sid)
+    seg = tifffile.imread(p)
+    return (seg > 0).astype(np.float32)
+
+
+def fft_translation(cz_side: np.ndarray, hcr_side: np.ndarray,
+                     half_z: int, half_y: int) -> tuple[int, int, float]:
+    """Find integer (dz, dy) that maximises matched-filter score
+    (sum HCR under shifted CZ binary). Returns (dz, dy, score)."""
+    # Cross-correlation via FFT: corr[k] = sum_p HCR(p) * CZ(p - k)
+    corr = fftconvolve(hcr_side, cz_side[::-1, ::-1], mode="same")
+    cz, cy = corr.shape[0] // 2, corr.shape[1] // 2
+    z0 = max(0, cz - half_z); z1 = min(corr.shape[0], cz + half_z + 1)
+    y0 = max(0, cy - half_y); y1 = min(corr.shape[1], cy + half_y + 1)
+    sub = corr[z0:z1, y0:y1]
+    j = np.unravel_index(np.argmax(sub), sub.shape)
+    dz = (z0 + j[0]) - cz
+    dy = (y0 + j[1]) - cy
+    return int(dz), int(dy), float(sub[j])
+
+
+def ncc_under_mask(a: np.ndarray, b: np.ndarray,
+                    mask: np.ndarray) -> tuple[float, int]:
+    """Pearson NCC over `mask` pixels. If `a` is constant in `mask`,
+    dilate mask by MASK_DILATION_PX to introduce 0/1 variance."""
+    if not mask.any():
+        return float("nan"), 0
+    a_in = a[mask]; b_in = b[mask]
+    if np.std(a_in) < 1e-12:
+        mask = binary_dilation(mask, iterations=MASK_DILATION_PX)
+        a_in = a[mask]; b_in = b[mask]
+    n = int(mask.sum())
+    if n < 100 or np.std(a_in) < 1e-12 or np.std(b_in) < 1e-12:
+        return float("nan"), n
+    return float(np.corrcoef(a_in.astype(np.float64),
+                              b_in.astype(np.float64))[0, 1]), n
+
+
+def evaluate_subject(s, sz_grid: np.ndarray):
+    sid = s.subject_id
+    lp = compute_locked_prior_warm_start(s)
+    reg = get_surface_registration(s)
+
+    cz_bin = load_cz_seg_binary(sid)
+    hcr_vol, hcr_xy_um, hcr_z_um = load_hcr_volume(
+        s, channel="488", level=HCR_LEVEL,
+    )
+    hcr_vol = np.asarray(hcr_vol, dtype=np.float32)
+
+    cz_xy_um = float(s.cz_xy_um)
+    cz_z_um = float(s.cz_z_um)
+    crop_bbox_px = tuple(reg["crop_bbox"])
+    y0, y1, x0, x1 = crop_bbox_px
+
+    # cz_mean_depth_um for the anchored-t_z formula (matches iter 6)
+    cz_surface = get_cz_surface_iter08(s)
+    cz_mean_xyz_um = lp.src_mean[[2, 1, 0]]
+    cz_mean_depth_um = float(
+        depth_from_surface(cz_mean_xyz_um[None, :], cz_surface)[0]
+    )
+    sz_lp = float(lp.scales[0])
+
+    # x-slab definition: 5 × 100 µm centred on lp.translation[2]
+    x_center_um = float(lp.translation[2])
+    slab_starts_um = (
+        x_center_um - TOTAL_X_UM / 2 + np.arange(N_SLABS) * SLAB_THICKNESS_UM
+    )
+    slab_ranges_um = [(s, s + SLAB_THICKNESS_UM) for s in slab_starts_um]
+
+    # z-extent for the warped CZ output (covers all sz in sweep)
+    cz_z_extent_um = cz_bin.shape[0] * cz_z_um
+    half_warped_z = max(sz_grid) * cz_z_extent_um / 2
+    z_lo_um = max(
+        0.0,
+        lp.translation[0] + (min(sz_grid) - sz_lp) * cz_mean_depth_um
+        - half_warped_z - 200.0,
+    )
+    z_hi_um = min(
+        hcr_vol.shape[0] * hcr_z_um,
+        lp.translation[0] + (max(sz_grid) - sz_lp) * cz_mean_depth_um
+        + half_warped_z + 200.0,
+    )
+    z0_idx = int(np.floor(z_lo_um / hcr_z_um))
+    z1_idx = int(np.ceil(z_hi_um / hcr_z_um))
+    hcr_target = hcr_vol[z0_idx:z1_idx, y0:y1, x0:x1].astype(np.float32)
+
+    # x-slab indices in the HCR-cropped frame (x=0 → x0*hcr_xy_um µm)
+    slab_idx_ranges = []
+    for xa_um, xb_um in slab_ranges_um:
+        xa_local = xa_um - x0 * hcr_xy_um
+        xb_local = xb_um - x0 * hcr_xy_um
+        xa_idx = max(0, int(np.floor(xa_local / hcr_xy_um)))
+        xb_idx = min(hcr_target.shape[2],
+                     int(np.ceil(xb_local / hcr_xy_um)))
+        slab_idx_ranges.append((xa_idx, xb_idx))
+
+    print(f"  {sid}: sz_lp={sz_lp:.3f}  cz_mean_depth={cz_mean_depth_um:.1f}µm  "
+          f"slab x∈[{slab_ranges_um[0][0]:.0f},{slab_ranges_um[-1][1]:.0f}]µm",
+          flush=True)
+
+    half_z_steps = int(round(SHIFT_HALF_UM_Z / hcr_z_um))
+    half_y_steps = int(round(SHIFT_HALF_UM_Y / hcr_xy_um))
+
+    rows = []
+    panels_cache = {i: [] for i in range(N_SLABS)}  # for figures
+
+    for sz in sz_grid:
+        tz_offset = (sz - sz_lp) * cz_mean_depth_um
+        warped_cz_bin = _warp_cz_into_hcr_crop(
+            cz_bin, lp, float(sz), tz_offset_um=tz_offset,
+            cz_xy_um=cz_xy_um, cz_z_um=cz_z_um,
+            hcr_xy_um=hcr_xy_um, hcr_z_um=hcr_z_um,
+            crop_bbox_px=crop_bbox_px,
+            z_lo_um=z_lo_um, z_hi_um=z_hi_um,
+        )
+
+        for slab_idx, (xa, xb) in enumerate(slab_idx_ranges):
+            if xb <= xa:
+                continue
+            cz_side = warped_cz_bin[:, :, xa:xb].max(axis=2)
+            hcr_side = hcr_target[:, :, xa:xb].max(axis=2)
+
+            # Re-binarize after warp (linear interp may have softened edges)
+            cz_side_bin = (cz_side > 0.5).astype(np.float32)
+
+            if cz_side_bin.sum() < 50:
+                rows.append(dict(
+                    subject_id=sid, sz=float(sz), slab_idx=slab_idx,
+                    slab_x_um_lo=slab_ranges_um[slab_idx][0],
+                    slab_x_um_hi=slab_ranges_um[slab_idx][1],
+                    dz_um=0.0, dy_um=0.0, ncc_after=float("nan"),
+                    mask_size_px=int(cz_side_bin.sum()),
+                ))
+                continue
+
+            dz_pix, dy_pix, mf_score = fft_translation(
+                cz_side_bin, hcr_side, half_z_steps, half_y_steps,
+            )
+            cz_shifted = ndi_shift(
+                cz_side_bin, (dz_pix, dy_pix), order=0, cval=0.0,
+            )
+            mask = cz_shifted > 0.5
+            ncc, mask_n = ncc_under_mask(cz_shifted, hcr_side, mask)
+
+            rows.append(dict(
+                subject_id=sid, sz=float(sz), slab_idx=slab_idx,
+                slab_x_um_lo=slab_ranges_um[slab_idx][0],
+                slab_x_um_hi=slab_ranges_um[slab_idx][1],
+                dz_um=float(dz_pix * hcr_z_um),
+                dy_um=float(dy_pix * hcr_xy_um),
+                ncc_after=float(ncc),
+                mask_size_px=int(mask_n),
+            ))
+
+            # Cache panel for figures (only at a few sz to keep it manageable)
+            if abs(sz - 1.50) < 0.005 or abs(sz - 2.00) < 0.005 or \
+               abs(sz - 2.50) < 0.005 or abs(sz - 3.00) < 0.005 or \
+               abs(sz - 3.50) < 0.005 or abs(sz - 4.00) < 0.005:
+                panels_cache[slab_idx].append({
+                    "sz": float(sz),
+                    "cz_side": cz_side_bin,
+                    "hcr_side": hcr_side,
+                    "cz_shifted": cz_shifted,
+                    "dz_um": float(dz_pix * hcr_z_um),
+                    "dy_um": float(dy_pix * hcr_xy_um),
+                    "ncc": float(ncc),
+                    "z_lo_um": z_lo_um,
+                    "z_hi_um": z_hi_um,
+                })
+
+    df = pd.DataFrame(rows)
+    return df, panels_cache, dict(
+        sz_lp=sz_lp, cz_mean_depth_um=cz_mean_depth_um,
+        slab_ranges_um=slab_ranges_um, hcr_xy_um=hcr_xy_um, hcr_z_um=hcr_z_um,
+        z_lo_um=z_lo_um, z_hi_um=z_hi_um,
+    )
+
+
+def save_summary_plot(df_subject, sid, sz_lp, sz_gt, out_path):
+    g = df_subject.groupby("sz")["ncc_after"]
+    means = g.mean()
+    sems = g.sem()
+    fig, ax = plt.subplots(1, 1, figsize=(7, 4.2))
+    ax.errorbar(means.index, means.values, yerr=sems.values,
+                fmt="o-", capsize=3, label="mean ± SEM (5 slabs)")
+    ax.axvline(sz_lp, color="grey", linestyle=":", label=f"sz_lp={sz_lp:.2f}")
+    ax.axvline(sz_gt, color="red", linestyle="--", label=f"sz_gt={sz_gt:.2f}")
+    sz_peak = float(means.idxmax())
+    ax.axvline(sz_peak, color="green", linestyle="-", alpha=0.6,
+               label=f"sz_peak={sz_peak:.2f}")
+    ax.set_xlabel("sz")
+    ax.set_ylabel("NCC after rigid translation (under CZ-binary mask)")
+    ax.set_title(f"{sid}  iter 7 — slab-wise side-view rigid-NCC sweep")
+    ax.legend(loc="best", fontsize=9)
+    ax.grid(alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=110)
+    plt.close(fig)
+
+
+def save_per_slab_panels(panels_cache, sid, slab_ranges_um,
+                          hcr_xy_um, hcr_z_um, z_lo_um, z_hi_um, out_dir):
+    """Save one figure per slab showing registration at selected sz values."""
+    for slab_idx, panels in panels_cache.items():
+        if not panels:
+            continue
+        n = len(panels)
+        fig, axes = plt.subplots(3, n, figsize=(2.7 * n, 8.5),
+                                  constrained_layout=True)
+        if n == 1:
+            axes = axes.reshape(3, 1)
+        xa, xb = slab_ranges_um[slab_idx]
+        fig.suptitle(
+            f"{sid}  slab {slab_idx}  x∈[{xa:.0f},{xb:.0f}] µm  "
+            f"(top: warped CZ binary; mid: HCR-488; bot: overlay after rigid)",
+            fontsize=10,
+        )
+        for j, p in enumerate(panels):
+            extent = [0, p["hcr_side"].shape[1] * hcr_xy_um, z_hi_um, z_lo_um]
+            cz_hi = max(1.0, float(np.percentile(p["cz_side"][p["cz_side"] > 0], 95))
+                        if p["cz_side"].any() else 1.0)
+            hcr_hi = float(np.percentile(p["hcr_side"], 99.5))
+            ax = axes[0, j]
+            ax.imshow(p["cz_side"], cmap="magma", vmin=0, vmax=cz_hi,
+                      extent=extent, aspect="auto")
+            ax.set_title(f"sz={p['sz']:.2f}  shift=({p['dz_um']:+.0f},"
+                         f"{p['dy_um']:+.0f})µm  NCC={p['ncc']:.3f}",
+                         fontsize=8)
+            if j == 0:
+                ax.set_ylabel("HCR z (µm)")
+            ax = axes[1, j]
+            ax.imshow(p["hcr_side"], cmap="gray", vmin=0, vmax=hcr_hi,
+                      extent=extent, aspect="auto")
+            if j == 0:
+                ax.set_ylabel("HCR z (µm)")
+            ax = axes[2, j]
+            rgb = np.zeros((*p["hcr_side"].shape, 3), dtype=float)
+            h = np.clip(p["hcr_side"] / max(hcr_hi, 1e-6), 0, 1)
+            rgb[..., 0] = h; rgb[..., 1] = h; rgb[..., 2] = h
+            c = np.clip(p["cz_shifted"], 0, 1)
+            rgb[..., 0] = np.maximum(rgb[..., 0], c)
+            rgb[..., 1] = rgb[..., 1] * (1 - c * 0.7)
+            rgb[..., 2] = rgb[..., 2] * (1 - c * 0.7)
+            ax.imshow(rgb, extent=extent, aspect="auto")
+            if j == 0:
+                ax.set_ylabel("HCR z (µm)")
+                ax.set_xlabel("HCR y (µm)")
+
+        out_path = out_dir / f"iter7_{sid}_slab{slab_idx}_panels.png"
+        fig.savefig(out_path, dpi=110)
+        plt.close(fig)
+
+
+def main():
+    all_rows = []
+    summary_rows = []
+    for sid in BENCHMARK_SUBJECTS:
+        print(f"\n=== {sid} ===", flush=True)
+        s = load_subject(sid)
+        cz_xyz, hcr_xyz = landmark_pairs_um(s)
+        fit = fit_anisotropic_similarity(
+            cz_xyz[:, [2, 1, 0]], hcr_xyz[:, [2, 1, 0]],
+        )
+        sz_gt = float(fit.scales[0])
+
+        t0 = time.time()
+        df_sub, panels_cache, info = evaluate_subject(s, SZ_GRID)
+        elapsed = time.time() - t0
+
+        all_rows.append(df_sub)
+        # per-subject summary plot + per-slab panel figures
+        save_summary_plot(
+            df_sub, sid, info["sz_lp"], sz_gt,
+            SLAB_DIR / f"iter7_{sid}_summary.png",
+        )
+        save_per_slab_panels(
+            panels_cache, sid, info["slab_ranges_um"],
+            info["hcr_xy_um"], info["hcr_z_um"],
+            info["z_lo_um"], info["z_hi_um"], SLAB_DIR,
+        )
+
+        means = df_sub.groupby("sz")["ncc_after"].mean()
+        sems = df_sub.groupby("sz")["ncc_after"].sem()
+        sz_peak = float(means.idxmax())
+        ncc_peak = float(means.max())
+        ncc_med = float(means.median())
+        peak_ratio = ncc_peak / max(ncc_med, 1e-9)
+        sem_at_peak = float(sems.loc[sz_peak])
+
+        summary_rows.append(dict(
+            subject_id=sid, sz_gt=sz_gt, sz_lp=info["sz_lp"],
+            sz_peak=sz_peak, ncc_peak=ncc_peak, ncc_med=ncc_med,
+            peak_ratio=peak_ratio, sem_at_peak=sem_at_peak,
+            sz_err_vs_gt=sz_peak - sz_gt,
+            cz_mean_depth_um=info["cz_mean_depth_um"],
+            runtime_s=round(elapsed, 1),
+        ))
+        print(
+            f"  sz_lp={info['sz_lp']:.3f}  sz_peak={sz_peak:.2f}  "
+            f"sz_gt={sz_gt:.3f}  err={sz_peak-sz_gt:+.3f}  "
+            f"NCC_peak={ncc_peak:.3f}±{sem_at_peak:.3f}  ({elapsed:.0f}s)",
+            flush=True,
+        )
+
+    df_all = pd.concat(all_rows, ignore_index=True)
+    df_all.to_csv(OUT / "results_iter7.csv", index=False)
+    df_sum = pd.DataFrame(summary_rows)
+    df_sum.to_csv(OUT / "results_iter7_summary.csv", index=False)
+    print("\n=== iter 7 (slab-rigid-NCC) summary ===")
+    print(df_sum[[
+        "subject_id", "sz_gt", "sz_lp", "sz_peak", "sz_err_vs_gt",
+        "ncc_peak", "sem_at_peak", "peak_ratio", "runtime_s",
+    ]].to_string(index=False))
+    print(f"\nmean abs err: {df_sum['sz_err_vs_gt'].abs().mean():.3f}")
+    print(f"within ±0.30 GT: "
+          f"{(df_sum['sz_err_vs_gt'].abs() <= 0.30).sum()}/{len(df_sum)}")
+
+
+if __name__ == "__main__":
+    main()

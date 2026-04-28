@@ -1,7 +1,0 @@
-[788406 R=8.0µm] z-stack (450, 512, 512) in 1.0s
-  edt+indices: 34.4s
-  radius+intensity cap: 4.2s  thr=975
-  cells_labeled: 923 / 932
-  vol_px: median=3349  p10=2238  p90=3485
-  vol_um3: median=2038  p10=1362  p90=2120
-  wrote /root/capsule/code/full_automatic_execution_01/sessions/48_cz_watershed/cz_labels_vor_788406_R8.tif

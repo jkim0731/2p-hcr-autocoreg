@@ -1,0 +1,998 @@
+# Grand Plan — Automated CZStack ↔ HCR Coregistration (Revised, 2026-04-18)
+
+## 0. Purpose and how to use this doc
+
+**Purpose.** This is the candidate-ordered roadmap that replaces the manual BigWarp workflow with an automatic pipeline. Each candidate is a small, well-scoped unit of work that a future session can pick up, implement, and validate. Candidates are ordered by **simplicity × likely success rate**, not by pipeline stage — so you can land simple high-value pieces first and only reach for the heavier machinery if the simple ones are insufficient.
+
+**What changed in this revision (2026-04-18).** The doc is restructured around the three input modes the user asked for — **point cloud**, **ROI mask**, and **raw image** (and any combination of the three). Four big edits:
+
+1. **Three input modes are first-class.** Each candidate is now tagged with the input mode(s) it consumes. The method catalog (Section 4) is organized by input mode × method family so a session picking up a new method can see its peers immediately.
+2. **R1 is no longer a prerequisite.** R1 is kept as an *optional* utility (minimal `(R, t)` from pia-plane + 180° prior is cheap and lands 3/6 subjects within 100 µm origin). R1's scale search has been demoted — every candidate must be self-contained in its own coarse localization, not rely on R1 delivering scale. Candidates that benefit from R1's `(R, t)` warm-start are marked as such in their "Inputs" line, but none list R1 as a required dependency.
+3. **Q-series classifier is no longer upfront.** Default confidence for accept/reject is each method's **intrinsic** score (TEASER inlier certificate, spectral eigenvector entry, GW coupling mass, GNN matchability head, etc.). GUI review (G1) is the shared human-in-the-loop for every candidate. A lightweight classifier (QF-series) is an optional downstream fallback, introduced only if benchmark validation shows intrinsic confidences cannot meet the precision target.
+4. **GNN-based methods are a first-class favored family.** A dedicated G-series details explicit hand-engineered per-cell features (k-NN angles, depth-from-surface rank, local density, inter-ROI distance ranks, ROI volume, GFP+ intensity), graph construction, and training regime.
+
+**Important consideration.** The resulting product must generalize. Do not infer parameters from the existing 6 benchmark subjects except when explicitly noted. Assume the feature set and GFP+ definition can change in the future.
+
+**How to use this doc.**
+- Pick the top `not_started` candidate in the *Recommended session order* (Section 9) below.
+- Open a new session directory `sessions/NN_<candidate_id>_<short_name>/`, log work in `log.md`, summarise in a numbered notebook.
+- Update the Status + Findings line of that candidate when the session closes. Add the session directory to the ledger (Section 11).
+- The doc is a **living file** — edit it in place; do not fork.
+
+**Status legend.** `not_started` · `in_progress` · `validated` · `abandoned` · `superseded`.
+
+**Uniform candidate schema.** Every candidate block has: **Goal / Inputs / Method sketch / Outputs / Success metric / Dependencies / Estimated effort / Tier / Status**.
+
+**CLAUDE.md dev rule (binding).** Do **not** use benchmark data to design algorithms; only for validation afterwards. This applies to every candidate below.
+
+---
+
+## 1. Foundations already available — reuse, do not re-implement
+
+### 1.1 Point-cloud and centroid foundations
+
+- **Data loader** — `code/dev_code/benchmark_data_loader.py::load_subject()` (line 549). Returns a `SubjectData` (line 71) with:
+  - `cz_centroids` (native CZ-pixel `[z, y, x]`),
+  - `hcr_centroids` (native level-2 HCR-pixel `[z, y, x]`),
+  - `hcr_gfp_df` (threshold applied: default `peakgauss3_density_p0.1` for spot subjects, `peakgauss3_mean_bg_p1` for intensity-only subjects),
+  - resolution metadata (`cz_xy_um`, `cz_z_um`, `hcr_xy_um`, `hcr_z_um`),
+  - `coreg_table` (`[cz_id, hcr_id]`; validation-only),
+  - `landmarks_qced` (includes `active=true` rows; validation-only).
+- **Unit conversions** — `benchmark_data_loader.cz_px_to_um`, `hcr_px_to_um`, `landmark_pairs_um`.
+- **Pia surfaces**:
+  - **HCR (default)**: `benchmark_analysis.py::estimate_pia_surface_quantile_ceiling()` (line 677). Validated on all 6 benchmark subjects; `above_frac ≤ 0.08 %`, `onset_depth 2.5–7.5 µm`.
+  - **CZ (default)**: `benchmark_analysis.py::estimate_pia_surface_image_ceiling()` (line 496). Roughness ≤ 12 µm, tilt ≤ 3° across subjects.
+- **Depth-from-surface**: `benchmark_analysis.py::depth_from_surface()` (line 952) — robust axial coordinate. `depth_profile()` (line 974) — histogram.
+- **Anisotropic affine fit**: `benchmark_analysis.py::fit_anisotropic_similarity()` (line 92) — Procrustes rotation + per-axis scale + translation. Also exposes a `ProcrustesFit` dataclass.
+- **k-NN distance statistics**: `benchmark_analysis.py::knn_distance_stats()` (line 993).
+- **Greedy / assignment matchers** — `code/manual workflow/manual_coreg_utils.py`:
+  - `choose_max_count_nearest_neighbor(est, hcr_df, feature='density', k=5)` (line 28),
+  - `one_to_one_matching(est, hcr_df)` (line 130),
+  - `get_ids_from_landmarks(df)` (line 6).
+- **Landmark-set hygiene**: `code/manual workflow/landmark_filtering.py::grid_sample_landmarks()` (line 79).
+- **TPS**: `scipy.interpolate.Rbf(..., function='thin_plate')`, fit per-axis (same convention as manual step 2/3).
+
+### 1.2 Image / mask foundations
+
+- **CZ z-stack loader**: `benchmark_analysis.py::load_cz_y_slab()` (line 1009) — reads `*reg-dim-swapped.ome.tif` or `*zstack.tif` from `coreg_dir`. For full-volume loads the helper opens the file with `tifffile` and returns a `(Z, Y, X)` ndarray.
+- **CZ segmentation mask path**: `*_seg-mask-outline.tif` in `coreg_dir`; same voxel grid as the CZ z-stack.
+- **HCR fused zarr loader**: `benchmark_analysis.py::load_hcr_volume(s, channel, level)` (line 1066). Channel 488 at level 2 is the GFP channel at the same resolution as `cell_centroids.npy`. Level 4 is the recommended default for whole-volume coarse work.
+- **HCR combined-channel loader**: `benchmark_analysis.py::load_hcr_combined(s, channels, level)` (line 1088) — background-subtract + 99.9-percentile normalise per channel, then sum. Emphasises tissue edge.
+- **HCR Y-slab MIP for pia visualisation**: `benchmark_analysis.py::load_hcr_y_slab()` (line 1125).
+- **HCR cell-body segmentation mask (raw zarr)**: path `{hcr_dir}/cell_body_segmentation/segmentation_mask.zarr` (confirmed present for 788406; see `code/docs/01 Data Description.md` line 52; no Python loader yet — see Section 3, F2).
+- **Per-cell volume / bbox (HCR)**: `{hcr_dir}/cell_body_segmentation/metrics.pickle`. Parsed inside `_aggregate_spots_from_hcr` at `benchmark_data_loader.py:235`.
+- **Density rendering and FFT NCC (2D)**: `r1_revised.py::_density_map_2d` (line 333), `r1_revised.py::_fast_ncc_2d` (line 345). The NCC helper is template-over-image with a pre-computed integral-image denominator and scipy.signal.fftconvolve numerator; directly reusable for mask-NCC modes.
+
+### 1.3 Coarse-alignment utility (R1, demoted)
+
+- **R1 (optional utility)**: `code/dev_code/r1_revised.py::coarse_align_revised(cz_xyz_um, hcr_gfp_xyz_um, cz_surface, hcr_surface)` (line 529) returns a `CoarseAffineV2` (line 56) with fields `R`, `scales`, `scale_known`, `scale_confidence`, `translation`, `src_mean`, `rotation_angle_z_deg`, `coverage_regime`. `apply_coarse_affine(xyz, fit)` at line 76 is the canonical transform.
+- Current behaviour on benchmark: **minimal `(R, t)` emitted on all 6 subjects; 3/6 pass origin ≤ 100 µm, 3/6 pass rotation ±5°; scale extension suppressed on every subject** (density-map NCC admits geometrically-wrong peaks at 10–16 % GFP+ fractions). See `sessions/05_R1_revised/` for benchmarks.
+- **Role in this revision:** R1 is an optional pre-conditioner that callers may use to warm-start a candidate method. It is **not** a required dependency of any candidate in this plan. R1's scale outputs are ignored by the catalog; callers should treat R1 as producing `(R, t)` only.
+
+### 1.4 Benchmark priors — validation reference only
+
+These numbers exist solely to check algorithm outputs against known benchmark statistics. **They must not seed any algorithm.**
+
+- XY expansion ≈ 1.77× (range 1.64–1.92×).
+- Z expansion ≈ 2.83× (range 2.13–3.58×). Z:XY anisotropy ≈ 1.3–2.1×.
+- In-plane rotation ≈ 180° on all 6 subjects. *(Exception: the 180° rotation is treated as a structural imaging-geometry prior — it is a constant of the acquisition setup, not a population statistic. Any candidate may consume `rotation_deg_z = 180` as input.)*
+- 1-NN cell spacing ≈ 20 µm; 5-NN ≈ 33–37 µm.
+- Post-affine landmark residual 16–43 µm RMS — the nonrigid warp scale TPS must absorb.
+- Match rate 34–86 % across subjects; 99 % outlier ratio inherent.
+
+### 1.5 Ground-truth sources for validation / training
+
+1. **`coreg_table.csv`** — canonical gold standard per subject (one-to-one `[czstack_id, hcr_id]`, produced by manual workflow step 4).
+2. **`landmarks_*_qced.csv`** rows with `active=true` — richer superset (includes intermediate QC'd pairs).
+3. **GUI-generated corrections** (from G1 onward) — accept/reject/adjust events logged to `qc_actions.jsonl`; grows over time. **This is the only ground-truth source that grows during development.**
+
+---
+
+## 2. Input modes (first-class)
+
+Every candidate in Section 4 declares which input mode(s) it consumes.
+
+| Mode | Source | Coordinate space | Typical size |
+|------|--------|------------------|--------------|
+| **P — Point cloud** | `cz_centroids`, `hcr_gfp_df` (subset of `hcr_centroids`) filtered by GFP+ | Physical µm | 785–1016 CZ cells, 25 k–78 k HCR GFP+ |
+| **M — ROI mask** | CZ `*_seg-mask-outline.tif`; HCR `cell_body_segmentation/segmentation_mask.zarr` filtered by GFP+ IDs | Native pixel → resampled to shared µm grid | CZ 512×512×~450; HCR up to 2.3 mm × 2.3 mm × 1.3 mm |
+| **I — Raw image** | CZ z-stack tif; HCR channel-488 zarr (also 405/561/594 for tissue edge) | Native pixel → resampled to shared µm grid | as above |
+| **C — Combined** | any union of P, M, I (e.g. image → CNN features → graph) | depends on constituent modes | depends on constituent modes |
+
+**Why all three.** Points are the current basis; they miss per-cell morphology and between-cell tissue context. Masks add exact cell-volume overlap (Dice/Jaccard) and preserve segmentation-noise structure. Images recover the full cortical-layer profile (for Z-localization) and per-cell intensity texture. Combined candidates use the higher-level images as a scene prior (e.g. image-coarse → mask/centroid refinement; image → CNN features → GNN).
+
+**Shared assumption.** The 180° XY rotation prior (structural) and the "CZ ≈ HCR XY center" prior (user geometric prior, i.e. CZ ⊂ HCR in XY) are available to every candidate. Anything else (scale, tilt, axial offset, nonrigid) must be recovered from the data.
+
+---
+
+## 3. Shared infrastructure to build (F-series — foundation helpers)
+
+These helpers are *not* registration methods. They are the reusable plumbing each Section-4 candidate will call. Every F-candidate follows the uniform schema.
+
+### F1 — HCR segmentation-mask 3D loader (GFP+ restricted)  _(tier 1)_
+
+- **Goal.** Produce, at a requested resolution level, an HCR-native-orientation 3D mask where voxel value ∈ {0, `hcr_id`} limited to GFP+ cell IDs, for use by M-series (mask) and C-series (combined).
+- **Inputs.** `SubjectData`, `level` (int, default 2), `gfp_ids` (array of `hcr_id`).
+- **Method sketch.**
+  1. Open `{hcr_dir}/cell_body_segmentation/segmentation_mask.zarr` via `zarr.open(..., mode='r')`. Confirm axis order (cellpose-pipeline convention is `(1, 1, Z, Y, X)` like the fused zarr, but mask may be `(Z, Y, X)` — F1 must detect and normalise).
+  2. At `level`, load the volume into memory (level 2 is ~0.988 µm XY; a 2.3 mm × 2.3 mm × 1.3 mm cube is ~3.1 GB at `uint32`; prefer `level=3` or `level=4` for full loads, or chunked load + crop).
+  3. Build a lookup `keep[label] = label if label in gfp_ids else 0` and apply via `np.take` on a sparse label list (much faster than bool mask for sparse labels). Use `numpy.zeros_like` allocation only when necessary.
+  4. Return `(mask_zyx, xy_um, z_um, axis_order)` with the same axis-order normalisation the centroid loader already uses.
+- **Outputs.** An `(Z, Y, X)` int32 array (0 = background, otherwise `hcr_id`), plus resolution metadata.
+- **Success metric.** On 788406 at level 4, loaded mask's nonzero voxel count within 5 % of the sum of GFP+ cell volumes from `metrics.pickle`; nonzero region overlaps `cell_centroids.npy`'s GFP+ subset.
+- **Dependencies.** Foundation 1.1 (`load_subject`, `hcr_level_resolution`).
+- **Estimated effort.** 0.5 session.
+- **Tier.** 1 (gating for M-series and C-series).
+- **Status.** `not_started`.
+
+### F2 — CZ segmentation-mask 3D loader  _(tier 1)_
+
+- **Goal.** Counterpart to F1 on the CZ side — load `*_seg-mask-outline.tif` as a labelled 3D volume in CZ native orientation.
+- **Inputs.** `SubjectData`, optional `keep_ids` (default: all CZ IDs).
+- **Method sketch.**
+  1. Locate `{coreg_dir}/*_seg-mask-outline.tif`; read via `tifffile`; squeeze leading singletons to `(Z, Y, X)` using the same logic `load_cz_y_slab` uses.
+  2. Confirm the mask is label-valued (not outline-only). If only outlines, flood-fill each outline to recover cell interiors (scipy.ndimage.label).
+  3. Apply `keep_ids` filter if provided.
+  4. Return `(mask_zyx, cz_xy_um, cz_z_um)`.
+- **Outputs.** int32 `(Z, Y, X)` in CZ pixel grid.
+- **Success metric.** Nonzero voxel count matches expected CZ ROI volume distribution (~1000 cells × typical volume); IDs align with `cz_centroids`'s `cz_id` column.
+- **Dependencies.** Foundation 1.1.
+- **Estimated effort.** 0.5 session.
+- **Tier.** 1.
+- **Status.** `not_started`.
+
+### F3 — Cross-resolution 3D crop / resample given an affine  _(tier 1)_
+
+- **Goal.** Given an affine `(R, t, S)` (or partial — Sec. 1.3 `CoarseAffineV2`), crop a sub-volume from HCR corresponding to the CZ's physical extent, and resample CZ and HCR sub-volumes onto a common voxel grid at user-specified spacing.
+- **Inputs.** CZ and HCR 3D arrays (image or mask), affine `CoarseAffineV2` (or literal `(R, t, S)`), target voxel spacing in µm (isotropic, e.g. 4.0 µm).
+- **Method sketch.**
+  1. Build CZ physical-coordinate bbox; apply affine to get HCR physical bbox.
+  2. Allocate an isotropic target grid of size `(D, H, W)` covering both.
+  3. Use `scipy.ndimage.affine_transform` with per-modality affines mapping target-voxel → native-voxel, resample with `order=1` (image) or `order=0` (mask).
+  4. Return `(cz_resampled, hcr_resampled, target_spacing_um, origin_um)`.
+- **Outputs.** Two aligned 3D arrays at the shared voxel spacing.
+- **Success metric.** Correct overlap verified on a synthetic known-affine test (produce CZ by cropping/warping HCR, run F3, confirm CZ cropped back matches the synthetic CZ within interpolation error).
+- **Dependencies.** F1, F2 (for mask version); Foundation 1.2 (for image version).
+- **Estimated effort.** 1 session.
+- **Tier.** 1 (needed by every M- and I-series candidate).
+- **Status.** `not_started`.
+
+### F4 — Volumetric mask-overlap scorer  _(tier 1)_
+
+- **Goal.** Compute Dice, Jaccard, and mask-NCC between a CZ mask and an HCR mask at a specified affine.
+- **Inputs.** `cz_mask`, `hcr_mask` (from F1/F2), affine (from R1 or a search), plus an optional binary/label mode.
+- **Method sketch.**
+  1. Call F3 to resample onto a shared grid.
+  2. Binarise (GFP+ present vs. absent), or keep label-valued for IoU-per-cell.
+  3. Compute Dice `2|A∩B|/(|A|+|B|)`, Jaccard `|A∩B|/|A∪B|`.
+  4. Compute mask-NCC: treat each mask as a real-valued scalar volume (presence = 1, absence = 0) and call a 3D generalisation of `_fast_ncc_2d` — or more simply, `scipy.signal.fftconvolve` on the two float volumes with the template as the smaller cube. Return the peak NCC and its offset.
+  5. Optional signed-distance-field (SDF) scorer: compute SDF of each mask via `scipy.ndimage.distance_transform_edt`, then compute `mean(-sdf_hcr * sdf_cz_resampled)` over the overlap region (lower is better). Useful for sub-voxel alignment.
+- **Outputs.** `{dice, jaccard, ncc_peak, ncc_offset_um, sdf_cost}`.
+- **Success metric.** On a known-affine synthetic test, Dice ≥ 0.9 at ground-truth affine; NCC peak at correct offset within 1 voxel.
+- **Dependencies.** F1–F3.
+- **Estimated effort.** 1 session.
+- **Tier.** 1.
+- **Status.** `not_started`.
+
+### F5 — Image-to-image MI / NCC wrapper (SimpleITK)  _(tier 2)_
+
+- **Goal.** A thin wrapper over SimpleITK's mutual-information and NCC metrics suitable for anisotropic voxel spacing. Used by I-series.
+- **Inputs.** `cz_image`, `hcr_image`, voxel-spacing in each modality, initial affine.
+- **Method sketch.**
+  1. Wrap each array as a `SimpleITK.Image` with its real voxel spacing.
+  2. Use `ImageRegistrationMethod.SetMetricAsMattesMutualInformation(numberOfHistogramBins=50)` or `SetMetricAsCorrelation`.
+  3. Run a coarse-to-fine pyramid optimizer (regular-step gradient descent on the affine parameters, then optionally a B-spline deformable stage with `SetMetricAsMattesMutualInformation` and `BSplineTransformInitializer`).
+  4. Return the composed transform and the final metric value.
+- **Outputs.** `(affine_rigid_plus_scale, bspline_deformable, metric)`.
+- **Success metric.** On CZ/HCR pair with known manually-verified affine, recovers rotation within 2°, translation within 20 µm, anisotropic scales within 5 %.
+- **Dependencies.** Install `SimpleITK` (or `elastix`); Foundation 1.2.
+- **Estimated effort.** 1.5 sessions.
+- **Tier.** 2 (blocks I-series deformable candidates, but not the simpler I1 NCC variant).
+- **Status.** `not_started`.
+
+### F6 — Per-cell hand-crafted feature extractor (GNN input)  _(tier 1)_
+
+- **Goal.** Compute, for each cell in each modality, a fixed-length feature vector to be used by G-series and as covariates for P-series candidates.
+- **Inputs.** Centroids (µm), surface fit, GFP+ table, optional HCR `metrics.pickle` (volume), optional CZ mask volume (for CZ per-cell size).
+- **Method sketch.** For each cell compute:
+  1. **k-NN angles (k = 6):** sorted angles (azimuth, elevation) of the 6 nearest neighbours relative to the cell's local frame. Local frame is defined by (a) the pia normal estimated locally (or globally per modality) as the "up" axis, and (b) an arbitrary fixed XY axis (rotationally invariant features use the sorted sequence, so the XY axis choice doesn't matter after sorting).
+  2. **Depth-from-surface rank (local):** within a local XY neighbourhood (radius 50 µm), rank the cell by depth from pia surface → normalise to `[0, 1]`. Separate ranks based on (a) GFP+ subset and (b) full cell population.
+  3. **Local density:** number of cells within 30 µm; number of GFP+ cells within 30 µm; ratio.
+  4. **Inter-ROI distance ranks:** sorted distances to 1st, 2nd, ..., 10th nearest neighbour, z-scored using the modality's global 1-NN spacing distribution. (This is the primary scale-insensitive shape feature.)
+  5. **ROI volume ratio:** cell volume divided by local-neighbourhood median volume (for HCR from `metrics.pickle['volume']`; for CZ from the mask volume at F2).
+  6. **GFP+ intensity / density:** `spot count`, `density`, `log1p(count)`, `intensity_mean - bg`. Missing values → NaN (consumer's job to mask).
+  7. **Depth-from-surface (µm, absolute):** raw `depth_from_surface` value — *not* used as a direct matching cue because it is scale-sensitive, but stored so the caller can drop it from invariant descriptors without re-extracting.
+  8. **Layer histogram ID (optional):** 8-bin histogram of local depth-from-surface relative to the modality's median cortical thickness → a coarse cortical-layer signature per cell.
+- **Outputs.** `(N, D)` feature matrix per modality (D ≈ 40); a sidecar dict describing each feature name.
+- **Success metric.** Sanity: feature vectors are rotation-invariant in XY (after the 180° prior is applied) and scale-insensitive for all features except raw depth/volume. Manual `coreg_table` pairs have per-feature cosine similarity distribution ≥ 0.6 median; unmatched pairs ≤ 0.2.
+- **Dependencies.** Foundation 1.1–1.2, F1/F2 for volume features.
+- **Estimated effort.** 1–1.5 sessions.
+- **Tier.** 1 (blocks G-series and is reused by P-series matchers A1/A3/A5).
+- **Status.** `not_started`.
+
+### F7 — Shared confidence-calibration utility  _(tier 2)_
+
+- **Goal.** Given a candidate's intrinsic score (TEASER inlier count, eigenvector entry, coupling mass, matchability, dustbin, etc.), fit an isotonic or sigmoid calibration to ground-truth labels from `coreg_table.csv` for reporting and for threshold setting at the GUI stage. This is NOT a classifier — it's a monotone map.
+- **Inputs.** Candidate output (per-pair score), ground-truth label (per pair).
+- **Method sketch.** `sklearn.isotonic.IsotonicRegression`; leave-one-subject-out CV; produce reliability diagrams and operating-point thresholds (P@95%, R@95%).
+- **Outputs.** Calibration curve + per-candidate recommended accept-threshold.
+- **Success metric.** Post-calibration Brier score < 0.1 on LOSO CV.
+- **Dependencies.** one or more candidates produced a score, Section 5 validation sets.
+- **Estimated effort.** 0.5 session per candidate.
+- **Tier.** 2.
+- **Status.** `not_started`.
+
+### F8 — Synthetic-warp pipeline for self-supervised training  _(tier 2)_
+
+- **Goal.** Generate paired (source, warped, correspondence) samples from a single HCR volume by applying random anisotropic scale + small rigid rotation + TPS warp to a sub-cube. Used to train G-series / 3D SuperGlue / Predator without ground-truth labels.
+- **Inputs.** HCR centroids (or HCR volume for image-level training), subject split for train/val.
+- **Method sketch.**
+  1. Sample a 400 µm × 400 µm × 400 µm cube centred at a random valid position inside an HCR volume (probability proportional to GFP+ density × avoid-edge margin).
+  2. Apply: random 180° XY rotation (fixed; prior) ± 10° jitter in XY and ± 5° in Z axis; anisotropic scale with XY in `[1.5, 2.0]` and Z in `[2.0, 3.5]`; then a per-axis TPS warp with 6–10 control points jittered 10–40 µm in each axis (matches benchmark nonrigid residual).
+  3. Drop cells at a 10–30 % rate to simulate segmentation errors and partial correspondence.
+  4. Record the ground-truth index correspondence and the full transform chain.
+  5. For image/mask modes, apply the same transform to the voxel grid via F3.
+- **Outputs.** `(source_cube, warped_cube, correspondence_index, transform_metadata)`.
+- **Success metric.** Random warps span the empirical anisotropic range (validation-only check against benchmark stats); nonrigid residual after per-sample fit on GT correspondence matches the 16–43 µm benchmark range.
+- **Dependencies.** Foundation 1.1; benchmark priors are used only as **sampling bounds**, which is allowed by the dev rule because no model parameters are derived from benchmark values.
+- **Estimated effort.** 1.5 sessions.
+- **Tier.** 2 (blocks learned methods G, A6–A8).
+- **Status.** `not_started`.
+
+### F9 — Benchmark harness for all candidates  _(tier 1)_
+
+- **Goal.** A single entrypoint `bench/run_candidate.py <candidate_id> <subject_id>` that loads the subject, invokes the candidate's main function with a canonical argument convention, compares outputs to `coreg_table.csv`, and writes a row to a shared `bench_results.csv` (candidate, subject, recall@D, precision, runtime, intrinsic-confidence calibration).
+- **Inputs.** `candidate_id`, `subject_id`.
+- **Method sketch.** Thin dispatch. Each candidate registers a callable via a module-level `CANDIDATES[candidate_id] = fn`. `fn(s: SubjectData) -> CoregResult` where `CoregResult` is a dataclass with `pairs_df`, `confidence`, `transform`, `diagnostics`.
+- **Outputs.** CSV row + JSON diagnostics.
+- **Success metric.** Running `F9` twice on the same (candidate, subject) reproduces the metrics exactly.
+- **Dependencies.** Foundation 1.5.
+- **Estimated effort.** 1 session.
+- **Tier.** 1 (developers must not reinvent harnessing).
+- **Status.** `not_started`.
+
+---
+
+## 4. Method catalog — input mode × method family
+
+### 4.1 Point-cloud methods (P-series)
+
+All P-candidates take `(cz_centroids, hcr_gfp_centroids, F6 per-cell features)` plus the 180° and CZ-center priors. R1's `(R, t)` warm-start is optional; each candidate must have a self-contained coarse localization fallback (typically: translate CZ centroid → HCR centroid, apply 180°).
+
+#### P1 — TEASER++ (certifiable outlier-robust affine + TPS refinement)  _(tier 1)_
+
+- **Goal.** Inlier set of CZ↔HCR correspondences with certified robustness to > 99 % outliers; refine via TPS.
+- **Inputs.** CZ + HCR GFP+ centroids (µm); F6 features; 180° prior. Optional R1 `(R, t)` warm-start.
+- **Method sketch.**
+  1. Apply 180° (and optional R1 `(R, t)`) to CZ; crop HCR to a generous AABB around the transformed CZ (e.g. CZ XY extent × 3).
+  2. Build putative correspondences: for each CZ cell, take top-K HCR neighbours using a weighted distance `α·d_Euclidean + β·||f_cz − f_hcr||_2` with F6 feature vector; K = 5–10.
+  3. Feed to TEASER++ (`teaserpp_python`), configured with:
+     - `rotation_estimation_algorithm = GNC_TLS`,
+     - `inlier_selection_mode = PMC_EXACT`,
+     - anisotropic-scale enabled (TEASER supports scale via decoupled rotation-then-translation; per-axis scale is recovered post-hoc by fitting `fit_anisotropic_similarity` on the TEASER inlier set).
+  4. Refit anisotropic affine on inliers; fit per-axis `Rbf(thin_plate)` TPS on inliers; re-evaluate inliers with TPS residual threshold.
+  5. Score each putative pair by combined "inlier-certificate membership" AND "TPS residual".
+- **Outputs.** Coreg table with per-pair inlier label, TPS residual, and a TEASER-certificate flag. Composite confidence = sigmoid(TLS score − residual_um / 20 µm).
+- **Success metric.** ≥ 90 % of manual `coreg_table.csv` pairs recovered at ≤ 10 µm accuracy on validation subjects; precision ≥ 95 %.
+- **Dependencies.** F6, F9. Optional F7 calibration.
+- **Estimated effort.** 1–2 sessions.
+- **Tier.** 1 (recommended entry for the fully-automatic pipeline — certifiable robustness matches the 99 % outlier regime).
+- **Status.** `not_started`.
+
+#### P2 — Super4PCS (4-point congruent sets)  _(tier 2)_
+
+- **Goal.** Coarse affine without any correspondence hypothesis — randomised 4-point-basis matching with congruency-preserving 4PCS. Useful as a pose-initialiser when R1's warm-start is insufficient.
+- **Inputs.** CZ + HCR centroids (µm); 180° prior.
+- **Method sketch.** `pyScan3D` or the reference C++ `globally_consistent_4pcs` binding. Select 4 coplanar-approximate CZ points; hash their pairwise ratios; search HCR for consistent 4-tuples; rank by extended-inlier count. Good as a lower-bound baseline for how much priors help.
+- **Outputs.** `(R, t, s)` coarse pose + confidence score.
+- **Success metric.** ≥ 80 % of manual `coreg_table.csv` origins localised within 200 µm on stress subjects.
+- **Dependencies.** F9.
+- **Estimated effort.** 1 session.
+- **Tier.** 2 (baseline / fallback pose initialiser; narrower scope than P1).
+- **Status.** `not_started`.
+
+#### P3 — RANSAC + anisotropic affine  _(tier 2, baseline)_
+
+- **Goal.** Classical RANSAC with anisotropic affine as the model. Sanity floor for P1.
+- **Inputs.** Putative correspondences as in P1 step 2. 180° prior.
+- **Method sketch.** Sample 4 random putative correspondences, fit `fit_anisotropic_similarity`, score by number of other putative pairs within `residual < τ µm`. Repeat N = 10 000. Return largest consensus set; refit.
+- **Outputs.** Inlier set + affine.
+- **Success metric.** Within 10 pp of P1 recall at equivalent precision; if gap > 10 pp, documents value of certifiable methods.
+- **Dependencies.** F6, F9.
+- **Estimated effort.** 0.5 session.
+- **Tier.** 2.
+- **Status.** `not_started`.
+
+#### P4 — Spectral graph matching (Leordeanu–Hebert)  _(tier 1)_
+
+- **Goal.** Pairwise-consistent assignment as a spectral eigenvalue problem.
+- **Inputs.** CZ centroids, top-K HCR candidates per CZ cell (K = 5); F6 features.
+- **Method sketch.**
+  1. Build affinity matrix `M` over putative pairs. `M[(i,a),(j,b)]` = compatibility that `CZ_i↔HCR_a` and `CZ_j↔HCR_b` are simultaneously correct. Combine (a) geometric consistency (distance-preservation after per-axis rescale — use the robust median of pairwise ratios as the empirical scale per axis, avoiding benchmark priors), and (b) feature agreement from F6.
+  2. Diagonal = per-pair feature affinity.
+  3. Power-iterate to principal eigenvector (M is ≈ 5000²).
+  4. Greedy extraction with one-to-one constraint via Sinkhorn normalisation.
+- **Outputs.** Coreg table; eigenvector entry as confidence.
+- **Success metric.** Same as P1.
+- **Dependencies.** F6, F9.
+- **Estimated effort.** 1–2 sessions.
+- **Tier.** 1.
+- **Status.** `not_started`.
+
+#### P5 — Fused / Partial Gromov–Wasserstein  _(tier 1)_
+
+- **Goal.** Optimal-transport matching invariant to the isometry component of the deformation (via GW distance over internal pairwise distances) while using features as the Wasserstein side.
+- **Inputs.** CZ + HCR GFP+ centroids (HCR subsampled to 5–10 k via 180°+center crop); F6 features.
+- **Method sketch.**
+  1. Compute pairwise intra-distance matrices `C_cz`, `C_hcr`; feature-distance matrix `D` between CZ and HCR.
+  2. Solve partial FGW via `ot.gromov.fused_gromov_wasserstein` / `ot.partial.partial_gromov_wasserstein` (POT library).
+  3. Entropy regulariser `ε ∈ [0.01, 0.5]` swept; partial-mass `m ∈ [0.05, 0.5]` swept.
+  4. Read off matches by `argmax` per row of `T`; threshold by coupling mass.
+- **Outputs.** Coreg table; coupling mass = confidence.
+- **Success metric.** Same as P1.
+- **Dependencies.** F6, F9.
+- **Estimated effort.** 1–2 sessions (needs subsampling + entropy-regulariser tuning).
+- **Tier.** 1.
+- **Status.** `not_started`.
+
+#### P6 — Bayesian CPD / BCPD  _(tier 2)_
+
+- **Goal.** Nonrigid point-set registration with a Gaussian-mixture likelihood and a GP-prior over the deformation field. BCPD is faster than CPD and handles anatomical continuity; scales from ~1 k to ~100 k points.
+- **Inputs.** CZ + HCR GFP+ centroids; 180° warm-start; F6 features as edge-weights in the GP prior (optional).
+- **Method sketch.**
+  1. Install `bcpd` (reference C binary with Python wrapper) or `probreg.bcpd`.
+  2. Seed with the 180°-rotated CZ at the HCR centroid; anisotropic-scale initialisation (sx = sy = 1.0, sz = 1.0 — do *not* seed with benchmark expansion).
+  3. Run BCPD for 100 iterations; lambda (coherence) and beta (kernel width) swept.
+  4. Post-process the deformation field into per-axis TPS via control-point fitting on a regular grid.
+- **Outputs.** Nonrigid warp + CZ-to-HCR correspondences via nearest-neighbour in target space; per-pair confidence = BCPD posterior probability.
+- **Success metric.** Match recall within 5 pp of P1; better handling of nonrigid residual (post-registration residual < P1 by ≥ 20 %).
+- **Dependencies.** F6, F9.
+- **Estimated effort.** 1.5 sessions.
+- **Tier.** 2.
+- **Status.** `not_started`.
+
+#### P7 — HEGN (hierarchical equivariant GNN, 9-DoF)  _(tier 2)_
+
+- **Goal.** A modern learned alternative to P1 that estimates rotation + anisotropic scale + translation jointly in one forward pass with SE(3)-equivariance to rotation and explicit anisotropic-scale head — a literal fit for this problem.
+- **Inputs.** CZ + HCR centroids + F6 features; self-supervised training on F8 synthetic warps.
+- **Method sketch.**
+  1. Implement / port the HEGN architecture (hierarchical point-transformer with tensor-product layers; anisotropic-scale head added as an extra 3-dim regression).
+  2. Train on F8 synthetic warps using a pairwise correspondence loss + transform-regression loss.
+  3. At inference, run on CZ + HCR-crop; output `(R, S, t)` and a per-point matchability score.
+- **Outputs.** Transform + per-CZ-cell matchability + nearest-HCR assignment.
+- **Success metric.** Beats P1 or P4 by ≥ 3 pp recall on stress subjects.
+- **Dependencies.** F6, F8, F9, GPU.
+- **Estimated effort.** 2–3 sessions (architecture port + training).
+- **Tier.** 2.
+- **Status.** `not_started`.
+
+#### P8 — GeoTransformer / RoITr / RoReg  _(tier 3)_
+
+- **Goal.** A family of partial-overlap PCR transformers (GeoTransformer CVPR 2022 / PAMI 2023; RoITr CVPR 2023; RoReg PAMI 2023). All three are off-the-shelf codebases; benchmark at most one unless early results justify comparison.
+- **Inputs.** CZ + HCR centroids; F6 features; self-supervised training on F8.
+- **Method sketch.** Wrap the reference repo; convert centroid point clouds to the expected format (PT-friendly `.npy`); fine-tune on F8 synthetic warps. Inference produces superpoint → dense correspondences + overlap score.
+- **Outputs.** Dense correspondences + per-point overlap confidence.
+- **Success metric.** Match P1 on validation, beat P1 on stress subjects (767018, 782149).
+- **Dependencies.** F6, F8, F9, GPU, PyTorch3D or MinkowskiEngine.
+- **Estimated effort.** 2–3 sessions.
+- **Tier.** 3.
+- **Status.** `not_started`.
+
+#### P9 — Lepard (partial rigid + deformable)  _(tier 3)_
+
+- **Goal.** Explicitly combines partial-rigid + deformable matching; natural fit for the "partial overlap + nonrigid warp" problem.
+- **Inputs.** As P8.
+- **Method sketch.** Use the reference Lepard pipeline; replace the transformation head with an anisotropic-scale variant.
+- **Outputs.** As P8.
+- **Dependencies.** F6, F8, F9, GPU.
+- **Estimated effort.** 2–3 sessions.
+- **Tier.** 3.
+- **Status.** `not_started`.
+
+#### P10 — Predator (overlap-attention partial-to-partial)  _(tier 3)_
+
+- **Goal.** Predator is designed for partial-to-partial overlap with a per-point overlap gate — a direct fit for CZ ⊂ HCR.
+- **Inputs.** As P8.
+- **Method sketch.** Reference repo; adapt input pipeline.
+- **Dependencies.** F6, F8, F9, GPU.
+- **Estimated effort.** 2–3 sessions.
+- **Tier.** 3.
+- **Status.** `not_started`.
+
+#### P11 — 3D SuperGlue / LightGlue style attention matching  _(tier 3)_
+
+- **Goal.** Transformer with cross-attention between CZ and HCR cell tokens; Sinkhorn + dustbin for partial matching; LightGlue matchability head provides intrinsic per-pair confidence (no external classifier).
+- **Inputs.** CZ + HCR centroids + F6 feature vectors as token encodings.
+- **Method sketch.** Small transformer: 4 self-attention blocks per modality + 4 cross-attention blocks; final cross-affinity → Sinkhorn with a learned dustbin. Train self-supervised on F8 synthetic warps; optional weak supervision from `coreg_table.csv` as a fine-tune stage.
+- **Outputs.** Coreg table + matchability confidence + dustbin probability per unmatched cell.
+- **Success metric.** Beats P1/P4 on validation; matchability score well-calibrated (Brier < 0.1).
+- **Dependencies.** F6, F8, F9, GPU.
+- **Estimated effort.** 2–3 sessions.
+- **Tier.** 3.
+- **Status.** `not_started`.
+
+#### P12 — RRWM / Factorised Graph Matching (FGM)  _(tier 3)_
+
+- **Goal.** Attributed-graph matching upgrade from P4 (Spectral GM), with k-NN graphs on each side and Reweighted Random Walk Matching or FGM as the solver.
+- **Inputs.** As P4; plus explicit k-NN graph with edge features (distance, angle, F6 pairwise diff).
+- **Method sketch.** `pytorch-geometric` or the Zhou–de la Torre FGM reference; add dummy/outlier nodes to handle partial matching.
+- **Outputs.** Coreg table + matching-matrix entry = confidence.
+- **Success metric.** Match P1/P4 at equivalent precision; used to quantify how much graph structure adds beyond pairwise consistency.
+- **Dependencies.** F6, F9. Optional F8 for a learned variant.
+- **Estimated effort.** 1–2 sessions.
+- **Tier.** 3.
+- **Status.** `not_started`.
+
+#### P13 — PointDSC (deep spatial consistency outlier rejection)  _(tier 3)_
+
+- **Goal.** A learned post-processing head that takes putative correspondences and a feature vector and outputs inlier probability. Pairs with P1 or P4.
+- **Dependencies.** F6, F8, F9, GPU.
+- **Estimated effort.** 1.5 sessions.
+- **Tier.** 3.
+- **Status.** `not_started`.
+
+#### P14 — Hungarian on feature+distance affinity  _(tier 3, baseline)_
+
+- **Goal.** Dead-simple bipartite assignment baseline: after 180° + centre + F6, run `scipy.optimize.linear_sum_assignment` on an `N×M` affinity matrix combining residual distance and F6 cosine similarity; threshold by score.
+- **Why included:** sanity floor for P1/P4/P5 — if any method fails to beat P14, it is not worth the complexity.
+- **Why not higher tier:** purely local, no pairwise consistency; ~20 µm 1-NN spacing creates ambiguities Hungarian cannot resolve.
+- **Dependencies.** F6, F9.
+- **Estimated effort.** 0.25 session.
+- **Tier.** 3.
+- **Status.** `not_started`.
+
+#### P15 — Descriptor-based landmark matching (classical local descriptors)  _(tier 3)_
+
+- **Goal.** Compute a local 3D descriptor per cell (spin-image or SHOT-like adaptation at centroid-scale, with F6 features appended), match by FLANN/k-NN, RANSAC for outlier rejection.
+- **Method sketch.** Library: `open3d.pipelines.registration` FPFH + RANSAC (rejected earlier for size-imbalance, but usable here as a sanity check). Alternative: custom spin-image centred on each cell using depth + density histogram.
+- **Why tier 3.** Existing rejected-alternatives list notes FCGF/FPFH + plain RANSAC fails on the 1:50 size imbalance; P15 is the documented deep-comparison version.
+- **Dependencies.** F6, F9.
+- **Estimated effort.** 1 session.
+- **Tier.** 3.
+- **Status.** `not_started`.
+
+### 4.2 Mask methods (M-series)
+
+All M-candidates consume CZ and HCR segmentation masks (F1/F2). HCR-side mask is restricted to GFP+ cell IDs.
+
+#### M1 — Volumetric mask NCC / Dice at coarse grid  _(tier 1)_
+
+- **Goal.** Locate CZ in HCR by 3D NCC on GFP+ mask density volumes at 20 µm isotropic spacing.
+- **Inputs.** CZ mask (F2, binarised), HCR GFP+ mask (F1, binarised). Optional 180° warm-start.
+- **Method sketch.**
+  1. Rescale each mask to a 20 µm isotropic grid via F3 (order-0).
+  2. Apply 180° and do a 3D NCC of CZ over HCR at anisotropic scale grid `s ∈ {1.5, 1.75, 2.0, 2.25, 2.5}` per axis (XY/Z correlated; sweep over `(sxy, sz)` rather than full 3-D anisotropy to keep cost bounded).
+  3. Best `(s, t)` at NCC peak. Confidence = `(peak - median) / MAD` (robust-z), plus a geometric sanity check that the peak position is consistent with the "CZ ≈ HCR XY center" prior.
+  4. Refine around best `(s, t)` at 5 µm grid spacing.
+- **Outputs.** Coarse `(R=180°, S, t)` affine + confidence.
+- **Success metric.** Origin within 50 µm, anisotropic scale within 15 % of `fit_anisotropic_similarity` on GT landmarks.
+- **Dependencies.** F1, F2, F3, F4, F9.
+- **Estimated effort.** 1.5 sessions.
+- **Tier.** 1.
+- **Status.** `not_started`.
+
+#### M2 — Mask mutual information (MI)  _(tier 2)_
+
+- **Goal.** Same as M1 but using MI instead of NCC; expected to be more tolerant of label/intensity mismatch between CZ mask (outline-based) and HCR mask (filled label volume).
+- **Inputs.** As M1.
+- **Method sketch.** Use F5's MI metric on binarised masks; coarse-to-fine affine search. Optional: soft-label version with distance-transform-smoothed masks.
+- **Outputs.** As M1.
+- **Dependencies.** F1–F5, F9.
+- **Estimated effort.** 1 session (after F5).
+- **Tier.** 2.
+- **Status.** `not_started`.
+
+#### M3 — Mask-NCC coarse + centroid refinement (hybrid)  _(tier 1)_
+
+- **Goal.** Use M1's `(R, S, t)` as a warm-start for P1 (TEASER) or P4 (Spectral GM) on GFP+ centroids. Quantifies the value of mask-level coarse over R1's centroid-density coarse.
+- **Inputs.** M1 output + P1 or P4 candidate.
+- **Method sketch.** Run M1; pass the resulting affine as warm-start to P1's putative-correspondence generator (a tighter initial crop and better per-axis scale reduces K in `top-K`).
+- **Outputs.** As P1 / P4.
+- **Success metric.** Recall improvement vs. running P1/P4 without M1 warm-start; also lower-runtime since the HCR crop is tighter.
+- **Dependencies.** M1, P1/P4, F9.
+- **Estimated effort.** 0.5 session.
+- **Tier.** 1 (cheap synthesis, likely high value).
+- **Status.** `not_started`.
+
+#### M4 — Per-cell Dice / IoU refinement  _(tier 2)_
+
+- **Goal.** Once a coarse affine is in hand (from M1, P1, or R1), compute per-cell IoU between each CZ cell's mask and its candidate HCR cell's mask to provide a per-pair confidence that is truly volumetric (catches segmentation-error pairs).
+- **Inputs.** CZ mask, HCR mask, candidate coreg table.
+- **Method sketch.** For each candidate pair, crop both masks to the CZ cell's bbox (in the shared µm grid via F3), compute Dice/Jaccard, return as a per-pair feature; optionally thresholded as an accept/reject gate.
+- **Outputs.** Per-pair IoU, Dice; pair-level accept/reject.
+- **Success metric.** IoU distribution on manual-GT pairs is clearly separated from IoU distribution on random unmatched pairs (AUC ≥ 0.9).
+- **Dependencies.** F1–F4, F9.
+- **Estimated effort.** 1 session.
+- **Tier.** 2.
+- **Status.** `not_started`.
+
+### 4.3 Image methods (I-series)
+
+All I-candidates consume CZ z-stack (1.2) and HCR channel-488 zarr (and optionally 405/561/594 for tissue edge).
+
+#### I1 — Cortical-layer depth-profile NCC (1D axial)  _(tier 1)_
+
+- **Goal.** Recover `(sz, tz)` from 1D intensity-vs-depth profiles on both volumes — a modernisation of R1's partial-overlap NCC using images instead of centroid density.
+- **Inputs.** CZ z-stack, HCR 488 volume, pia surfaces.
+- **Method sketch.**
+  1. Compute mean intensity vs. depth-from-pia for each modality (CZ easily; HCR via `load_hcr_volume(channel='488', level=3)` + pia surface). Exclude lateral margins to reduce edge-autofluorescence bias.
+  2. 1D NCC with partial-overlap floor as in `r1_revised.py` step 5.
+  3. Best `(sz, tz)` + confidence.
+- **Outputs.** Z-axis scale + offset; emits `unknown` when confidence is low (same graceful-degradation as R1).
+- **Success metric.** Recovers Z expansion within 15 % of GT on ≥ 4/6 subjects. Fails gracefully otherwise.
+- **Dependencies.** 1.2, 1.3.
+- **Estimated effort.** 0.5 session.
+- **Tier.** 1 (quick baseline for image modality).
+- **Status.** `not_started`.
+
+#### I2 — 3D MI rigid + anisotropic affine via SimpleITK  _(tier 1)_
+
+- **Goal.** End-to-end coarse affine from intensity volumes using SimpleITK's Mattes MI.
+- **Inputs.** CZ z-stack (single channel), HCR 488 at level 3 or 4 (same physical extent as centroid space); pia surfaces for initial translation.
+- **Method sketch.**
+  1. Resample both to isotropic 4 µm grid via F3.
+  2. Use F5 with an affine transform including anisotropic scale; initialise with 180° XY rotation + centroid translation.
+  3. Multi-resolution pyramid optimizer.
+- **Outputs.** Anisotropic affine `(R, S, t)`.
+- **Success metric.** Within 25 µm origin error and 10 % scale error vs. GT landmarks.
+- **Dependencies.** F5, F9.
+- **Estimated effort.** 1.5 sessions.
+- **Tier.** 1.
+- **Status.** `not_started`.
+
+#### I3 — MI + B-spline deformable  _(tier 2)_
+
+- **Goal.** Extend I2 with a B-spline deformable stage to absorb the nonrigid residual.
+- **Inputs.** I2 affine as initial transform.
+- **Method sketch.** F5's deformable stage with ~30 µm control-point spacing in XY, ~60 µm in Z.
+- **Outputs.** `(affine, bspline)` transform + dense warped volumes.
+- **Success metric.** Post-registration local NCC ≥ 0.7 in cortical tissue regions.
+- **Dependencies.** I2, F5.
+- **Estimated effort.** 2 sessions (parameter sweep).
+- **Tier.** 2.
+- **Status.** `not_started`.
+
+#### I4 — Cross-modal 3D keypoint descriptor (MR-US style)  _(tier 3)_
+
+- **Goal.** Learn a shared cross-modal descriptor from CZ and HCR image patches around candidate-cell centroids; match by FLANN; RANSAC + TPS.
+- **Inputs.** Image volumes; candidate centroids; F8 synthetic warps for training.
+- **Method sketch.** Dual-branch CNN on `(patch_cz, patch_hcr)` at 32³ voxels around each centroid at 4 µm spacing; metric-learning loss (triplet or InfoNCE) using F8-generated positives / random negatives.
+- **Outputs.** Per-cell cross-modal descriptor; match pair + confidence from descriptor cosine.
+- **Success metric.** Descriptor cosine on GT pairs > 0.5 median vs. < 0.1 on unmatched.
+- **Dependencies.** F5, F8, F9, GPU.
+- **Estimated effort.** 2–3 sessions.
+- **Tier.** 3.
+- **Status.** `not_started`.
+
+#### I5 — CORE-style coarse-to-fine nuclei-level WSI adaptation  _(tier 3)_
+
+- **Goal.** Port CORE 2024's coarse-to-fine nuclei-level matching from 2D WSI to our 3D setting.
+- **Dependencies.** F5, F8, F9, GPU.
+- **Estimated effort.** 3 sessions.
+- **Tier.** 3.
+- **Status.** `not_started`.
+
+#### I6 — PiCNoR pixel-wise cluster-driven nonrigid  _(tier 3)_
+
+- **Goal.** PiCNoR 2026's pixel-wise cluster-driven nonrigid registration for serial sections; adapt to 3D cortical slabs.
+- **Dependencies.** F5, F8, F9, GPU.
+- **Estimated effort.** 3 sessions.
+- **Tier.** 3.
+- **Status.** `not_started`.
+
+### 4.4 Combined-modality methods (C-series)
+
+#### C1 — Image coarse → centroid refinement  _(tier 1)_
+
+- **Goal.** Use I1 + I2 output as a better warm-start for any P-series candidate than R1 provides. I1 recovers Z scale; I2 recovers full affine with real confidence.
+- **Inputs.** I2 output + P-series candidate (P1/P4/P5).
+- **Method sketch.** Run I2; pass affine to P1's putative-correspondence builder and to the anisotropic-affine-fit step in P4.
+- **Outputs.** Coreg table with image-level coarse + centroid-level refinement.
+- **Success metric.** Recall ≥ P1 alone; lower variance across subjects.
+- **Dependencies.** I2, P1/P4.
+- **Estimated effort.** 0.5 session.
+- **Tier.** 1.
+- **Status.** `not_started`.
+
+#### C2 — Image-conditioned GNN  _(tier 2)_
+
+- **Goal.** Augment F6's hand-crafted features with image-derived per-cell CNN features (small 16³ voxel patch at 4 µm spacing around each centroid, 3D ResNet-10 encoder). Feed combined features into G1 (GNN matcher below).
+- **Inputs.** F6 features, image patches, G1 matcher.
+- **Method sketch.** Dual encoder (CNN for image patch, MLP for hand-features); concat; feed into the G-series GNN.
+- **Outputs.** Same as G1, with richer node embeddings.
+- **Success metric.** Beats G1 on validation; larger gain on stress subjects.
+- **Dependencies.** F6, G1, GPU.
+- **Estimated effort.** 2 sessions.
+- **Tier.** 2.
+- **Status.** `not_started`.
+
+#### C3 — Mask + centroid hybrid TEASER  _(tier 2)_
+
+- **Goal.** Use M1 for global alignment, then P1 (TEASER) on centroids constrained to the M1-localised region, with M4 (per-cell Dice) as an additional per-pair feature.
+- **Inputs.** M1 output, M4 per-pair IoU, P1 candidate.
+- **Method sketch.** M1 warm-start + P1 putative correspondences with F6 ⊕ Dice feature.
+- **Dependencies.** M1, M4, P1.
+- **Estimated effort.** 1 session.
+- **Tier.** 2.
+- **Status.** `not_started`.
+
+### 4.5 GNN-based methods (G-series, favored)
+
+**Why favored.** The user asked for GNN-based methods with explicit hand-engineered features. The GNN family combines (a) F6's interpretable per-cell features, (b) k-NN graph structure that encodes local geometry invariant to rotation, (c) cross-graph attention for partial-correspondence matching, and (d) a matchability head that gives intrinsic per-pair confidence without any separate classifier — matching exactly the "no Q-series upfront" requirement.
+
+#### G1 — Hand-crafted-feature GNN matcher (SuperGlue-style for cells)  _(tier 1, recommended entry for learned methods)_
+
+- **Goal.** End-to-end CZ-to-HCR cell matcher with intrinsic per-pair matchability. Each cell is a graph node; F6 features are the node attribute; k-NN graphs provide edges; cross-graph attention produces match scores; Sinkhorn + dustbin handles partial correspondence.
+- **Inputs.** CZ + HCR centroids, F6 features per cell, 180° + center priors.
+- **Method sketch.**
+  1. **Graph construction.** For each modality, build a k-NN graph with **k = 8** in physical µm. Edge features: `[dx, dy, dz, |d|, angle_xy, angle_xz]` of the relative position (after applying the modality's pia-normal as the local up-axis — makes the graph rotation-invariant in XY after the 180° prior and tilt-insensitive in Z). Include F6 pair-difference features on edges optionally.
+  2. **Node encoder.** `MLP(D_F6 → 128)` → `GraphConv(128 → 128)` × 4 with edge-attention (use `torch_geometric.nn.TransformerConv` or `EdgeConv`). Outputs a 128-dim embedding per cell per modality.
+  3. **Cross-graph attention.** Stack of 4 `CrossAttention(CZ ↔ HCR)` blocks; each alternates self-attention within each graph and cross-attention between graphs. Sinusoidal positional encoding of `depth-from-pia` added to the node embedding before cross-attention.
+  4. **Matchability head.** Per-cell sigmoid head `matchability ∈ [0, 1]` — the intrinsic confidence that this cell has a partner in the other modality.
+  5. **Assignment head.** Scaled-dot-product similarity `S[i, j] = <emb_cz_i, emb_hcr_j> / √d`. Augment with a dustbin row and column (learned scalar). Iterative Sinkhorn normalisation over `[S | dustbin_col; dustbin_row | 0]` → doubly stochastic assignment matrix.
+  6. **Training losses (choose / combine).**
+     - **Sinkhorn-with-dustbin NLL** on GT correspondences from F8 synthetic warps (cells with no GT partner are supervised via the dustbin).
+     - **InfoNCE** on the cross-modal embedding alone: positives = GT pairs, negatives = in-batch random.
+     - **Triplet margin** on the embedding if InfoNCE is unstable.
+     - **Matchability BCE** against the has-a-partner label.
+     - Ablation study in the first training session to pick the winning combination.
+  7. **Training regime.**
+     - **Stage 1 — self-supervised (F8):** train on 100 k F8 synthetic-warp samples (single-subject cube → warped cube with GT correspondences). Train until val matchability AUC plateaus.
+     - **Stage 2 — GUI-fine-tune:** as GUI (G1-review, Section 6) generates `qc_actions.jsonl`, fine-tune on the accept/reject events (accepted = match, rejected = non-match, adjusted = re-labelled match). Low LR, small number of epochs; monitor for catastrophic forgetting via Stage-1 validation.
+     - Optional Stage 3: weak-supervision on `coreg_table.csv` from validation subjects in a leave-one-subject-out schedule.
+  8. **Inference.** Run both graphs, cross-attention, assignment matrix; read off one-to-one matches with `row_argmax == col_argmin` + matchability threshold.
+- **Outputs.** Coreg table with matchability + assignment probability per pair.
+- **Success metric.** ≥ P1 recall at equivalent precision on validation subjects; beats P1 by ≥ 3 pp on stress subjects; matchability is well-calibrated (Brier < 0.1).
+- **Dependencies.** F6, F8 (required), F9, GPU.
+- **Estimated effort.** 3 sessions (architecture + training + ablation).
+- **Tier.** 1 (recommended learned-methods entry).
+- **Status.** `not_started`.
+
+#### G2 — Contrastive node embedding + nearest-neighbour match  _(tier 2)_
+
+- **Goal.** A lighter-weight variant of G1: same node encoder + graph conv, but skip cross-attention and Sinkhorn. At inference, nearest-neighbour in shared embedding space + threshold on embedding cosine.
+- **Method sketch.** InfoNCE loss only; no matchability head. Embeddings are modality-shared via a projection.
+- **Outputs.** Per-cell embedding; matches via FLANN in embedding space.
+- **Why tier 2.** Sanity check that cross-attention adds value; quick-to-train fallback.
+- **Dependencies.** F6, F8, F9, GPU.
+- **Estimated effort.** 1.5 sessions.
+- **Tier.** 2.
+- **Status.** `not_started`.
+
+#### G3 — GNN with learned positional encoding  _(tier 3)_
+
+- **Goal.** Replace the hand-chosen k-NN graph with a learned edge predictor (GAT / GraphNorm-style).
+- **Dependencies.** G1.
+- **Estimated effort.** 2 sessions.
+- **Tier.** 3.
+- **Status.** `not_started`.
+
+#### G4 — Equivariant GNN (SE(3)-Transformer, e3nn)  _(tier 3)_
+
+- **Goal.** Replace the ad-hoc rotation-invariant features with explicit SE(3) equivariance.
+- **Dependencies.** G1, GPU, `e3nn` or `SE(3)-Transformer`.
+- **Estimated effort.** 3 sessions.
+- **Tier.** 3.
+- **Status.** `not_started`.
+
+---
+
+## 5. Greedy-expansion family (B-series, demoted)
+
+Formerly Track B. Kept as one candidate family using **intrinsic confidence** from its local residuals, not a separate Q-classifier gate.
+
+### B1 — R2-seed constellation match  _(tier 2)_
+
+- **Goal.** Produce the first 4–6 CZ↔HCR landmark pairs automatically. Same idea as R2 in the prior plan.
+- **Inputs.** CZ + HCR GFP+ centroids; F6 features; optional coarse affine from R1/M1/I2.
+- **Method sketch.**
+  1. Enumerate candidate 4–6 CZ clusters ranked by (a) convex-hull emptiness, (b) tight intra-cluster spacing, (c) near-surface proximity.
+  2. Compute anisotropy-invariant descriptor per cluster (pairwise-distance histogram after axis normalisation, inner angles, hull volume).
+  3. Search matching descriptors in HCR (kd-tree on descriptor space).
+  4. Fit a one-step anisotropic affine + TPS on the top-K candidates, score by residual on held-out nearby cells.
+  5. Intrinsic confidence = residual ratio (seed vs. next-best) + descriptor-distance margin.
+- **Outputs.** Ranked list of seed constellations + intrinsic confidence.
+- **Success metric.** Top-K (K ≤ 5) contains the manual constellation on ≥ 5/6 benchmark subjects.
+- **Dependencies.** F6, F9. No Q-series dependency.
+- **Estimated effort.** 1–2 sessions.
+- **Tier.** 2.
+- **Status.** `not_started`.
+
+### B2 — R3 TPS-expansion loop  _(tier 2)_
+
+- **Goal.** Grow landmark set from seed using per-axis TPS + neighbour matching. Intrinsic confidence = local TPS residual + 1-NN-graph topology agreement.
+- **Inputs.** B1 seed (or GUI-chosen seed) + F6 features.
+- **Method sketch.**
+  1. Fit per-axis `Rbf(thin_plate)` on active landmarks.
+  2. For every unmatched CZ cell: map to HCR via TPS; take k-NN among unmatched GFP+ HCR cells (`choose_max_count_nearest_neighbor` with `k=5`, `feature='density'`).
+  3. **Intrinsic gate:** reject a candidate if (a) TPS residual > 3·σ of the residuals of nearby active landmarks, OR (b) 1-NN-graph topology disagrees. No separate classifier in the inference loop.
+  4. Accept → append to active landmarks.
+  5. Re-fit TPS; repeat. Stop when acceptance rate drops below a threshold or the landmark count saturates (~500–1000).
+  6. Periodically apply `grid_sample_landmarks()` to keep spatial coverage balanced.
+- **Outputs.** Dense coreg table + per-pair TPS-residual confidence.
+- **Success metric.** Match rate within 5 pp of manual baseline per subject; landmark residual RMS ≤ 50 µm.
+- **Dependencies.** B1, F6, F9.
+- **Estimated effort.** 1–2 sessions.
+- **Tier.** 2.
+- **Status.** `not_started`.
+
+---
+
+## 6. GUI for review & correction
+
+### G1-review — Minimum viable review GUI (shared across all candidates)  _(tier 1)_
+
+- **Goal.** Allow a human to review any candidate's output and record accept / reject / adjust decisions. Shared by every P/M/I/C/G/B candidate.
+- **Inputs.** CZ z-stack, HCR volume (level-2 pyramid), candidate coreg table, F6 features for display, intrinsic confidence.
+- **Method sketch.**
+  1. Load CZ + HCR at level 2 into a napari viewer (or ipywidgets panel — decide in first G1 session).
+  2. Display candidate pairs side-by-side or overlaid; sort by **intrinsic confidence** (ascending — lowest-confidence pairs first). Optionally sort by F7-calibrated probability once available.
+  3. Per-candidate actions: accept · reject · adjust HCR target · flag uncertain.
+  4. Write updated `landmarks_*_qced.csv` and regenerate `coreg_table.csv` using the manual step-4 logic.
+  5. Append every action to `qc_actions.jsonl` (fields: timestamp, subject, candidate_id, action, before/after coordinates, reviewer, method_that_generated_candidate). This is the training corpus for G-series stage-2 fine-tuning.
+- **Outputs.** Updated landmark CSV; refreshed coreg table; action log.
+- **Success metric.** Reviewer can process ≥ 100 candidates per hour on benchmark data without custom config per subject.
+- **Dependencies.** Foundation 1.1, 1.2.
+- **Estimated effort.** 2–3 sessions.
+- **Tier.** 1 (shared foundation for every candidate).
+- **Status.** `not_started`.
+
+### G1-review-active — Active-learning extension  _(tier 2; depends on G1-review + QF)_
+
+- **Goal.** Once a fallback classifier QF exists, surface highest-uncertainty candidates first.
+- **Dependencies.** G1-review, QF-series.
+- **Status.** `not_started`.
+
+---
+
+## 7. Optional fallback classifier (QF-series, conditional)
+
+**Explicitly conditional.** These are introduced only if benchmark validation in Section 10 shows no tier-1 candidate meets the precision target using intrinsic confidence alone. Not in the critical path.
+
+### QF1 — Gradient-boosted classifier on hand-crafted features  _(tier 3, conditional)_
+
+- **Goal.** A learned downstream gate on candidate pairs. Features are F6 per-cell features + per-pair residuals + candidate's intrinsic confidence.
+- **Training labels.** Positives = `coreg_table.csv` ∪ `active=true` rows. Hard negatives = GUI-rejected candidates from `qc_actions.jsonl`. Easy negatives = random unmatched pairs in the local neighbourhood.
+- **Method sketch.** XGBoost / LightGBM with leave-one-subject-out CV; isotonic calibration; output `P(match | features)`.
+- **Outputs.** Calibrated match probability per candidate.
+- **Success metric.** LOSO-CV AUC ≥ 0.95 at 5 pp below the target recall.
+- **Dependencies.** F6, F9, G1-review for growing training data.
+- **Estimated effort.** 1–1.5 sessions.
+- **Tier.** 3 (conditional).
+- **Status.** `not_started`.
+
+### QF2 — Contrastive neighbourhood embedding  _(tier 3, conditional)_
+
+- **Goal.** Learned embedding-based match score. Upgrade path from QF1 if hand features saturate.
+- **Dependencies.** QF1 + G1-review data.
+- **Status.** `not_started`.
+
+### QF3 — GAN-augmented classification  _(tier 3, conditional, user-mentioned)_
+
+- **Goal.** GAN augmentation + discriminator training between matched and unmatched neighbourhood patches.
+- **Dependencies.** QF2.
+- **Status.** `not_started`.
+
+---
+
+## 8. Explicitly rejected alternatives (carried forward)
+
+- **FCGF / FPFH + plain RANSAC** — designed for equal-size rigid; doesn't handle 1:50 size imbalance without heavy adaptation. (P15 is the deep-comparison, outlier-robust variant if anyone really wants descriptor-only.)
+- **Deep Closest Point (DCP)** — rigid-only and symmetric-size.
+- **Functional maps / Laplacian eigenvector alignment** — fragile on this noise/size profile; expensive to debug.
+- **Plain CPD / NICP without features or robustifier** — local-minimum-prone at 99 % outlier ratio. Use P6 (BCPD with features) instead.
+- **Random-forest / GBDT pairwise scorer as the *primary* registration method** — this is QC by another name; conceptually serial. Keep as a conditional fallback (QF-series).
+- **Benchmark-expansion priors as algorithm inputs** — superseded by R1 revised (`sessions/05_R1_revised/`); validation reference only.
+
+---
+
+## 9. Recommended session order
+
+The simplicity × likely-success ordering.
+
+### 9.1 Shared foundation (blocks most of Section 4 — do first, in parallel)
+
+1. **F9** — benchmark harness. Do first; everything else reports to it.
+2. **F6** — per-cell feature extractor. Blocks G-series and enriches P-series.
+3. **F1, F2, F3, F4** — mask loaders + crop + overlap scorer. Blocks M-series and C3.
+4. **G1-review** — GUI. Shared across every candidate for review.
+
+### 9.2 Tier-1 candidates in parallel (one per input mode)
+
+5. **P1 (TEASER++)** — recommended entry for point-cloud mode; certifiable outlier robustness.
+6. **M1 (mask NCC)** — recommended entry for mask mode; cheap coarse alignment.
+7. **I1 (axial NCC) + I2 (SimpleITK MI affine)** — recommended entries for image mode.
+8. **C1 (image → centroid)** — cheap hybrid that stitches I2 to P1.
+9. **P4 (spectral GM) + P5 (FGW)** — alternative tier-1 point-cloud methods; compare with P1.
+
+### 9.3 Favored GNN (fast-follow)
+
+10. **F8** — synthetic-warp pipeline. Blocks G-series.
+11. **G1 (hand-feature GNN)** — favored learned method; runs alongside P1/P4/P5.
+
+### 9.4 Tier-2 upgrades
+
+12. **F5** — SimpleITK wrapper. Blocks I3, M2.
+13. **M2 (mask MI), M4 (per-cell Dice), C2 (image-conditioned GNN), C3 (mask+centroid TEASER)** — run in parallel once foundations are in place.
+14. **P6 (BCPD), P7 (HEGN), B1 (seed constellation), B2 (TPS expansion)** — run in parallel if tier-1 results plateau.
+
+### 9.5 Tier-3 deeper nets / deferred
+
+15. **P8–P11 (GeoTransformer, Lepard, Predator, 3D SuperGlue), I3–I6, G3–G4** — only if tier-1/tier-2 don't meet the production bar on stress subjects.
+16. **QF1–QF3** — conditional on tier-1 intrinsic confidence not clearing the precision target.
+
+### 9.6 Decision rule at the end of each benchmark run
+
+- If any candidate hits ≥ 90 % coreg recall at ≥ 95 % precision on all 4 primary + stress subjects (788406, 790322, 767018, 782149) **after G1-review human review**, promote that candidate to the production pipeline.
+- Otherwise, combine the two highest-ranked complementary candidates (e.g. M3 = M1 warm-start + P1; or C1 = I2 + P1).
+- If neither hits the bar even after combination on stress subjects, open a new section for hybrid methods that run P1's inlier set as a seed for B2's TPS expansion.
+- QF1 enters only if the highest-ranked candidate's intrinsic confidence is too poorly calibrated to act as an accept-gate (Brier > 0.15 after F7 calibration).
+
+---
+
+## 10. Validation strategy
+
+**Dev/validation split (binding, per `06 Dev Protocol.md`).** Do not use benchmark data information to design algorithms. Use only for validation afterwards. F8 synthetic warps use benchmark-sampled ranges **only as sampling bounds**; model parameters are not tuned against benchmark metrics.
+
+### 10.1 Benchmark roster
+
+- **Primary validation:** 788406, 790322 (highest-quality data, spot-based GFP+).
+- **Stress:** 767018 (older pipeline, sparse GFP+, 35 % match rate), 782149 (thin section, 12° pia tilt, 34 % match rate).
+- **Secondary:** 755252, 767022 (intensity-only GFP+ — requires threshold sweep).
+
+### 10.2 Per-candidate-class metrics
+
+| Candidate class | Metric |
+|---|---|
+| F-series (foundations) | synthetic-test pass/fail; runtime budget. |
+| P-series | % of CZ cells whose accepted match is within D µm of manual match (D ∈ {5, 10, 20}); landmark residual RMS; match rate vs. manual baseline; intrinsic-confidence calibration (Brier + reliability diagram). |
+| M-series | origin error, anisotropic-scale error, mask Dice at recovered affine. |
+| I-series | origin error, anisotropic-scale error, post-registration local NCC; MI convergence behaviour. |
+| C-series | gain over the weaker constituent candidate; runtime total. |
+| G-series | same P-series metrics + matchability reliability diagram. |
+| B-series | seed accept/reject agreement; match rate vs. manual at fixed TPS residual threshold. |
+| QF-series | LOSO-CV AUC; PR curve; calibration plot. |
+| G1-review | reviewer throughput (candidates/hour); fraction auto-matches requiring adjustment. |
+
+### 10.3 Stress-subject checks
+
+- **767018 (sparse GFP+):** does the candidate still pass at ~10 % GFP+ fraction? Is F6's depth-rank feature stable when only 100 cells are within a 50 µm neighbourhood?
+- **782149 (thin + tilted):** does the Z-axis partial-overlap logic handle thinner HCR (878 µm Z) without producing spurious peaks? Does surface-tilt alignment actually remove the 12° tilt?
+
+### 10.4 Binding rule
+
+No candidate in Section 4 may hyperparameter-tune on benchmark subjects. Per-subject checks use `coreg_table.csv` as ground-truth labels only; hyperparameters must be chosen on F8 synthetic data or on a single held-out primary subject used as a dev-only set (e.g. 788406). Final validation is on the remaining 5 subjects.
+
+---
+
+## 11. Session / result ledger
+
+Update when a candidate session opens/closes. Status values: `not_started | in_progress | validated | abandoned | superseded`.
+
+| Candidate | Session dir                              | Status      | Headline metric | Log link |
+|-----------|------------------------------------------|-------------|-----------------|----------|
+| R1 (first pass)  | `sessions/04_R1_coarse_align/`    | superseded  | 3/6 origin ≤100 µm; 5/6 rot ±10° (used benchmark priors) | [log](../sessions/04_R1_coarse_align/log.md) |
+| R1 (revised)     | `sessions/05_R1_revised/`         | first_pass_done_v2 | 3/6 origin ≤100 µm, 3/6 rot ±5° (minimal `(R, t)` only) | [log](../sessions/05_R1_revised/log.md) |
+| F1/F2 | `full_automatic_execution_01/sessions/03_F1_F2_mask_loaders/` | first_pass_done | loaders implemented | — |
+| F3    | `full_automatic_execution_01/sessions/04_F3_xres_resample/`   | first_pass_done | shared-grid resample via affine_transform | — |
+| F4    | `full_automatic_execution_01/sessions/05_F4_mask_overlap/`    | first_pass_done | Dice/Jaccard/NCC scorer | — |
+| F5    | `full_automatic_execution_01/sessions/06_F5_sitk_wrapper/`    | first_pass_done | SimpleITK MI + B-spline wrapper | — |
+| F6    | `full_automatic_execution_01/sessions/02_F6_per_cell_features/` | first_pass_done | 40-dim feature vec per cell | — |
+| F7    | `full_automatic_execution_01/sessions/07_F7_calibration/`     | first_pass_done | isotonic calibration utility | — |
+| F8    | `full_automatic_execution_01/sessions/08_F8_synthetic_warps/` | first_pass_done | synthetic warp pipeline for self-supervised training | — |
+| F9    | `full_automatic_execution_01/sessions/01_F9_benchmark_harness/` | validated | shared CANDIDATES registry + CSV writer | — |
+| P1    | `full_automatic_execution_01/sessions/09_P1_teaser/`  | first_pass_done | post-S28: 788406 rec@5=0.202, 3/6 subjects recover | — |
+| P2    | `sessions/NN_P2_super4pcs/`                   | not_started | — | — |
+| P3    | `full_automatic_execution_01/sessions/10_P3_ransac/`  | first_pass_done | post-S28: 788406 rec@5=0.080 (precision=1.0) | — |
+| P4    | `full_automatic_execution_01/sessions/11_P4_spectral/` | first_pass_done | post-S28: 788406 rec@5=0.146; wins on 767018 (0.304) | — |
+| P5    | `full_automatic_execution_01/sessions/12_P5_fgw/`     | abandoned_v1 | 0 recall — FGW coupling still wrong | — |
+| P6    | `sessions/NN_P6_bcpd/`                        | not_started | — | — |
+| P7    | `sessions/NN_P7_hegn/`                        | not_started | — | — |
+| P8    | `sessions/NN_P8_geotransformer/`              | not_started | — | — |
+| P9    | `sessions/NN_P9_lepard/`                      | not_started | — | — |
+| P10   | `sessions/NN_P10_predator/`                   | not_started | — | — |
+| P11   | `sessions/NN_P11_superglue3d/`                | not_started | — | — |
+| P12   | `sessions/NN_P12_rrwm_fgm/`                   | not_started | — | — |
+| P13   | `sessions/NN_P13_pointdsc/`                   | not_started | — | — |
+| P14   | `full_automatic_execution_01/sessions/13_P14_hungarian/` | first_pass_done | post-S28: 788406 rec@5=0.203; best on 788406 + 767018 | — |
+| P15   | `sessions/NN_P15_descriptor_landmark/`        | not_started | — | — |
+| M1    | `full_automatic_execution_01/sessions/14_M1_mask_ncc/` | first_pass_done | weak NCC peak (0.046); needs wider grid + soft mask | — |
+| M2    | `sessions/NN_M2_mask_mi/`                     | not_started | — | — |
+| M3    | `full_automatic_execution_01/sessions/15_M3_mask_centroid/` | first_pass_done | depends on M1 (weak); 0 recall | — |
+| M4    | `full_automatic_execution_01/sessions/16_M4_per_cell_dice/` | first_pass_done | 0 recall; Dice per-pair useful once M3 lifts | — |
+| I1    | `full_automatic_execution_01/sessions/17_I1_axial_ncc/` | first_pass_done | Z-only transform (no per-pair output) | — |
+| I2    | `full_automatic_execution_01/sessions/18_I2_sitk_affine/` | first_pass_done | tuple-load fix landed; rerun pending | — |
+| I3    | `full_automatic_execution_01/sessions/19_I3_bspline/` | first_pass_done | depends on I2 rerun | — |
+| I4    | `sessions/NN_I4_cross_modal_desc/`            | not_started | — | — |
+| I5    | `sessions/NN_I5_core_wsi/`                    | not_started | — | — |
+| I6    | `sessions/NN_I6_picnor/`                      | not_started | — | — |
+| C1    | `full_automatic_execution_01/sessions/20_C1_image_centroid/` | first_pass_done | post-S28: 788406 rec@5=0.202 (falls back to default ws on I2 fail) | — |
+| C2    | `sessions/NN_C2_image_cond_gnn/`              | not_started | — | — |
+| C3    | `sessions/NN_C3_mask_centroid_teaser/`        | not_started | — | — |
+| G1    | `full_automatic_execution_01/sessions/21_G1_gnn_matcher/` | first_pass_done | 0 recall; needs F8 training | — |
+| G2    | `full_automatic_execution_01/sessions/22_G2_contrastive/` | first_pass_done | 0 recall; same | — |
+| G3    | `sessions/NN_G3_learned_graph/`               | not_started | — | — |
+| G4    | `sessions/NN_G4_se3_transformer/`             | not_started | — | — |
+| B1    | `full_automatic_execution_01/sessions/23_B1_seed/`   | first_pass_done | 5 seeds, 0 recall; seed-rank quality limited | — |
+| B2    | `full_automatic_execution_01/sessions/24_B2_tps/`    | first_pass_done | TPS expansion stuck at B1 seeds | — |
+| G1-review        | `full_automatic_execution_01/sessions/25_G1_review_gui/` | first_pass_done | ipywidgets panel; accept/reject/adjust logs | — |
+| G1-review-active | `sessions/NN_G1_review_active/`    | not_started | — | — |
+| S26 rollup       | `full_automatic_execution_01/sessions/26_rollup/` | updated_post_S29 | 788406 tier-1 rec@5 ≈ 0.20; 4/6 subjects recover | [log](../full_automatic_execution_01/sessions/26_rollup/log.md) |
+| S27 putative diag | `full_automatic_execution_01/sessions/27_putative_rank_diag/` | done | diagnosed P14 rank-of-truth | — |
+| S28 ICP WS diag  | `full_automatic_execution_01/sessions/28_icp_warmstart_diag/` | done | scales_zyx KeyError + translation refine → tier-1 rec ≈ 0 → 0.20 | [log](../full_automatic_execution_01/sessions/28_icp_warmstart_diag/log.md) |
+| S29 multi-start  | `full_automatic_execution_01/sessions/29_warmstart_multistart/` | done | 6-seed multi-start ICP; lifts 767022 from 0 → 0.04–0.08 rec@5 | [log](../full_automatic_execution_01/sessions/29_warmstart_multistart/log.md) |
+| S30 rotation MS  | `full_automatic_execution_01/sessions/30_rotation_multistart/` | abandoned | 54 rot-seeds/subject; 782149 still 0; rotation seeds regress 767018/755252 | [log](../full_automatic_execution_01/sessions/30_rotation_multistart/log.md) |
+| S31 M1 widened   | `full_automatic_execution_01/sessions/31_M1_widened/` | abandoned | M1 density-NCC systemically biases to sxy=1.3; diagnosed 782149 as partial-overlap (CZ 55% inside HCR Z) | [log](../full_automatic_execution_01/sessions/31_M1_widened/log.md) |
+| S32 trimmed ICP  | `full_automatic_execution_01/sessions/32_trimmed_icp/` | abandoned | 216-run trim sweep; 788406 +6, 755252 SS-ranker fails, 767022 regresses, 782149 structurally unreachable via any ICP variant | [log](../full_automatic_execution_01/sessions/32_trimmed_icp/log.md) |
+| S33 I2 repair    | `full_automatic_execution_01/sessions/33_i2_repair/` | validated | 3 bugs fixed; I2 converges; med=262-394 µm on 4 subj; does NOT crack 782149 | [log](../full_automatic_execution_01/sessions/33_i2_repair/log.md) |
+| S34 I2-crop ICP  | `full_automatic_execution_01/sessions/34_i2_crop_icp/` | partially_validated | 755252 OR n<50 jumps 179→232 at W=600; 782149 still 0; fold crop as seed option | [log](../full_automatic_execution_01/sessions/34_i2_crop_icp/log.md) |
+| S35 pia anchored | `full_automatic_execution_01/sessions/35_pia_anchored/` | validated_negative | pia tilts measured (782149 HCR=11.1°); anchoring hurts 788406 (-32), 755252 (-9); 782149 still 0 | [log](../full_automatic_execution_01/sessions/35_pia_anchored/log.md) |
+| S36 I2+NN        | `full_automatic_execution_01/sessions/36_i2_nn/` | validated_negative | I2 affine alone 260-380 µm median on all 4 subj; NN pos n<50 ≤ 5; reciprocal NN 0/total correct; I3 is not a shortcut for 782149 | [log](../full_automatic_execution_01/sessions/36_i2_nn/log.md) |
+| S37 G1 stress    | `full_automatic_execution_01/sessions/37_g1_stress/` | validated_negative | G1 rec=0 on all 4 subj (med 734-1019 µm); root cause: train uses `_simple_features` (16-dim distances+elevations), inference uses F6 truncated to first 16 dims (= knn angles only) — feature-space mismatch | [log](../full_automatic_execution_01/sessions/37_g1_stress/log.md) |
+| S38 G1 rewrite   | `full_automatic_execution_01/sessions/38_g1_rewrite/` | validated_negative | Unified train+inference features (both sides `_simple_features`), 5000 iter, 96×4+3: matcher trains to 55.9 % synthetic val hit, **but all 4 real subjects exact ≤ 5/n_gt, n_lt50 ≤ 9, median 743-992 µm** — synthetic-warp supervision doesn't transfer to CZ↔HCR. Root cause: F8 samples source+target from same HCR cloud, never sees modality/cardinality/scale asymmetry. Pivot to P1 TEASER with F6-weighted putatives. | [log](../full_automatic_execution_01/sessions/38_g1_rewrite/log.md) |
+| S39 P1 baseline  | `full_automatic_execution_01/sessions/39_p1_baseline/` | validated | P1 baseline re-run (K=5, c_bar=15): 788406 r@20=0.210, 755252=0.044, 767022=0.108, 782149=0. 48-cfg K×c_bar sweep: 788406 & 755252 tied at default, 767022 +0.023 r@20 at K=10 c_bar=15, 782149 stays 0 for all configs. Warm-start wrong-basin unreachable by K/c_bar tuning; queue multi-seed P1 (S40). | [log](../full_automatic_execution_01/sessions/39_p1_baseline/log.md) |
+| S40 P1 multi-start | `full_automatic_execution_01/sessions/40_p1_multistart/` | validated_negative | 3 seeds × 4 subjects: default (6-translation ICP), i2_direct (MI-affine), i2_crop600 (S34). SS (sum residual<30) picks default 4/4, oracle matches. No regression; no lift. Seed-specific median: 782149 default=1136 µm vs i2_crop600=267 µm (bulk close to truth), but TEASER still wrong-pair → r@20=0. Bottleneck is F6-putative + GNC-TLS basin commitment, not warm-start quality. Next: attack ranking (S41 IoU-augmented P1, M3 hybrid, or P4 spectral GM re-run). | [log](../full_automatic_execution_01/sessions/40_p1_multistart/log.md) |
+| S41 P bakeoff    | `full_automatic_execution_01/sessions/41_p_bakeoff/` | validated | P1/P3/P4/P5/P14 × 4 subjects: **P14 (Hungarian) ties P1 on 788406 (0.211 vs 0.210) and 755252 (0.058 vs 0.044) at 4× speed** (15 s vs 55 s); P4 (Spectral GM) also lifts 755252 to r@20=0.058; P1 still wins 767022 (0.108); **all methods fail 782149**. P5 FGW broken (r@20=0 everywhere, n_pred=n_gt dense coupling picks wrong cells); P3 RANSAC strictly worst. Per-subject oracle 0.377 vs P1-only 0.362 → +0.015 r@20 via ensemble. Queue S42 P1+P4+P14 SS-selected ensemble. | [log](../full_automatic_execution_01/sessions/41_p_bakeoff/log.md) |
+| S42 P ensemble   | `full_automatic_execution_01/sessions/42_p_ensemble/` | validated_negative | SS ranker (count residual<30 µm from same-sample aniso-fit) regresses P1-only by **−0.055 r@20**. Picks P1 on 788406/755252/782149 (tight-basin wins within-candidate) but picks P14 on 767022 (SS=246 vs P1=230) where P1 is oracle-correct (r@20=0.108 vs 0.053). SS metric conflates "self-consistent fit" with "correct IDs" — works for seed-variants of same matcher (S40 4/4 agree) but fails across different matchers. Do NOT ship. Queue S43 cross-candidate consensus (P1 ∩ P14). | [log](../full_automatic_execution_01/sessions/42_p_ensemble/log.md) |
+| S43 P consensus  | `full_automatic_execution_01/sessions/43_p_consensus/` | validated_negative | P1 ∩ P14 identity consensus: 39–70 % CZ-ID agreement rate across 4 subjects, but intersect precision only 0–31 % (median 8.8 %). Fallback_p1 r@20 = P1 r@20 exactly (0.362). P1 and P14 share F6-cosine+distance putative ranking → correlated wrong-pair basins. Intersect drops correct pairs without boosting precision. Centroid-only ensemble path exhausted. Pivot S44 to mask/image bakeoff (M1, M3, C1, I2 on 4 subjects). | [log](../full_automatic_execution_01/sessions/43_p_consensus/log.md) |
+| S44 MI bakeoff   | `full_automatic_execution_01/sessions/44_mi_bakeoff/` | validated | **C1 (I2 MI-affine → P1) ties P1 on all 4 subjects at 2× speed (12–32 s vs 35–55 s).** Ship as C1-for-P1 drop-in. **M1 and M3 as registered are S31-abandoned density-NCC, not seg-mask-NCC from §4.2** (F1/F2/F4 helpers exist but have no candidate wrapper). M3 regresses P1 by 4–9× on median_err (436–898 µm vs 81–107) by forcing P1 into a wrong density-NCC basin. 782149 still 0 on every candidate. Mark M1/M3 as superseded. Next S45: attack per-pair ranker (M4 IoU-augmented P1), not coarse alignment. | [log](../full_automatic_execution_01/sessions/44_mi_bakeoff/log.md) |
+| S45 M4-IoU P1    | `full_automatic_execution_01/sessions/45_iou_augmented_p1/` | validated_negative | **M4 blocked by data**: CZ `*_seg-mask-outline.tif` binary uint8 {0,1} on all 4 subjects → no per-cell CZ labels → F2 `n_labels=1`. **HCR-only re-ranker marginal**: only 788406 has `metrics.pickle`; LR on `(z_dist, z_cos, z_log_counts, z_log_vol, z_log_den)` = 0.794 AUC vs baseline 0.767 (+0.027 in-sample). **Top-K ceiling (GT-in-top-K) is the real diagnosis**: 788406 K=100 → 0.954 (ranker-bounded); 755252/767022 K=500 → 0.84/0.86 (generator partly broken, p95 rank 12k/5k); **782149 K=500 → 0.000** (generator structurally broken, GT p50 rank 1878 ≈ random). Mark M4 as `blocked_by_data` in §4.2; prerequisite is per-cell CZ segmentation. Queue S46-b (per-centroid CZ z-stack image features into F6) as cheapest next step. | [log](../full_automatic_execution_01/sessions/45_iou_augmented_p1/log.md) |
+| S46-b image feats | `full_automatic_execution_01/sessions/46_cz_image_features/` | validated_positive | **Per-centroid HCR image features (mean, std, p90, \|lap\|) from channel-488 zarr provide real top-K lift when applied as a global quality bonus.** Within-putative AUC 0.58 (788406) and **0.72–0.75 (755252/767022)**; CZ-side AUC = 0.5 (constant within CZ putative group); cross-modal abs-diff AUC 0.25–0.42 (anti-correlated, no cosine term). Full-argsort sweep at beta ∈ {0, 5, 15, 30, 60} with `score = D − 25·cos_F6 − beta·hcr_quality(j)`: **beta=5 lifts GT-in-top-20 by +14.9 pp on 755252 (0.280→0.429), +2.7 pp on 767022 (0.480→0.507), +2.3 pp on 788406 (0.615→0.638)**; 782149 unchanged (generator broken). Larger betas drown geometry. Queue S47 for production integration: `lib/image_quality.py::hcr_quality(s)` with a `beta` parameter in the P1 scorer. | [log](../full_automatic_execution_01/sessions/46_cz_image_features/log.md) |
+| S47 ship hcr-quality | `full_automatic_execution_01/sessions/47_ship_hcr_quality/` | validated | **P1 default flipped to `hcr_quality_beta=5.0`** at K=5. End-to-end r@20 sweep: 788406 0.210→**0.234** (+2.4 pp), 755252 0.044 unchanged (rec_id +0.5 pp), 767022 0.108→0.103 (rec_id +1.5 pp), 782149 unchanged 0. Cross-subject sum r@20 0.362→0.381 (+0.019). K=20 × beta re-sweep shows widening K hurts 788406/755252 (TLS basin can't absorb 4× larger putative pool); keep K=5. Raw-argsort K=20 lift on 755252 (+14.9 pp) only partially converts end-to-end due to K=5 truncation, GNC-TLS basin commitment, and one-to-one `hcr_id` collisions. Files: `lib/image_quality.py` (new) + `bench/candidate_impls/_p1_teaser.py` (default change). | [log](../full_automatic_execution_01/sessions/47_ship_hcr_quality/log.md) |
+| S48 cz voronoi labels | `full_automatic_execution_01/sessions/48_cz_watershed/` | validated | **Per-cell CZ label volume via centroid-seeded voronoi (anisotropic EDT + R=8 µm radius cap + intensity p50+0.3·(p90−p50) mask).** Shipped `lib/cz_labels.py::cz_voronoi_labels(s)`. 4-subject stats: 98–99 % of cells labeled, median ≈ 2020 µm³ (sphere-cap-bound), wall 44 s/subject. Replaces cellpose 3D (~30–60 min/subj on CPU) for M4-level IoU features. Watershed rejected (floods to 51k µm³/cell). M4 re-run deferred — S45 top-K ceiling limits expected gain to < 0.02 pp r@20 and only on 788406. Next: S46-d for 782149 coarse fix (unbounded upside). | [log](../full_automatic_execution_01/sessions/48_cz_watershed/log.md) |
+| S49 (= S46-d) 782149 alt coarse | `full_automatic_execution_01/sessions/49_s46d_782149_alt_coarse/` | validated_negative | **Two bug fixes shipped, 782149 still unreachable.** (1) **I2 `init_scale` direction was reversed** — `_i2_sitk_affine.py` passed `(1.8, 1.8, 2.8)` (CZ→HCR expansion), but SITK `reg.Execute(hcr, cz)` makes A map HCR→CZ (shrink factor 0.56, 0.56, 0.36). MI metric was flat at init → SITK never moved → every I2 result pre-S49 is the raw init transform (invalidates S33/S34/S36/S40/S44 I2-based numbers). Fix: `init_scale=(1/1.8, 1/1.8, 1/2.8)`. Post-fix I2 residuals: 788406 med 155 µm, 782149 med 546 µm. (2) **C1 hybrid wiring was a no-op** — old C1 called `run_i2(s)` + `run_p1(s)` independently without passing I2's affine to P1. Fix: C1 now applies I2 SITK inverse to CZ centroids and forwards as `cz_init=` to P1 (with widened `K=30, c_bar=40`). **But fixed C1 regresses P1 on all 4 subjects** (r@20 drops to 0 everywhere): I2's 155–546 µm residual >> P1's 20 µm default-warmstart residual, so putative top-K misses GT and GNC-TLS drifts further. **782149 remains structurally unreachable** (r@20=0). Path forward: (a) I3 chained with I2 + point-apply infrastructure (non-trivial, needs mi_bspline fix), (b) mask-based M-series using S48's `cz_voronoi_labels`, or (c) defer 782149 to post-F8/G1 learned methods. Recommend (c) for immediate ship. | [log](../full_automatic_execution_01/sessions/49_s46d_782149_alt_coarse/log.md) |
+| S50 seg-mask NCC probe | `full_automatic_execution_01/sessions/50_segmask_ncc_probe/` | abandoned | **True seg-mask NCC coarse alignment fails.** Tested F1 HCR mask (GFP+) + S48 `cz_voronoi_labels` resampled to shared 20 µm iso grid; (sxy, sz) sweep on 788406 picks sz=1.8 (grid low, GT 2.82), ORIGIN_ERR=627 µm; 782149 picks sz=1.8 (GT 2.91), ORIGIN_ERR=1171 µm. CZ voronoi density (~4.4%) vs HCR GFP+ mask density (~0.2%) is an order of magnitude mismatch → NCC peak dominated by bbox-overlap area, not internal structure. Do not pursue; M1 ships as superseded (per S44). | [log](../full_automatic_execution_01/sessions/50_segmask_ncc_probe/log.md) |
+| S51 P4 + hcr_quality β | `full_automatic_execution_01/sessions/51_p4_hcr_quality_beta/` | validated | **P4 default flipped to `hcr_quality_beta=5.0`**; vectorised affinity build (prior Python double loop: ~12 min/subject; now ~15–90 s). β sweep {0, 3, 5, 8} on 4 subjects: 788406 r@20 0.159→0.173 (+1.4 pp, β=5), 755252 0.058→**0.091** (+3.3 pp, β=5), 767022 0.048 unchanged, 782149 0.000 unchanged. **P4+β=5 beats P1+β=5 on 755252 by +0.047 r@20** (0.091 vs 0.044) — orthogonal lift on the sparse-GFP+ stress subject; P1 still wins on 788406/767022. Useful tie-breaker for future consensus. Files: `bench/candidate_impls/_p4_spectral.py` (default change + vectorised M build). | [log](../full_automatic_execution_01/sessions/51_p4_hcr_quality_beta/log.md) |
+| S52 G1 asymmetric F8 | `full_automatic_execution_01/sessions/52_g1_asymmetric/` | abandoned | G1 asymmetric retrain (source ≈150 CZ-sized cube inside target ≈4200 HCR cube). Loss formulation `_pair_loss` dominated by ~4000 unmatched target dustbins contributing ~4.6 fixed floor — oscillates 4.95 ↔ 4.95 across 100/200/300 iter. **788406 r@20 = 0.000 at 200 and 300 iter** (use_f6=True and False). Fix requires loss rewrite + CZ↔HCR domain adaptation + feature alignment — multi-session rework. Abandoned; pivot to S53 P6 BCPD per Grand Plan §9.4. | [log](../full_automatic_execution_01/sessions/52_g1_asymmetric/log.md) |
+| S53 P6 BCPD/CPD nonrigid | `full_automatic_execution_01/sessions/53_p6_bcpd/` | validated | P6 ships with `method=cpd_nonrigid` default (**BCPD and CPD rigid/affine collapse to zero-scale** on CZ:HCR-crop ratio ~1:3; CPD nonrigid anchors per-point so preserves extent). 6-subject benchmark: 788406 r@20=0.175, 790322 0.224, 755252 0.052, 767022 0.053, **767018 0.264 (+0.121 vs P1+β=5's 0.143, +85 % relative)**, 782149 0.000. β hurts P6 monotonically (default β=0.0). **P6 complements P1 on sparse-GFP+ stress subject 767018** — first method to move it above 0.20 r@20. Next: S54 P1⊕P6 ensemble. Files: `bench/candidate_impls/_p6_bcpd.py`. | [log](../full_automatic_execution_01/sessions/53_p6_bcpd/log.md) |
+| S54 P1⊕P6 ensemble (C4) | `full_automatic_execution_01/sessions/54_p1_p6_ensemble/` | validated | **New C4 candidate ships: `method=auto` dispatches `union_p1_first` for dense subjects (n_hcr_gfp ≥ 10k) and `union_conf` for sparse (< 10k).** F9-validated 6-subject r@20: 788406=0.252 (+0.018 vs P1), 790322=0.269 (+0.018), 755252=0.055 (+0.011), 767022=0.117 (+0.014), **767018=0.278 (+0.135 vs P1, +94 % relative)**, 782149=0. **Sum r@20 = 0.971 vs P1-alone 0.775 (+25 % relative), near-oracle 0.980.** `union_p1_first` is Pareto-dominant over P1 (no subject regresses). Intersection bad (precision ≤ 0.40; P1∩P6 converges on shared wrong-pair basins — same finding as S43). Next: S55 F7 per-method confidence calibration; S56 add P4. Files: `bench/candidate_impls/_c4_p1_p6_ensemble.py`. | [log](../full_automatic_execution_01/sessions/54_p1_p6_ensemble/log.md) |
+| S56 P1⊕P4⊕P6 ensemble (C5) | `full_automatic_execution_01/sessions/56_p1_p4_p6_ensemble/` | validated | **New C5 candidate ships: three-way `method=auto` dispatches `union_conf` for sparse (n_hcr_gfp < 10k), priority(P1,P4,P6) for mid (10k–20k), and priority(P4,P1,P6) for very dense (≥20k).** F9-validated 6-subject r@20: 788406=0.263, 790322=0.289, **755252=0.095 (+0.040 vs C4, priority(P4,P1,P6) wins on 30k-HCR subject)**, 767022=0.117, **767018=0.315 (+0.037 vs C4 via 3-way union_conf)**, 782149=0. **Sum r@20 = 1.080 vs C4 0.971 (+11 % relative), vs P1-alone 0.775 (+39 % relative), vs single-method oracle 0.986 (1.08× above)** — three-way union merges correct pairs across different cz_id subsets that no single method covers alone. Three-way `uc3` (confidence-sort across methods) performs worse (0.921) than priority-based due to uncalibrated confidence scales (S55 queued). 782149 still structurally unreachable — centroid-level ensemble exhausted; needs image-level rework. Files: `bench/candidate_impls/_c5_p1_p4_p6_ensemble.py`. | [log](../full_automatic_execution_01/sessions/56_p1_p4_p6_ensemble/log.md) |
+| S55 F7 calibration | `full_automatic_execution_01/sessions/55_f7_calibration/` | validated | **F7 isotonic calibrators fit per method on all 6 subjects, shipped as `lib/calibrators/{p1,p4,p6}.pkl` + loader helper `lib/calibrators/__init__.py::load_calibrator(method_id)`.** LOSO Brier improvements: **P4 0.47-0.64 → 0.07-0.24 (2-7× improvement)** — P4's raw scores are uniformly high regardless of correctness; isotonic essentially reassigns to base rate. P1 and P6 smaller gains (mostly 2× Brier). **Strategy sweep of 8 merge rules: C5_auto sum r@20 = 1.080 is within 0.001 of oracle (1.081)** — calibrated uc3 uniformly hits 1.008 (above raw uc3 0.921 but below C5_auto), and C5_auto_cal regresses 767018 from 0.315→0.271 because calibration flattens P6's regime-specific high-confidence correctness. **C5 default left unchanged**; calibrators ship only as a downstream utility (GUI thresholding, QF1 fallback). Files: `lib/calibrators/{__init__.py, p1.pkl, p4.pkl, p6.pkl}`, `sessions/55_f7_calibration/{log.md, fit_calibration.py, strategy_sweep.py, labeled_pairs.csv, loso_summary.csv, strategy_sweep.csv}`. | [log](../full_automatic_execution_01/sessions/55_f7_calibration/log.md) |
+| QF1   | `sessions/NN_QF1_gbt_fallback/`               | not_started | — | — |
+| QF2   | `sessions/NN_QF2_contrastive_fallback/`       | not_started | — | — |
+| QF3   | `sessions/NN_QF3_gan_fallback/`               | not_started | — | — |
+
+---
+
+## 12. Change log
+
+- 2026-04-17 — initial version drafted; scope covers R1–R6, Q0–Q5, G1–G2 with recommended session order and validation protocol.
+- 2026-04-17 — added Section 1.E (A-series); reworked Section 4 into two parallel tracks. Extended Section 5 metrics and Section 6 ledger.
+- 2026-04-17 — clarified that G1 (review GUI) is a shared foundation required by both tracks.
+- 2026-04-17 — R1 first pass landed; benchmark stats logged.
+- 2026-04-17 — Session 04 subgoal 01 (GFP+ threshold, v2): Yen max-entropy on log(counts ≥ 1); subgoal 01 v2.1 added density-only and joint counts×density strategies; subgoal 02 updated intensity defaults.
+- 2026-04-17 — R1 revised: scale-free, surface-tilt aligned, graceful-degradation. Benchmark: 3/6 origin ≤ 100 µm, 3/6 rot ±5°; scale extension routes every subject to minimal.
+- **2026-04-18 — GRAND RESTRUCTURE.** Reorganised around three input modes (point cloud, ROI mask, raw image, combined). R1 demoted from required prerequisite to optional utility; its scale search is ignored by the catalog. Q-series classifier demoted from upfront to a conditional fallback (QF-series); each candidate now uses intrinsic confidence. GNN family promoted to favored (G-series) with explicit hand-engineered features, graph construction, and training regime. SOTA methods added across all modes: TEASER++, Super4PCS, BCPD, HEGN, GeoTransformer, Lepard, Predator, 3D SuperGlue/LightGlue, RRWM/FGM, PointDSC, Spectral GM, Fused/Partial GW (point cloud); Mask-NCC/MI/Dice and hybrid (mask); SimpleITK/elastix MI+B-spline, cortical-profile NCC, cross-modal keypoint descriptor, CORE, PiCNoR (image); image→centroid, image-conditioned GNN, mask+centroid TEASER (combined); hand-feature GNN with Sinkhorn+dustbin and F8-synthetic-warp training (GNN favored). New F-series foundation helpers: F1 HCR mask loader, F2 CZ mask loader, F3 cross-res crop, F4 mask overlap scorer, F5 SimpleITK wrapper, F6 per-cell feature extractor, F7 calibration, F8 synthetic warps, F9 benchmark harness. Recommended session order reshuffled to simplicity × likely-success across modes. Ledger expanded. Validation strategy unchanged in spirit; metrics per candidate class refreshed. Binding rule preserved: no algorithm design on benchmark data.
+- **2026-04-19 — SESSIONS 01–28 first passes.** F1–F9 foundations + tier-1 candidates (P1, P3, P4, P5, P14, M1, M3, M4, I1, I2, I3, C1, G1, G2, B1, B2, G1-review) all implemented and exercised in `full_automatic_execution_01/`. S27 diagnosed P14 rank-of-truth. **S28 surfaced and fixed a silent `KeyError: scales_zyx` in `default_warmstart_zyx` that had been zeroing every ICP-warm-start candidate**; added post-ICP coarse+fine translation grid search + iterative reciprocal-NN local refit; lifted 788406 tier-1 rec@5 from ~0 → 0.20 (P14 0.203, P1/C1 0.202, P4 0.146, P3 0.080). Stress sweep over 6 subjects: 3/6 recover meaningful recall (788406, 767018, 790322); 3/6 (767022, 782149, 755252) still return 0/near-0 — warm-start converges to wrong local minimum. Next: M1 → ICP seeding or denser multi-start ICP to broaden coverage. Ledger updated with session paths + post-S28 metrics.
+- **2026-04-19 — S29 multi-start ICP warm-start.** `default_warmstart_zyx` now enumerates 6 translation seeds (GFP+ centroid, ±Z offsets at ±100/+200 µm, Q25/Q75 spatial quantiles), runs a full ICP from each, and picks the winner by a no-peek `recip × unique_frac` score (reciprocal-NN count × unique-HCR-target fraction within 30 µm). **767022 lifts from 0 → {0.039, 0.081, 0.039} rec@5 on P14/P1/P4** — first non-zero recall on that subject. 790322 gets an incidental +2–4 pp boost on P14/P1. 788406/767018/755252 unchanged (default seed wins). **782149 remains at 0** — every seed converges to the same wrong basin; ICP failure is not a seed-search problem there. Next: M1 mask-NCC warm-start (F1/F2 mask loaders required), or rotation-augmented multi-start.
+- **2026-04-19 — S30 rotation-augmented multi-start (negative result).** Added 9 rotation perturbations per translation seed (6 × 9 = 54 ICP runs/subject: ±5°, ±10° about Z; ±5° about X). Landmark-fit ceiling check confirms 782149 is recoverable in principle (rms=29 µm, median=35 µm, n_gt_lt50=243/303) — the failure is not a feasibility issue. **Every one of the 54 seeds on 782149 returns n_gt_lt50 = 0.** ICP converges to a wrong density basin regardless of rotation. Rotation seeds also regress 767018 and miss the oracle-best on 755252; do **not** fold into default. Files: `sessions/30_rotation_multistart/`.
+- **2026-04-19 — S31 M1 widened (abandoned — M1 density-NCC fundamentally limited).** Widened scale grid (9 × 11 = 99 combos), fine-refinement, anisotropic sigma, per-scale z-score ranker (addresses NCC search-space-size bias). **All 6 subjects fail**: sxy systematically biases to 1.3 (grid lower bound); 782149 can't even produce a valid M1 transform. Diagnostic (`sessions/31_M1_widened/diag_782149.png`) established the **real** root cause of 782149 failure: **partial overlap** — only 34 % of CZ cells have an HCR partner and only 55 % of CZ (at true scale) lies inside HCR's Z range. Existing ICP's `inlier_residual_quantile=0.9` is too lenient; ICP converges to a squeezed basin that forces full CZ into HCR. Pivot to S32: trimmed/partial-overlap ICP.
+- **2026-04-19 — S32 trimmed ICP + deep 782149 diagnostic (abandoned).** 216-run probe of 6 seeds × 6 trim quantiles × 6 subjects. Mixed results: 788406 minor gain (n_lt50: 185→191), 755252 oracle shows `hcr_gfp × trim=0.6` would give 179 pairs but SS ranker picks `q75 × trim=0.8` (0 pairs) because both have same scales and the wrong basin has *more* reciprocal matches — SS ranker cannot discriminate multi-basin solutions. 767022 regresses (80→0). **Do not fold.** Deep diagnostics on 782149 establish that **no ICP variant within the standard reciprocal-NN formulation can reach the truth on this subject**: (a) seeding ICP directly from the GT landmark-fit transform (rms 38 µm) drifts to median=666 µm; (b) a dense 180-seed XY translation grid over HCR's bbox yields 0 GT pairs for every seed; (c) CZ Z-truncation recovers correct scales but translation lands 365-450 µm off every time. 782149's GT region is 335 µm from HCR-GFP+ centroid (vs 130 µm on 788406), spatially isolated. The ICP objective has no local minimum at truth. Fix requires pia-surface-anchored alignment, image-level (I2 MI) alignment, or a learned matcher — not within scope. Files: `sessions/32_trimmed_icp/`.
+- **2026-04-19 — S33 I2 SimpleITK MI-affine repair (validated; does not crack 782149).** Pre-fix I2 had three bugs in `lib/sitk_wrapper.py` / `_i2_sitk_affine.py`: (a) `center` field of SimpleITK's `AffineTransform` was dropped on export, so the downstream `TransformDescriptor` carried only ~2 % of the composition's positional info; (b) the initial translation was `(0,0,0)` instead of `cz_center − hcr_center`, which placed CZ's frame at HCR's origin (out of range) and stuck MI at init on 782149; (c) init_scale axis order was flipped (sent sz to X). All three fixed. Post-fix I2 converges on all 4 tested subjects with scales close to GT (sxy ≈ 1.80, sz ≈ 2.80) and 262–394 µm median residual on GT pairs. But 340 µm is outside ICP's 150 µm capture basin, so I2 **does not unlock** 782149. Modest gain on 755252 (I2-seed + trim=0.6 gives n=132 vs default-single-seed=0), but 6-seed multi-start's best remains 179 (hcr_gfp, 0.6). I2 moves from "coarse unusable" to "coarse usable but not unlocking" on stress subjects. Files: `sessions/33_i2_repair/`.
+- **2026-04-19 — S34 I2-cropped HCR ICP (partially validated; 755252 gain; 782149 still 0).** Crop HCR GFP+ to an XY window of width W around I2's centroid estimate, then feed the cropped cloud into multi-start ICP with trim sweep. Sweep W ∈ {400, 600, 800, 1200, ∞} µm × trim ∈ {0.4, 0.6, 0.8, 0.9} on 4 subjects. **Result: 755252 lifts to OR n<50 = 232 (W=600, trim=0.9, sxy=1.58, sz=2.26) vs uncropped 179 — a +53 gain, and SS ranker correctly prefers the cropped basin** (SS n=232, rank 435.96 vs uncropped 434.25). 788406 regresses (cropping loses true partners); 767022 marginal (+1). **782149 still 0 at every W** including the tightest W=400 (486 HCR cells around I2-center, spanning most of the GT-region bbox) — confirms S32's structural finding that the centroid-ICP objective has no local minimum at truth for this subject. Recommendation: fold I2-crop at W=600 as a multi-start seed option; do NOT reduce default HCR to cropped subset. 782149 requires a different approach — pia-surface-anchored alignment (S35) or feature-based matching (G1 GNN). Files: `sessions/34_i2_crop_icp/`.
+- **2026-04-19 — S37 G1 GNN stress test (validated negative, diagnosed).** Ran the existing G1 matcher on {788406, 755252, 767022, 782149} via the F9 harness. **All four: recall = 0 at every threshold** (rec@5/10/20 = 0), median error 734-1019 µm. Root cause is a train/inference feature-space mismatch: `_train_self_supervised` calls `_simple_features` (16-dim: 8 k-NN distances + 8 sorted elevations), while `run_g1` at inference with `use_f6=True` (default) calls `extract_cell_features` (~60-dim F6) and truncates to `:16` — producing `knn_elev_0..5 + knn_azdiff_0..1`, which are *angles* on both halves of the vector while the encoder was trained on *distances* in the first half. The encoder is fed garbage. Also: training uses `up=[1,0,0]` while F6 uses `_pia_normal` (tilted ≈ 5-11°), 120 training iterations (≈ 50k params, far under-trained), 400 µm cubes (a small slice of per-subject scale). Fix is ~0.5 session: unify train+inference features, ≥1000 iter, ≥200-cell cubes, validate on held-out synthetic warps (pair recall @10 µm ≥0.8) before benchmark. **Do NOT discard G1** — architecture is sound, implementation is broken. Files: `sessions/37_g1_stress/`. Queued as S38.
+- **2026-04-19 — S39 P1 TEASER baseline + K × c_bar sweep (validated).** Re-ran P1 at default on 4 subjects to confirm starting point after S38 pivot: 788406 recall_id=0.202 r@20=0.210 med=81 µm; 755252 recall_id=0.033 r@20=0.044 med=103 µm; 767022 recall_id=0.081 r@20=0.108 med=107 µm; 782149 recall_id=0 r@20=0 med=1136 µm. Matches S28/S29 P1 figures exactly. 48-run K × c_bar sweep (K∈{5,10,20,40} × c_bar∈{15,30,60} µm): **788406 & 755252 tied at default**; **767022 lifts +0.023 r@20 at K=10 c_bar=15 (0.108→0.131)**; **782149 stays 0 at every config** — warm-start wrong-basin, K/c_bar tuning can't rescue. Nondeterministic basin-hops on 755252 confirm TLS outcome is seed-dependent. **Queue S40**: P1 multi-start with (a) `default_warmstart_zyx`, (b) S34 I2-crop W=600, (c) S29 6-translation grid, picked by no-peek `recip × unique_frac` score. Files: `sessions/39_p1_baseline/`.
+- **2026-04-19 — S40 P1 multi-start with I2-crop + I2-direct seeds (validated_negative).** 3 seeds × 4 subjects: `default` (P1's `default_warmstart_zyx`, which already does 6-translation ICP multi-start), `i2_direct` (SimpleITK MI-affine applied to CZ), `i2_crop600` (S34's construction: 180°-rotated CZ + ±600 µm cropped-HCR XY centroid, using I2-predicted center). SS ranker = count of P1 pairs with `residual_um < 30`. **SS picks `default` on all 4 subjects; oracle r@20 also picks `default` on all 4. No regression; no lift.** I2-direct worst everywhere (SS 12–116 vs default 113–500) — 8 µm isotropic MI-affine is coarser than P1's ICP+translation-refine+local-refit chain. I2-crop600 interestingly reduces bulk median on 782149 (1136 µm→267 µm) but r@20 still 0: the predictions are in the right XY region, but GNC-TLS settles on wrong-pair matches at that location because F6-cosine+distance ranking of putatives cannot separate GT partners from distractors in the tight crop. **Conclusion**: warm-start quality is NOT the stress-subject bottleneck (all seed flavors land predictions within correct large-scale region); P1's F6-putative + TLS re-commits to wrong-pair basins regardless of seed. Per-pair ranking / inlier-admission logic is the real bottleneck. **Do NOT fold I2-based seeds into P1.** Next directions: S41 candidates — (A) IoU-augmented P1 (M4 per-cell Dice as per-pair feature into P1 scoring), (B) P4 spectral GM stress-subject re-run (uses pairwise consistency, different failure modes than point-wise TLS), (C) G2 contrastive embedding on real data with domain-adaptation (pia-aligned normalisation). Files: `sessions/40_p1_multistart/`.
+- **2026-04-19 — S38 G1 rewrite with unified feature space (validated negative, synthetic→real gap).** Fixed the S37 feature-space mismatch: `_simple_features` (16-dim) used at BOTH train and inference. Probed three stages: (1) 1200-iter single-subject probe confirms the matcher IS trainable — val hit 41.2 % at 1200 iter, monotonically rising from 18.7 % at 120 iter; (2) 5000-iter A/B probe: A (48 hidden, 3+2 layers) saturates 51.1 %, B (96 hidden, 4+3 layers) saturates 55.9 %; (3) real CZ↔HCR transfer with B-config per-subject 5000-iter training: **all 4 subjects essentially zero — 788406 exact 5/787 (0.6 %) med 901 µm, 755252 0/639 med 743 µm, 767022 1/793 med 781 µm, 782149 3/303 med 992 µm**. Diagnosis: F8 synthetic warps sample source+target from the same HCR cloud, so the matcher is supervised only on within-modality within-density registration — it never sees (a) the 1:6-30× cell-count asymmetry, (b) CZ's sparser density distribution, or (c) per-subject-specific scale distributions. A 56 % val hit on synthetic does not imply any real-data transfer. **Options**: (1) asymmetric F8 with CZ-sized source cubes drawn from CZ-density-matched sub-regions of HCR; (2) weak supervision on `coreg_table.csv` LOSO; (3) pivot to P1 TEASER with F6-weighted putatives — certifiable robustness, no training. S38 recommendation: (3) as shortest path, fold (1) as follow-up F8 upgrade. Files: `sessions/38_g1_rewrite/`.
+- **2026-04-19 — S36 I2 + nearest-neighbor matching (validated negative).** Probe: does I2's global MI-affine already carry correspondence signal for direct NN matching (no ICP)? If so, I3 B-spline refinement would be the shortest path. Result on 4 subjects (788406, 755252, 767022, 782149): I2 GT-median residual 260-381 µm everywhere; NN IDs-exact ≤ 2/n; NN pos n<50 ≤ 5/n; reciprocal NN 0/total correct on all subjects. **I2 affine alone is too loose for centroid-level NN** (~20 µm 1-NN spacing, 300 µm residual is 15× the spacing) — so I3 on top of I2 would inherit the same wrong-basin failure on 782149. Implication: 782149 is not reachable via chain-of-image-transforms; it needs feature-based matching that is density-insensitive. **Next: F6 per-cell features** (S37) as foundation for G1 GNN and enriched P-series correspondence scoring. Files: `sessions/36_i2_nn/`.
+- **2026-04-19 — S41 P-series tier-1 bakeoff (validated).** 5 P candidates × 4 subjects = 20 runs via F9: **P14 (Hungarian on F6+distance) matches or beats P1 on 3/4 subjects** — 788406 (0.203/0.211 vs 0.202/0.210), 755252 (0.050/0.058 vs 0.033/0.044), tied at 4× speed (15 s vs 55 s); **P4 (Spectral GM) also lifts 755252 to r@20=0.058** via pairwise-consistency affinity + power-iteration; P1 still wins 767022 (0.108 vs 0.048/0.053) — TEASER-specific. **All methods fail 782149** (r@20=0 for every P-candidate), confirming S32/S34/S35 structural finding that centroid-based matching cannot reach truth on this subject. **P5 FGW broken** (r@20=0 everywhere, n_pred=n_gt but dense coupling picks wrong cells; entropy reg + partial mass not tuned). **P3 RANSAC strictly worst** (≤126 pairs survive, no lift). Per-subject oracle 0.377 vs P1-only 0.362 → +0.015 r@20 (≈30 more GT pairs) available via cheap SS-selected ensemble, concentrated on 755252. **Next: S42 P1+P4+P14 ensemble** with no-peek SS ranker (pick winner per subject by sum residual<30 from pairs_df); no regression risk, modest lift. **Do NOT pursue P3, P5 without upstream fixes.** **Pivot for 782149**: centroid methods are exhausted — requires mask/image registration (M1/I2/C3) or feature-based matching with cross-modal supervision. Files: `sessions/41_p_bakeoff/`.
+- **2026-04-19 — S42 P1+P4+P14 SS-selected ensemble (validated_negative).** Wrapped P1/P4/P14 via F9 and picked per-subject winner by no-peek SS (count pairs with per-pair residual<30 µm from a same-sample anisotropic fit). SS tally: 788406 P1=263 P4=207 P14=262; 755252 P1=472 P4=455 P14=455; 767022 P1=230 P4=130 P14=246; 782149 P1=108 P4=64 P14=88. SS-picker r@20 total 0.306 vs P1-only 0.362 (**−0.055 regression**) vs oracle 0.377 (**−0.071 shortfall**). Catastrophic on 767022: SS picks P14 (tighter residual-fit basin) but P14 r@20=0.053 while P1=0.108 (half-recall). Generalises S40 finding — SS works when comparing seed-variants of one matcher (same putative generator, same TLS rejection → tight-basin ≈ correct-basin) but fails across different matchers (different putatives, different rejections → tight-basin ≠ correct-basin). Conclusion: a ranker that only sees each candidate's own pairs cannot separate "self-consistent + correct IDs" from "self-consistent + wrong-pair IDs". Ship P1 at default on 4-subject benchmark. **Next: S43 cross-candidate consensus — intersection of P1 and P14 ID predictions, no score required.** Cheap (no new infra); expected to trade recall for precision on 755252/767022 where P14 and P1 agree on roughly the same subset. Stress-subject pivot unchanged: centroid methods exhausted on 782149; pivot to mask/image registration or cross-modal supervised matching. Files: `sessions/42_p_ensemble/`.
+- **2026-04-19 — S43 P1 ∩ P14 cross-candidate consensus (validated_negative).** After S42 showed no-peek SS ranker regresses P1 by 0.055, test identity-based consensus: emit pairs where both matchers predict the same `hcr_id` for a CZ cell. Agreement rate per subject: 788406 70 %, 755252 64 %, 767022 39 %, 782149 64 %. **But intersect precision is 0.310/0.052/0.123/0.000** (median 8.8 %) — agreement ≠ correctness. P1 and P14 both use F6-cosine + Euclidean-distance ranking for putatives, so they converge to the *same wrong-pair basins*. Fallback variant (keep P1 everywhere, flag intersect as high-confidence) has r@20 identical to P1. **Conclusion: centroid-only ensemble with F6-shared matchers cannot exceed P1-alone.** The S41 oracle 0.377 vs P1 0.362 (+0.015) is unreachable without a matcher with orthogonal error modes. P4 spectral GM has different putative space (pairwise consistency) but regresses on 788406/767022 so P1+P4 consensus would also cap at or below current. **Next S44: cross-modality bakeoff** — run M1/M3/C1/I2 on {788406, 755252, 767022, 782149} same shape as S41. M1 (mask-NCC via F1/F2 seg-mask loaders), M3 (mask warm-start → P1), C1 (I2 MI-affine → P1) are tier-1 in the Grand Plan but have only run on 788406 in prior sessions. Primary question: does any mask/image method reach 782149 r@20 > 0, or lift 755252/767022 above the centroid plateau? Files: `sessions/43_p_consensus/`.
+- **2026-04-19 — S44 Cross-modality bakeoff (validated).** Ran P1, M1, M3, C1, I2 via F9 on 4 subjects. **Finding 1: C1 (I2 → P1) exactly ties P1** on all 4 subjects for r@20 (0.210, 0.044, 0.108, 0.000), rec_id, and median error — but at **2× speed** (12–32 s wall vs 35–55 s for P1). I2's MI-affine warm-start lands in the same ICP basin P1 finds from its default multi-start seeds. Ship C1 as drop-in speedup for P1 (requires validating C1 fallback when I2 fails). **Finding 2: M1 and M3 as registered in `_m1_mask_ncc.py` / `_m3_mask_centroid.py` are the S31-abandoned density-NCC, NOT the seg-mask-NCC from Grand Plan §4.2** (despite F1/F2/F4 seg-mask loaders existing in `lib/`). Both emit either empty pairs (M1) or wrong-basin hybrids (M3: 788406 median 436 µm vs P1's 81; 755252 898 µm vs 103; 767022 664 µm vs 107 — 4–9× worse than P1 alone). Mark M1/M3 as **superseded**. **Finding 3: 782149 remains unreachable** by all centroid + image-affine hybrids (P1 = M3 = C1 med 1136 µm). Consistent with S32/S34/S35/S41 structural finding. **Conclusion: coarse localization is NOT the bottleneck on 755252/767022 (S34 I2-crop reduces bulk median to 100–200 µm already; S41 all P-variants land in correct XY region); the bottleneck is per-pair ranking / inlier admission at the correct scale.** Pivot S45: M4-IoU-augmented P1 putative scoring (use F1/F2/F4 seg-masks as per-pair IoU feature inside P1's ranking), OR cluster-local P1 (run P1 on k-NN sub-regions independently, TPS-expand from highest-confidence). Start M4-IoU (simpler, F4 exists). Files: `sessions/44_mi_bakeoff/`.
+- **2026-04-19 — S35 pia-anchored alignment (validated negative; 782149 still 0).** Reparameterize z → depth-from-pia in both modalities, run 6-seed × 4-trim multi-start ICP in (x, y, depth) space, convert winning fit back to xyz. Pia surfaces fitted via `estimate_pia_surface_image_ceiling` on CZ z-stack and on combined-level-4 HCR volume. Tilts measured: 788406 (HCR 2.8°), 755252 (9.3°), 767022 (3.9°), **782149 (11.1° — confirming the S32 12° tilt claim)**. **But pia anchoring does NOT crack 782149 (OR=0)** and actively hurts the subjects where baseline works: 788406 191→159 (−32), 755252 179→170 (−9). 755252's SS-ranker now picks the correct basin (pia SS=170 = pia OR) — a small reliability gain — but the OR is lower than baseline. Wrong-basin ICP on 782149 is driven by XY density mismatch (GT region 335 µm off-centroid, 3831 sparse HCR cells), not by tilt or Z-offset; pia anchoring changes neither. **Do NOT fold pia-anchoring.** Centroid-only ICP paths now exhausted (S30/S31/S32/S33/S34/S35). Next: image-level warp (I3 MI+B-spline), feature-based matching (G1 GNN with F6 features and F8 training), or surface-to-body envelope coregistration. Files: `sessions/35_pia_anchored/`.
+- **2026-04-19 — S46-b per-centroid image features (validated_positive; HCR-quality bonus lifts stress subjects).** Tests whether per-centroid image features (`mean`, `std`, `p90`, `|laplacian|_mean` in a ±2 µm Z × ±3 µm XY bbox) from CZ `reg-dim-swapped.ome.tif` and HCR channel-488 fused zarr (level 2) provide signal orthogonal to F6 + distance. Two probes, one decisive result. **Probe 1 within-putative AUC** (correct vs wrong HCR among P1's top-5 for CZ cells that have GT in top-5): CZ-side features AUC=0.500 everywhere (mechanical — CZ cell is constant within a putative group); HCR-side features AUC 0.58 on 788406, **0.72–0.75 on 755252/767022**; cross-modal abs-difference AUC 0.25–0.42 (**anti-correlated** — CZ cells are *further* from true GFP+ partners than from random GFP+ cells, so no cosine term). Within-CZ z-scored LR on `(z_dist, z_cos, z_hcr_img_feats)`: 755252 AUC 0.684 → 0.808 (+0.124); 767022 0.565 → 0.758 (+0.193); 788406 0.767 → 0.785 (+0.018). **Probe 2 full-argsort top-K shift** with `score(i,j) = D(i,j) − 25·cos_F6(i,j) − beta·hcr_quality(j)` (where `hcr_quality(j) = sum_f z_HCR(f)[j]` is within-HCR z-scored sum of the 4 features — a one-sided global quality bonus, not cross-modal cosine), sweeping beta ∈ {0, 5, 15, 30, 60}, Ks ∈ {5, 20, 50, 100, 500}. **beta=5 is a clear sweet spot at K=20+**: GT-in-top-20 lifts 788406 0.615→0.638 (+2.3 pp), **755252 0.280→0.429 (+14.9 pp)**, 767022 0.480→0.507 (+2.7 pp); 782149 unchanged 0.000 (generator still broken). K=5 shows slight K=5 regressions (−2.2/−3.0 pp on 788406/767022) as bonus moves low-confidence GTs into K=20 window while reshuffling the head. Larger betas (15+) drown geometry; at beta=30 even 788406 K=20 drops to 0.085. **Conclusion**: HCR-side image features are the first stress-subject lift since S35. Queue **S47 — production integration**: `lib/image_quality.py::hcr_quality(s) -> (N_hcr,)` scalar (keyed by `hcr_id`, cached per subject), optional `hcr_quality_bonus_beta` parameter in `_p1_teaser._seed_putative` (default 0.0 preserves harness replay). Leave CZ-side features out (within-putative AUC=0.5, no signal for re-ranking). **S46-c (cellpose-on-CZ-zstack to unlock M-series)** and **S46-d (I/M-series coarse for 782149)** remain deferred next big tickets. Files: `sessions/46_cz_image_features/`.
+- **2026-04-20 — S55 F7 per-method confidence calibration (validated_utility; shipped as library, no ensemble lift).** Fit per-method isotonic calibrators on P1/P4/P6 using labeled pairs from 6 benchmark subjects (label := `dist(pred_hcr, gt_hcr) < 20 µm` for CZ cells in `coreg_table.csv`). **LOSO Brier improvements**: P4 0.47–0.64 → 0.07–0.24 (2–7× win; P4's raw scores are uniformly high in [0.61, 0.93] regardless of correctness, so isotonic reassigns them near the base rate), P6 mostly improved (3/5 LOSO folds), P1 mostly improved (4/5 folds); one regression (P1 hold=755252) because the correct tail sits at the 0.99 raw-conf end and isotonic over-flattens it. **Strategy sweep (8 strategies × 6 subjects)**: raw_up_P1_P4_P6=0.929, raw_up_P4_P1_P6=0.903, raw_up_P6_P1_P4=0.970, raw_uc3=0.921, cal_uc3=1.008 (+0.088 over raw_uc3 — confirms calibration *does* work on uniform merge), **C5_auto=1.080**, C5_auto_cal=1.036 (regresses C5_auto on 767018 0.315→0.271 because calibration flattens P6's regime-specific overconfidence), cal_uc3_mid_up=1.017, **oracle=1.081**. **C5_auto is within 0.001 of the oracle** — per-density priority dispatch is essentially optimal; calibration cannot improve r@20 because confidence-based tiebreak is only used on the sparse branch where raw P6-confidence happens to match the subject-specific regime. **Ship decision**: keep C5 default unchanged (no `calibrate` kwarg plumbed through); ship calibrators as `lib/calibrators/{p1,p4,p6}.pkl` with `lib/calibrators/__init__.py::load_calibrator(method_id)` loader. Usable downstream for GUI P@95 thresholding and QF1 fallback-classifier features. Training Brier on pooled 6-subject data: P1=0.157 (base 0.206), P4=0.125 (base 0.150), P6=0.149 (base 0.185). 782149 unreachable by calibration (zero correct pairs in any method — remap can't manufacture signal; deferred to image-level I2/I3). Files: `lib/calibrators/{__init__.py, p1.pkl, p4.pkl, p6.pkl}`, `sessions/55_f7_calibration/{log.md, fit_calibration.py, strategy_sweep.py, labeled_pairs.csv, loso_summary.csv, strategy_sweep.csv}`.
+- **2026-04-20 — S60 cross-method vote-consensus probe + C6/C6b ensembles (abandoned; strictly negative; C5 plateau confirmed as structural).** S55 calibration gave zero r@20 lift but did not test a *structural* signal: whether pairs emitted by multiple of {P1, P4, P6} have higher precision than single-method picks. Three-subject probe (`probe_vote_precision.py`) grouped pair emissions by vote count and scored P@GT (hits@20µm among labeled-cz_id pairs): **2-vote/1-vote precision ratios 1.30× (788406), 2.24× (790322), 1.84× (767018) — all above the 1.5× pre-registered threshold.** Converted signal into C6 (`_c6_consensus.py`): per-cz_id, if any hcr_id has ≥ 2 votes across {P1, P4, P6} → pick it (mean confidence); else fall back to density-priority. 6-subject bench vs C5: **788406 0.262→0.248 (−0.014), 790322 0.289→0.283 (−0.006), 755252 0.095→0.088 (−0.008), 767022 0.117→0.110 (−0.008), 767018 0.315→0.271 (−0.044), 782149 0→0. Sum 1.079→0.999 (−0.080).** C6 strictly loses on every non-zero subject. Isolated "consensus-first override" from "sparse-regime fallback divergence" via C6b (`_c6b_consensus_uc.py`) — same consensus-first rule but matches C5's density dispatch exactly (sparse → `union_conf` fallback, not priority). **C6b sum 1.018 (−0.061 vs C5).** The fallback-mode fix recovers only 0.018 of the 0.080 loss on 767018; consensus-first alone costs 0.061. **Why the probe signal didn't convert**: the 1.3–2.2× precision ratio averages over ALL 2-vote pairs including 3-vote-majority cases (which C5's priority already captures). On disagreement-only cases (where C6 overrides C5), P1's TEASER+TLS+TPS-residual filter is a *stronger* precision filter than consensus of two weaker methods sharing a geometric error mode — so overriding P1's pick with P4+P6's 2-vote consensus drops hits. **Refuted across both v1 and v2 variants. C5's priority dispatch is near-optimal.** **Centroid-only autonomous work at honest saturation.** Remaining Grand Plan §4 options all blocked, expensive, or uncertain: **C3 mask+centroid hybrid TEASER blocked** (S15 M3 r@20=0 via M1 warm-start; S45 M4 blocked because CZ `*_seg-mask-outline.tif` is binary uint8 with no per-cell labels; S50 segmask-NCC density mismatch structural); **P7 HEGN likely blocked** (F8 training gap per S58/S59 applies to any centroid-only learned method); **QF1 low value** (S55 calibration gave zero r@20 lift; QF1 re-ranks collisions but doesn't add matches); **C2 image-conditioned GNN is the single remaining viable tier-2 direction** — multi-session, GPU, patch pipeline, directly addresses modality mismatch that blocks 782149. Honest halt-point for autonomous centroid-only execution: **C5 sum r@20 = 1.080 is the centroid ceiling.** Further progress requires explicit user authorization for tier-2/3 infrastructure work whose ROI is uncertain given 782149's structural unreachability. Files: `bench/candidate_impls/_c6_consensus.py`, `bench/candidate_impls/_c6b_consensus_uc.py`, `sessions/60_vote_consensus_probe/{log.md, probe_vote_precision.py, bench_c6.py, bench_c6b.py, bench_c6.csv, bench_c6b.csv, *.log}`.
+- **2026-04-20 — S59 F8 CZ-aware domain randomization probe (abandoned; strictly negative).** S58's own "next options" list proposed adding CZ-like source-side perturbations to F8's asymmetric sampler to bridge the synthetic→real transfer gap. S59 tested this directly: `sample_cz_aware` wraps `sample_asymmetric_warped_pair` with (a) Gaussian position noise σ=8 µm on source centroids (CZ segmentation-drift proxy), (b) spatial Z-gradient dropout (keep prob 1.0→0.6 top→bottom in cube — CZ partial-depth-coverage proxy), (c) bumped `source_drop_rate=0.5` (CZ match-rate proxy). Retrained G1 500 iter on 788406 HCR GFP+ (LR=1e-4, 20-dim features, hidden=96, 4 graph layers, 3 cross layers). **Training descent 0.892 over 500 iter** (slower than S58's 1.467 baseline — extra perturbations make synthetic matching harder to learn without making learned features more transferable). **Inference r@20=0.001** (hits@20=1/787 labeled CZ) — strictly worse than S58's asymmetric-only baseline (0.003). **Verdict: CZ-aware randomization on centroid-only training does not bridge synthetic→real gap.** Root cause reaffirmed: real CZ is a different modality (different segmentation topology, density profile, image-quality-dependent coverage), not a noisy HCR subsample. Simulating modality gap from centroids-only is not feasible without either real CZ training data with known HCR pairing (not available at scale) or image-conditioned features that encode modality directly (C2 per Grand Plan §4.4). **Status: abandoned.** Do not ship `sample_cz_aware`; `lib/synthetic_warps.py` stays as shipped in S58. **Centroid-only autonomous execution now at honest saturation: C5 sum r@20=1.080 is the ceiling reachable by centroid + self-supervised synthetic-warp training.** The Grand Plan §9.6 stopping criterion's "≥ 0.60 per subject" bar is met on 0/6 subjects (best = 0.315 on 767018); the gap is concentrated on 782149 (r@20=0 across all methods) + 755252/767022 (~0.10 range). Closing autonomous mode; further progress requires explicit user prioritization between (i) C2 image-conditioned GNN (3D CNN patch encoder + G1 cross-attention head; tier 2; GPU), (ii) I4 cross-modal keypoint descriptors (dual-branch CNN + metric learning; tier 3; GPU), or (iii) QF1 fallback classifier on F6 + intrinsic confidence (tier 3, conditional; S55 showed calibrated Brier 0.08–0.27 so conditional trigger at Brier > 0.15 is borderline — not a likely r@20 lift, only re-ranking). Files: `sessions/59_f8_domain_randomization/{log.md, probe_cz_aware.py, probe_cz_aware.log}`.
+- **2026-04-20 — S58 G1 loss + feature rewrite (first_pass_done_infrastructure_only; synthetic-to-real transfer gap remains blocker).** Fixed S52's `_pair_loss` structural plateau by replacing Sinkhorn+dustbin NLL (sum-normalized across n_a+n_b+2 entries) with symmetric InfoNCE over matched pairs only — unmatched cells contribute to the partition denominator but not to explicit targets. Enriched `_simple_features` 16-dim (k-NN distances + elevations) → 20-dim (+ per-cloud min/max-normalized position + local density within 30 µm / median) after diagnosing that 16-dim was uniformly non-discriminative at 1-of-4200 asymmetric matching (InfoNCE descent 0.02/200 iter). Lowered Adam LR 1e-3 → 1e-4 after LR=1e-3 overshot (descend briefly then oscillate to uniform baseline by iter 500); LR=1e-4 gives stable monotonic descent 6.64→5.17 over 500 iter (1.467 descent). Switched `run_g1` default `use_f6=False` so train+inference share the same 20-dim features (prior F6 projection to first 16 cols was a distribution mismatch). **Full 6-subject bench (1000 iter, LR=1e-4, asymmetric)**: 788406=0.003, 790322=0.040, 755252=0.000, 767022=0.003, 767018=0.000, 782149=0.000. **Sum r@20=0.045 vs C5=1.080 — G1 ~24× worse**. Pattern: subjects with small HCR GFP+ clouds (790322, 767022, 782149 under ~5k cells) converge to low training loss (2.0–2.2) but still fail inference; large-cloud subjects don't converge in 1000 iter. **Root cause**: the learned matcher does not transfer synthetic HCR→HCR warps to real CZ↔HCR because (a) synthetic source is HCR-subsampled — no CZ-modality domain shift simulated; (b) training cubes ≈400 µm with ~200 pts vs inference clouds ~1000 µm with 800–17 000 pts (pos_norm per-cloud min-max has scale-dependent meaning); (c) cross-attention softmax tuned for ~4200 targets; inference has up to 17 000 (4× larger denominator). **Ship decision**: keep the mechanical improvements (InfoNCE loss, 20-dim features, LR=1e-4) — the training now actually descends; do NOT add G1 to C5 ensemble. **Do not** further pursue G1-from-F8-HCR-only. **Next options**: (i) F8 extension to simulate CZ-like source from HCR (requires I2/R1 warm-start + realistic CZ-distribution sampling); (ii) C2 image-conditioned GNN per Grand Plan §4.4 — adds CNN patches to bridge modality gap; (iii) deprioritize G1 entirely and accept 782149 as unreachable by centroid-only methods. Files: `bench/candidate_impls/_g1_gnn_matcher.py`, `sessions/58_g1_loss_rewrite/{log.md, probe_loss_sanity.py, probe_rich_features.py, probe_long_descent.py, probe_lower_lr.py, bench_g1.py, *.log}`.
+- **2026-04-20 — S57 I3 B-spline composition fix (first_pass_done_infrastructure_only; pair-emitter abandoned).** Fixed S49-diagnosed bugs: `lib/sitk_wrapper.py::mi_bspline` now accepts `initial_affine/translation/center` (ZYX) and actually uses them via `SetMovingInitialTransform` (prior versions only stored the kwarg on the output). Added `MIFitResult._sitk_composite` + `apply_forward_hcr_to_cz` via `sitk.CompositeTransform` (add aff, then fitted bspline — stack / last-in-first-out) with ZYX↔XYZ permutation. Rewrote `_i3_bspline.py::run_i3` to chain I2 affine → mi_bspline → forward-map HCR centroids through composite → cKDTree NN in predicted-CZ → emit pairs. 4-subject probe (skip_bspline = I2-affine-only baseline): **788406 r@20=0.001 (nn_p50=18.2 µm, med_err=134 µm); 782149 r@20=0.000 (35.5 µm, 277); 755252 r@20=0.000 (12.5 µm, 443); 767018 r@20=0.000 (17.5 µm, 317)**. Enabling B-spline on 788406 (20–30 iter @ 60 µm grid) improved the MI metric (−0.0074 → −0.0086) but regressed geometric accuracy (med_err 134 → 219–238 µm) — image-overlap minima don't align with cell-identity correctness. **Failure mode**: at HCR 1-NN spacing ≈ 20 µm and I2 residual 155–546 µm, CZ→nearest-predicted-HCR NN picks a cell in the ambiguity ball, almost never the true partner ("correct affine, wrong identity"). B-spline compute profile: ~2 s/iter @ 120 µm grid, ~15 s/iter @ 60 µm, ~60 s/iter @ 30 µm. **Implications**: (1) I3-as-pair-emitter abandoned — NN in predicted-CZ space is structurally wrong for this inter-cell-spacing regime. (2) I3-as-warm-start still viable but deprioritized (S49 showed I2-only warmstart lift is +0.01 r@20 on 788406 max; bspline variant likely similar given metric-vs-geometry divergence). (3) **782149 unlock deferred to F8/G1 track** per S49 recommendation (c); centroid + I3-NN both exhausted. Do NOT add I3 to C5 default. Ship mi_bspline / run_i3 as correct infrastructure for future image-level work. Files: `lib/sitk_wrapper.py`, `bench/candidate_impls/_i3_bspline.py`, `sessions/57_i3_bspline_compose_fix/{log.md, probe_i3_788406.py, probe_i3_782149.py, minimal_bspline_788406*.py, probe_788406_v2.log, probe_782149.log}`.
+- **2026-04-20 — S56 P1⊕P4⊕P6 three-way ensemble shipped as C5 (validated; sum r@20 = 1.080, 1.08× above single-method oracle).** Extended S54's C4 (P1⊕P6) with P4 (Spectral GM + `hcr_quality_beta=5.0` from S51). Three-way auto-dispatch: n<10k → `union_conf` across {P1,P4,P6}; 10k≤n<20k → priority(P1,P4,P6); n≥20k → priority(P4,P1,P6). The dense-regime P4-priority is motivated by S51's finding that P4+β=5 beats P1+β=5 on 755252 (+0.047 r@20) — P4's pairwise-consistency affinity produces correct pairs on CZ cells where P1's F6-NN picks wrong HCR partners. The mid-regime P1-priority inherits S54's `union_p1_first`-dominant-over-P1 Pareto property. F9-validated 6-subject r@20: 788406=0.263, 790322=0.289, **755252=0.095** (+0.040 vs C4), 767022=0.117, **767018=0.315** (+0.037 vs C4; P4+β=5 r@20=0.308 on 767018 never previously benchmarked, beats P6's 0.121 and P1's 0.098 as single-method), 782149=0. **Sum r@20 = 1.080 (vs C4 0.971 +0.109 +11 % rel; vs P1-alone 0.775 +0.305 +39 % rel; vs single-method oracle 0.986 +0.094 = 1.08× above oracle).** Pair-level union can exceed best-single-method because each method covers different cz_id subsets — merging correct pairs across cz_ids wins over picking one method. Three-way `uc3` (confidence-sort across methods) scores 0.921, below priority-based 0.929 — P1/P4/P6 confidence scales are not comparable (TLS+TPS-residual vs eigenvector-entry vs `1/(1+d_nn/σ_med)`); `union_conf` tiebreak exploits uncalibrated offsets. S55 F7 per-method isotonic calibration queued. 782149 remains r@20=0 (all three single methods fail; centroid-only exhausted; needs image-level I2/I3). Files: `bench/candidate_impls/_c5_p1_p4_p6_ensemble.py`, `sessions/56_p1_p4_p6_ensemble/{log.md, bench_ensemble.py, bench_c5.py, three_way_results.csv, bench_c5_output.log}`.
+- **2026-04-20 — S54 P1⊕P6 ensemble shipped as C4 (validated; +25 % sum r@20 over P1-alone, near-oracle).** Per Grand Plan §9.6 decision rule ("combine the two highest-ranked complementary candidates"), built and F9-registered `C4` candidate. Three merge strategies tested on 6 subjects: (a) `union_conf` — union of pairs_df, higher-confidence wins on cz_id collision; (b) `union_p1_first` — union, P1 wins collisions; (c) `intersection` — only `(cz_id, hcr_id)` P1 and P6 agree on. **`union_p1_first` is Pareto-dominant over P1-alone** on every subject (788406 +0.018, 790322 +0.018, 755252 +0.011, 767022 +0.014, 767018 +0.033, 782149 0). **`union_conf` beats oracle best-of (0.913 vs 0.903)** because it merges across cz_ids rather than picking one method — captures P6's 767018 win and P1's dense-subject wins simultaneously, but small regressions on 788406/767022 where P6's uncalibrated confidence sometimes outranks P1 on collisions it shouldn't. `intersection` bad (precision ≤ 0.40) — P1 and P6 share F6-feature-weighted NN on a common warmstart so they converge on the same wrong-pair basins (same failure mode as S43 P1∩P14). **Auto-dispatch rule**: if `len(s.hcr_gfp_df) < 10_000` (sparse), use `union_conf`; else `union_p1_first`. F9-validated 6-subject r@20: 788406=0.252, 790322=0.269, 755252=0.055, 767022=0.117, 767018=0.278, 782149=0. **Sum r@20 = 0.971** (vs P1-alone 0.775, +0.196, +25 % relative; vs union_conf 0.913; vs union_p1_first 0.868; vs oracle 0.980). Threshold at 10k correct on 5/6 subjects; 755252 (n=30 804 but very sparse GFP+ per µm³) would benefit from `union_conf` per-subject-oracle (0.064 vs 0.055) but the 0.009 gap is within rounding and a count-threshold is a distribution-driven choice per memory policy. P1 and P6 confidence scales are not comparable (TLS+TPS-residual vs `1/(1+d_nn/σ_med)`); `union_conf` collision tiebreak works empirically but not principled — S55 queued for F7 isotonic calibration per method. 782149 unchanged (both methods still structurally unreachable; deferred to image-level track). Files: `bench/candidate_impls/_c4_p1_p6_ensemble.py`, `sessions/54_p1_p6_ensemble/{log.md, bench_ensemble.py, bench_c4.py, bench_ensemble.log, bench_c4.log, ensemble_results.csv}`.
+- **2026-04-20 — S53 P6 BCPD / CPD nonrigid (validated; +12.1 pp r@20 on stress subject 767018).** Ported P6 from the Grand Plan catalog: `probreg.bcpd.registration_bcpd` + `probreg.cpd.registration_cpd` on default-warmstarted CZ centroids + HCR GFP+ crop (pad=150 µm). **Discovered collapse failure on the CZ:HCR-crop ~1:3 ratio**: BCPD's uniform-scale head converges to scale=2.85e-10 (all 932 source points collapsed to one target point, warped_extent=2.5e-7 µm); CPD `rigid` and CPD `affine` similarly collapse (warped_extent ≤ 45 µm). Only CPD `nonrigid` preserves source extent (warped_extent ≈ 1395×735×725 µm) because per-point GP-coherence anchors each source individually instead of forcing target-uniform mass. **Shipped `cpd_nonrigid` as P6 default.** 6-subject benchmark (`method=cpd_nonrigid`, `maxiter=30`, `match_radius_um=60`, `β=0`): 788406 r@20=0.175 med=80.3 µm, 790322 0.224 med=60.8, 755252 0.052 med=102.4, 767022 0.053 med=123.9, **767018 0.264 med=65.7 (+0.121 vs P1+β=5's 0.143, +85 % relative; median halved)**, 782149 0.000 med=1144 (warmstart fails on 12° tilt). **β sweep shows P6 opposite of P1/P4**: β=0 best (0.175), β=2 0.163, β=5 0.144, β=10 0.119 — monotonically hurts, because CPD nonrigid's per-point warp already anchors each CZ near its true target so the "quality-bonus swap to further HCR neighbor" is strictly worse. Default `hcr_quality_beta=0.0`. **P6 complements P1 on sparse-GFP+ stress subject 767018** (first method to move it above r@20=0.20, which Grand Plan §1.4 flagged as a stress case). Queue **S54 P1⊕P6 per-subject ensemble** per Grand Plan §9.6. BCPD/CPD-affine collapse fix via aniso-scale pre-normalization in the solver wrapper is deferred — CPD nonrigid already works. 782149 warmstart rework deferred to I2/M1 track. Files: `bench/candidate_impls/_p6_bcpd.py`, `sessions/53_p6_bcpd/{log.md, probe.py, bench_all.py}`.
+- **2026-04-20 — S52 G1 asymmetric F8 retrain (abandoned; loss formulation structurally plateaus).** Attempted to fix S38 G1's 0 % real-data recall by switching F8 synthetic-warp sampler from symmetric (source ≈ target size) to asymmetric (source ~150 CZ-sized cube inside target ~4200 HCR-density cube). New sampler `lib/synthetic_warps.py::sample_asymmetric_warped_pair` validated on real 788406: n_src=124–200, n_tgt=4163–4292 per call. **All training runs plateau**: 200-iter (hidden=96, n_layers=4, cross_layers=3, use_f6=True) final loss 4.950, r@20=0.000, median 922 µm; 300-iter use_f6=False final loss 4.987, r@20=0.000, median 1105 µm — loss oscillates around 4.95 with no downward trend. **Diagnosis**: `_pair_loss` normalizes `(matched_NLL + unmatched_src_NLL + unmatched_tgt_NLL) / (n_a + n_b)`. With n_a≈150, n_b≈4200, n_matched≈100: matched~0, unmatched-src~0, unmatched-tgt ≈ 4000×(−log(1/151)) ≈ 20 000, divided by 4350 ≈ **4.6** fixed floor — Sinkhorn's column-normalization makes this essentially unreachable by gradient descent. Loss rewrite (InfoNCE over matched embeddings, or per-side weighting) required before asymmetric training can produce gradient on matching quality. Combined with S38's CZ↔HCR domain-gap and train↔inference feature-alignment issues, G1 rework is multi-session tier-3 scope. **Abandon S52 in the short term**; proceed to S53 P6 BCPD per Grand Plan §9.4 (tier-2 SOTA classical methods). Files: `lib/synthetic_warps.py` (asymmetric sampler), `bench/candidate_impls/_g1_gnn_matcher.py` (asymmetric=True default), `sessions/52_g1_asymmetric/{log.md, probe_single.py}`.
+- **2026-04-20 — S51 P4 spectral GM + HCR image-quality β bonus (validated; orthogonal lift to P1 on 755252).** Port S47's `hcr_quality_beta=5.0` bonus from P1 to P4: subtract `β·hq[j]` from the per-CZ putative ranking score in `_p4_spectral.py::run_p4`. Also vectorised the P4 affinity-matrix construction (prior Python double loop over P=4000 putatives took ~12 min/subject; now 15–90 s via `np.linalg.norm(pts[:, None] - pts[None, :], axis=2)` and boolean conflict masks). β sweep {0, 3, 5, 8} × 4 subjects: **788406** 0.159 → **0.173** (+1.4 pp, β=5, regresses at β=8); **755252** 0.058 → **0.091** (+3.3 pp, β=5); 767022 0.048 unchanged at β≤5 (β=8 regresses to 0.028); 782149 0.000 everywhere (unreachable as expected). **Comparison to S47 P1+β=5 on same subjects**: P4+β=5 beats P1+β=5 on 755252 by +0.047 r@20 (0.091 vs 0.044) — useful orthogonal lift on the sparse-GFP+ stress subject, consistent with the hypothesis that spectral-GM's pairwise-distance affinity helps when per-cell feature affinity is noisy. P1 still wins 788406 (0.234 vs 0.173) and 767022 (0.103 vs 0.048), so P4 is not a drop-in replacement — but is a useful tie-breaker for a future P1∪P4 consensus ensemble on 755252-style subjects. β=5 adopted as P4 default (all prior P4 benchmarks used β=0, equivalent to the new β=0 column). Files: `bench/candidate_impls/_p4_spectral.py`, `sessions/51_p4_hcr_quality_beta/{log.md, sweep.py, sweep.log}`.
+- **2026-04-20 — S50 true seg-mask NCC probe (abandoned; density mismatch defeats NCC).** Tested whether F1 HCR seg-mask (GFP+ restricted) + S48 `cz_voronoi_labels` could unlock 782149 via volumetric NCC at 20 µm isotropic grid with σ=40 µm Gaussian smoothing. Result on 788406: best `(sxy=2.0, sz=1.8)` vs GT `(1.80, 2.82)`, ORIGIN_ERR=627 µm — sz pinned at grid lower bound. 782149: `(sxy=1.6, sz=1.8)` vs GT `(1.97, 2.91)`, ORIGIN_ERR=1171 µm. Both subjects pick sz=1.8 (grid low), severely under-estimating Z expansion. **Root cause**: CZ voronoi volume density (~4.4 % of bbox) is ~20× denser than HCR GFP+ mask density (~0.2 % of bbox); after Gaussian smoothing CZ becomes a nearly-homogeneous dense ball, while HCR is a sparse scatter of isolated cell footprints. NCC peak is dominated by bbox-overlap area rather than internal structure. No (sxy, sz) combination can align two spatial profiles that disagree at every scale by 20×. Not pursued further; M1 remains superseded per S44. 782149 remains deferred to post-F8/G1 learned methods (S49 recommendation stands). Files: `sessions/50_segmask_ncc_probe/{log.md, probe.py, probe.log}`.
+- **2026-04-20 — S49 (= S46-d) alt coarse path for 782149 (validated_negative; I2 init-scale bug + C1 wiring bugs fixed).** Goal: find coarse-alignment path that unlocks 782149 (the only stress subject at r@20=0 across all tier-1 pipelines; S45 ceiling K=500 → 0.000 generator structurally broken). Tested whether I2 (SimpleITK MI-affine on 488 volume) can provide a better warm-start than P1's default ICP on centroid data. **Discovered two pre-existing bugs**: (1) `_i2_sitk_affine.py::init_scale=(1.8, 1.8, 2.8)` — wrong direction for SITK's `reg.Execute(hcr, cz)` convention where A maps HCR→CZ (fixed=HCR, moving=CZ; expansion-microscopy CZ is smaller than HCR, so scales should be 1/1.8 = 0.56 shrink, not 1.8× expand). With wrong init, MI metric is flat (all moving-image lookups fall outside CZ → interpolator returns 0) → optimizer can't descend → A stayed at init on every subject. Every I2/C1/I3 benchmark pre-S49 is therefore the raw init, not an optimized fit. Invalidates S33 I2-repair conclusions (the scale convergence claim was an artifact of reading back init values). Fix: `init_scale=(1/1.8, 1/1.8, 1/2.8)`. Post-fix I2 scales converge: 788406 svd≈(2.51, 1.82, 1.75) residual med 155 µm; 782149 svd≈(3.29, 1.84, 1.77) residual med 546 µm. GT_in_top_20 jumps to 11.2% (788406) and 5.4% (782149, from 0 baseline). (2) `_c1_image_centroid.py::run_c1` called `run_i2(s)` + `run_p1(s)` independently — I2's affine was never forwarded to P1 as warm-start. (Retrospectively explains S44's "C1 ties P1" finding.) Fix: apply I2's SITK inverse `p_hcr = A^-1 @ (p_cz − c − t) + c` to CZ centroids and pass as `cz_init=` to P1, plus `K=30, c_bar=40 µm` kwargs to widen the putative pool. **But the properly-wired C1 regresses P1 on all 4 subjects**: 788406 0.234→0.000, 755252 0.044→0.000, 767022 0.103→0.000, 782149 0.000→0.000. Cause: I2's 155–546 µm residual is 8–28× the 1-NN spacing (20 µm) and ~8× worse than P1's default ICP (anisotropic reciprocal-NN, session-07) which achieves ~20 µm residual on subjects where it converges. Passing a coarser warm-start drops GT out of the K=30 putative list and GNC-TLS refits on mostly-wrong putatives, drifting further. **Conclusion on 782149**: I2 alone is insufficient (GT_in_top_50=17 %, residual=546 µm far exceeds any NN window), and a fixed-K putative pool over coarse-warmstart cannot recover it. Three forward paths, ordered by expected ROI: (a) I3 chained with I2 — needs `lib/sitk_wrapper.py::mi_bspline` fixed to use `initial_affine` in the registration (currently only stored on output) and to expose a point-apply function for the composed affine+B-spline; (b) M-series using S48's `lib/cz_labels.py` (per-cell CZ footprints) via F4 volumetric overlap on coarse 20 µm grid — risk of same density-NCC failure mode as R1 on sparse-GFP+ subjects; (c) defer 782149 to post-F8/G1 — a learned matcher trained on synthetic warps may handle partial-overlap better than hand-crafted coarse alignment. **Recommend (c) for immediate ship, revisit post-G1.** Files: `bench/candidate_impls/_i2_sitk_affine.py` (init_scale fix), `bench/candidate_impls/_c1_image_centroid.py` (rewrite with I2 inverse + widened K), `sessions/49_s46d_782149_alt_coarse/{log.md, probe_i2_residual.py, probe_i2_residual_v3.log, bench_c1.py, bench_c1_K30.log}`.
+- **2026-04-20 — S48 (= S46-c) CZ per-cell labels via centroid-seeded voronoi (validated; M4 deferred).** Shipped `lib/cz_labels.py::cz_voronoi_labels(s, R_um=8.0)` + `cz_cell_bboxes(s, R_um=8.0)` as cheap substitute for cellpose 3D (which would cost 30–60 min/subject on CPU × 4 subjects = 2–4 h). Approach: anisotropic `distance_transform_edt(~seed_mask, sampling=(cz_z_um, cz_xy_um, cz_xy_um), return_indices=True)` returns both per-voxel distance and nearest-seed coordinates; index a seed→cz_id lookup table to produce per-voxel labels in one vectorized pass; cap by R=8 µm radius and by intensity p50+0.3·(p90−p50) of the Gaussian-smoothed z-stack. 4-subject stats: 788406 923/932 labeled med=2038 µm³, 755252 812/835 med=2074, 767022 905/926 med=2042, 782149 880/894 med=2017; wall 44 s/subject (EDT dominates). p90 tight at 2120 µm³ across subjects = the R=8 µm sphere ceiling; p10 (1074–1388) reflects per-subject intensity-tightness. Watershed alternative tested and **rejected** — floods uncontrollably to 51k µm³ median (25× too large) because the smoothed z-stack has no strong inter-cell basins. **M4-augmented P1 re-run NOT triggered**: S45 top-K ceiling (788406 K=100 → 0.954 ranker-bounded; 755252/767022 generator-bounded at 0.84/0.86; 782149 structurally zero) caps M4's expected gain at < 0.02 pp r@20, only on 788406. Pivot to S46-d (alt coarse for 782149 — unbounded upside) before any M4 re-run. Follow-up: wrap `cz_voronoi_labels` in F2 mask-loader contract; queue M4 for post-S46-d if precision-only gain on 788406 becomes worth the wiring. Files: `lib/cz_labels.py`, `sessions/48_cz_watershed/`.
+- **2026-04-19 — S47 ship HCR image-quality bonus into P1 (validated; P1 default changed).** Implemented `lib/image_quality.py::hcr_quality(s)` (within-HCR z-scored sum of channel-488 patch `[mean, std, p90, |laplacian|_mean]`, aligned to `s.hcr_gfp_df` row order, cached per `(subject, channel, level, bbox_um)`). Added optional `hcr_quality`/`beta` kwargs to `_p1_teaser._seed_putative`; `score = D − 25·cos_F6 − beta·hcr_quality(j)` before argsort. **Flipped `run_p1` default `hcr_quality_beta` from 0.0 → 5.0** after two sweeps: (i) K=5 × beta ∈ {0, 3, 5, 8} × 4 subjects shows primary subject 788406 r@20 0.210→**0.234** (+2.4 pp, rec_id +2.3 pp) at β=5, 755252 r@20 unchanged (rec_id +0.5 pp), 767022 r@20 −0.5 pp (rec_id +1.5 pp), 782149 zero throughout; cross-subject sum r@20 0.362→0.381 (+0.019, +5.2 % rel). (ii) K=20 × β ∈ {0, 3, 5} sweep shows K=20 regresses 788406 by 3.0 pp and 755252 by 1.7 pp at β=0 (GNC-TLS basin commitment on 4× larger putative pool); only 767022 gains at K=20 (+1.8 pp). **K=5 is the winner; no subject meaningfully regresses at K=5 β=5**. The S46-b raw-argsort K=20 lift on 755252 (+14.9 pp) does NOT fully convert to r@20 due to three downstream gates: K=5 truncation, TLS basin commitment, and one-to-one `drop_duplicates('hcr_id')` collisions. Files: `lib/image_quality.py`, `bench/candidate_impls/_p1_teaser.py`, `sessions/47_ship_hcr_quality/{log.md, probe_p1_beta_sweep.py, probe_k20_beta_sweep.py, p1_beta_sweep.csv, k20_beta_sweep.csv}`. Follow-ups (queued, not started): **S46-c** cellpose-on-CZ-zstack to unlock M4 per-cell CZ labels; **S46-d** alt coarse-alignment path for 782149 (its 1135 µm median err means the seed transform itself is wrong — HCR-quality bonus can't help when the crop is wrong).
+- **2026-04-19 — S45 M4-IoU-augmented P1 (validated_negative; two data blockers + top-K ceiling diagnosis).** Goal: augment P1's putative score `D − 25·cos` with per-cell volumetric IoU via F1/F2/F4 as a third feature. **Blocker 1: CZ seg-mask is binary uint8 {0,1} on all 4 subjects** (`*_seg-mask-outline.tif`; `shape=(450,512,512)`, `n_uniq=2`) — no per-cell CZ labels exist, so F2 cannot return per-cell volumes. M4 per-cell Dice is **structurally blocked by data**; unblocking requires a new preprocessing step (cellpose on `reg-dim-swapped.ome.tif` to produce per-cz_id labels). **Blocker 2: only 788406 has HCR `metrics.pickle`** (so `hcr_gfp_df['volume']` and `density` are present only there). Pivoted to an HCR-only-feature re-ranker diagnostic on 788406: rebuild P1's top-5 putatives, label correct vs wrong, compare `counts/volume/density` distributions, fit within-CZ z-scored logistic regression. Per-feature AUC: density 0.619 (modest), counts 0.554 (weak), volume 0.437 (inverted). LR AUC = 0.794 vs baseline (z_dist + z_cos) 0.767 → **+0.027 in-sample, likely < 0.01 CV-adjusted**. Not worth candidate-registry churn, particularly when 3/4 subjects lack HCR volume metadata. Ran a top-K ceiling sweep across 4 subjects at K ∈ {1, 3, 5, 10, 20, 50, 100, 500} for full diagnosis of whether ranker or generator is the bottleneck: **788406 K=100 → 0.954** (ranker-bounded, tight tail p95 rank 97, max 154); **755252 K=500 → 0.844** (generator partly broken, p95 rank 11 998); **767022 K=500 → 0.858** (generator partly broken, p95 rank 5 034); **782149 K=500 → 0.000** (generator structurally broken — GT in *top-500 on 0 of 303 CZ cells*; GT ranks cluster at p50=1 878 of ~2 810 HCR GFP+ total, essentially random w.r.t. F6+dist score). Conclusion: widening K + better ranker only helps 788406; stress subjects need a different putative generator entirely. Next S46 candidates, ordered by cost: (b) per-centroid CZ z-stack image features (local intensity mean/variance, depth-normalised intensity, local Laplacian) fed into F6 as an additional invariant block — cheapest, reuses existing plumbing, tests whether CZ-side morphology provides the orthogonal signal F6+dist lacks; (c) cellpose-on-CZ-zstack to produce true per-cell CZ labels — unlocks F2/M4 on all subjects; (d) cross-modal coarse alignment (I-series SimpleITK MI or mask-NCC) for 782149 as a warmstart into centroid-level matching. **S46-b is the cheapest next step.** Files: `sessions/45_iou_augmented_p1/`.

@@ -72,6 +72,19 @@
       "homepage": "https://github.com/AikidoSec/aikido-claude-plugin"
     },
     {
+      "name": "alloydb",
+      "description": "Create, connect, and interact with an AlloyDB for PostgreSQL database and data.",
+      "author": {
+        "name": "Google LLC"
+      },
+      "category": "database",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/gemini-cli-extensions/alloydb.git"
+      },
+      "homepage": "https://cloud.google.com/alloydb"
+    },
+    {
       "name": "amazon-location-service",
       "description": "Guide developers through adding maps, places search, geocoding, routing, and other geospatial features with Amazon Location Service, including authentication setup, SDK integration, and best practices.",
       "category": "location",
@@ -94,6 +107,19 @@
       "description": "Use Amplitude as an expert analyst — instrument Amplitude, discover product opportunities, analyze charts, create dashboards, manage experiments, and understand users and accounts.",
       "category": "monitoring",
       "homepage": "https://github.com/amplitude/mcp-marketplace"
+    },
+    {
+      "name": "apollo",
+      "description": "Prospect, enrich leads, load outreach sequences, and query sales analytics with Apollo.io — one-click MCP server integration for Claude Code and Cowork.",
+      "author": {
+        "name": "Apollo.io"
+      },
+      "category": "productivity",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/apolloio/apollo-mcp-plugin.git"
+      },
+      "homepage": "https://www.apollo.io/"
     },
     {
       "name": "asana",
@@ -134,6 +160,19 @@
       "homepage": "https://github.com/atlassian/atlassian-mcp-server"
     },
     {
+      "name": "atlassian-forge-skills",
+      "description": "Forge-focused skill bundle and MCP tooling for Atlassian Forge: scaffold apps, review before deploy, debug production issues, and stay current on Forge APIs and the Atlassian Design System.",
+      "author": {
+        "name": "Atlassian Labs"
+      },
+      "category": "development",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/atlassian/forge-skills.git"
+      },
+      "homepage": "https://developer.atlassian.com"
+    },
+    {
       "name": "atomic-agents",
       "description": "Comprehensive development workflow for building AI agents with the Atomic Agents framework. Includes specialized agents for schema design, architecture planning, code review, and tool development. Features guided workflows, progressive-disclosure skills, and best practice validation.",
       "category": "development",
@@ -146,6 +185,21 @@
       "tags": [
         "community-managed"
       ]
+    },
+    {
+      "name": "auth0",
+      "description": "Add authentication to any app with Auth0. This plugin detects your framework, scaffolds the right Auth0 SDK integration, and guides you through login, logout, sessions, and protected routes — using current SDK patterns.",
+      "author": {
+        "name": "Auth0"
+      },
+      "category": "security",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/auth0/agent-skills.git",
+        "path": "plugins/auth0",
+        "ref": "main"
+      },
+      "homepage": "https://auth0.com/docs/quickstart/agent-skills"
     },
     {
       "name": "autofix-bot",
@@ -182,6 +236,16 @@
       "homepage": "https://github.com/awslabs/agent-plugins"
     },
     {
+      "name": "azure",
+      "description": "Transform Claude into an Azure expert. This plugin integrates the Azure MCP server and specialized Azure skills to move beyond generic advice. It enables Claude to perform real-world tasks: listing resources, validating deployments, diagnosing infrastructure issues, and optimizing costs across 50+ Azure services.",
+      "category": "deployment",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/microsoft/azure-skills.git"
+      },
+      "homepage": "https://github.com/microsoft/azure-skills"
+    },
+    {
       "name": "azure-cosmos-db-assistant",
       "source": {
         "source": "url",
@@ -191,16 +255,6 @@
       "description": "Expert assistant for Azure Cosmos DB — data modeling, query optimization, performance tuning, and best practices.",
       "category": "database",
       "homepage": "https://github.com/AzureCosmosDB/cosmosdb-claude-code-plugin"
-    },
-    {
-      "name": "azure-skills",
-      "description": "Microsoft Azure MCP integration for cloud resource management, deployments, and Azure services. Manage your Azure infrastructure, monitor applications, and deploy resources directly from Claude Code.",
-      "category": "deployment",
-      "source": {
-        "source": "url",
-        "url": "https://github.com/microsoft/azure-skills.git"
-      },
-      "homepage": "https://github.com/microsoft/azure-skills"
     },
     {
       "name": "base44",
@@ -335,6 +389,19 @@
       "homepage": "https://github.com/anthropics/claude-plugins-official/tree/main/plugins/claude-md-management"
     },
     {
+      "name": "cloud-sql-postgresql",
+      "description": "Create, connect, and interact with a Cloud SQL for PostgreSQL database and data.",
+      "author": {
+        "name": "Google LLC"
+      },
+      "category": "database",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/gemini-cli-extensions/cloud-sql-postgresql.git"
+      },
+      "homepage": "https://cloud.google.com/sql"
+    },
+    {
       "name": "cloudflare",
       "source": {
         "source": "url",
@@ -453,6 +520,19 @@
       "homepage": "https://github.com/astronomer/agents"
     },
     {
+      "name": "data-agent-kit-starter-pack",
+      "description": "Specialized suite of skills for data engineers on Google Cloud — architect data pipelines, transform data with dbt, write Spark and BigQuery SQL notebooks, and orchestrate end-to-end workflows across BigQuery, Spanner, BigLake, and Dataproc.",
+      "author": {
+        "name": "Google LLC"
+      },
+      "category": "development",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/gemini-cli-extensions/data-agent-kit-starter-pack.git"
+      },
+      "homepage": "https://cloud.google.com/bigquery"
+    },
+    {
       "name": "data-engineering",
       "description": "Data engineering plugin - warehouse exploration, pipeline authoring, Airflow integration",
       "source": {
@@ -526,6 +606,20 @@
         "sha": "806a6eeeb88b9a306a59b3212a1d5d88aa5c70af"
       },
       "homepage": "https://elixir-lsp.github.io/elixir-ls/"
+    },
+    {
+      "name": "exa",
+      "description": "Exa AI web search, deep research, and content extraction. Provides MCP tools and research skills for comprehensive web search, people discovery, company research, academic papers, and more.",
+      "author": {
+        "name": "Exa"
+      },
+      "category": "productivity",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/exa-labs/exa-mcp-server.git",
+        "sha": "bd2ccdd52ca7a35fbc2207ad266bb2a961c0e793"
+      },
+      "homepage": "https://exa.ai/docs/reference/exa-mcp"
     },
     {
       "name": "explanatory-output-style",
@@ -1248,6 +1342,33 @@
       "homepage": "https://github.com/qodo-ai/qodo-skills.git"
     },
     {
+      "name": "qt-development-skills",
+      "description": "Agentic engineering skills for Qt software development — Qt C++/QML code review, QML coding, and Qt C++/QML code documentation.",
+      "author": {
+        "name": "Qt Group"
+      },
+      "category": "development",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/TheQtCompanyRnD/agent-skills.git",
+        "sha": "62a98e2339e6eefcff108cfc3fe9db8a7301856c"
+      },
+      "homepage": "https://www.qt.io/"
+    },
+    {
+      "name": "quarkus-agent",
+      "description": "MCP server for AI coding agents to create, manage, and interact with Quarkus applications. Provides tools for project scaffolding, dev mode lifecycle, extension skills, Dev MCP proxy, and documentation search.",
+      "author": {
+        "name": "Quarkus"
+      },
+      "category": "development",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/quarkusio/quarkus-agent-mcp.git"
+      },
+      "homepage": "https://quarkus.io"
+    },
+    {
       "name": "railway",
       "description": "Deploy and manage apps, databases, and infrastructure on Railway. Covers project setup, deploys, environment configuration, networking, troubleshooting, and monitoring.",
       "category": "deployment",
@@ -1689,6 +1810,20 @@
       "homepage": "https://github.com/UI5/plugins-claude"
     },
     {
+      "name": "vanta-mcp-plugin",
+      "description": "The Vanta plugin connects Claude Code to Vanta's security and compliance platform through the Vanta MCP server. It combines Vanta's test-specific remediation intelligence with your local repository context to help you fix compliance failures faster.",
+      "author": {
+        "name": "Vanta"
+      },
+      "category": "security",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/VantaInc/vanta-mcp-plugin.git",
+        "sha": "46e5bebf0484f08fc4a3c4054437cf5ec06298c9"
+      },
+      "homepage": "https://help.vanta.com/en/articles/14094979-connecting-to-vanta-mcp#h_887ce3f337"
+    },
+    {
       "name": "vercel",
       "description": "Vercel deployment platform integration. Manage deployments, check build status, access logs, configure domains, and control your frontend infrastructure directly from Claude Code.",
       "category": "deployment",
@@ -1699,6 +1834,20 @@
       "homepage": "https://github.com/vercel/vercel-plugin"
     },
     {
+      "name": "versori-skills",
+      "description": "Skills for building data integrations using the Versori platform and versori-run SDK. Claude can bootstrap projects, configure systems and connections, generate type-safe TypeScript workflows, run local validation via Deno, and deploy to production — with a research-first approach that grounds code generation in gathered API documentation.",
+      "author": {
+        "name": "Versori"
+      },
+      "category": "development",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/versori/cli.git",
+        "sha": "134cf334c3065509eee39a5361fd0bcf969dc867"
+      },
+      "homepage": "https://docs.versori.com/latest/ai-tooling/overview"
+    },
+    {
       "name": "voila-api",
       "description": "Definitive guide for the Voila API. Covers shipment creation (Manual/Smart Shipping), real-time tracking, detailed history, manifesting, collections, webhooks, and third-party integrations (Sorted, Peoplevox, Mintsoft, Veeqo, JD).",
       "source": {
@@ -1707,6 +1856,20 @@
         "sha": "422c7beb772a0de4592a204584e0e990fc5dc139"
       },
       "homepage": "https://github.com/TSedmanDC/Voila-API-Skill"
+    },
+    {
+      "name": "windsor-ai",
+      "description": "Connect Claude Code to 325+ business data sources via Windsor.ai. Query marketing, sales, CRM, ecommerce, finance, and analytics data from Google Ads, Meta, HubSpot, Salesforce, Shopify, Stripe, and hundreds more — directly from your terminal.",
+      "author": {
+        "name": "Windsor.ai"
+      },
+      "category": "productivity",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/windsor-ai/claude-windsor-ai-plugin.git",
+        "sha": "248a6994b15b410cc025b105bb4ed5558e9b1af9"
+      },
+      "homepage": "https://windsor.ai"
     },
     {
       "name": "wix",
@@ -1751,6 +1914,19 @@
         "url": "https://github.com/zoom/zoom-plugin.git"
       },
       "homepage": "https://developers.zoom.us/"
+    },
+    {
+      "name": "zscaler",
+      "description": "Manage Zscaler cloud security platform including ZPA (private access), ZIA (internet access), ZDX (digital experience), ZCC (client connector), EASM (attack surface), and Z-Insights (analytics). Create and manage policies, troubleshoot connectivity, audit security configurations, and investigate incidents across the full Zscaler ecosystem.",
+      "author": {
+        "name": "Zscaler"
+      },
+      "category": "security",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/zscaler/zscaler-mcp-server.git"
+      },
+      "homepage": "https://github.com/zscaler/zscaler-mcp-server"
     }
   ]
 }

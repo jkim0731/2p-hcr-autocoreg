@@ -1,0 +1,368 @@
+"""Session 08 — register pia-flattened CZ to HCR vascular projections.
+
+Pipeline:
+  1. Compute pia-flattened projections at requested slab/mode for HCR
+     channel `ch` and CZ. (uses :mod:`compute_projections` helpers).
+  2. Warm-start: rotate CZ 180° and rescale by `sxy` (HCR-µm / CZ-µm,
+     median bbox area ratio from `roi_area_sxy.estimate_sxy_roi_area`)
+     so 1 CZ-pixel maps to (cz_xy_um · sxy) HCR-µm; then resample onto
+     HCR-L4 pixel grid.
+  3. Sweep small residual rotation θ ∈ [−30°, 30°] (coarse 2°, then
+     fine ±2° at 0.25°) on the warm-started CZ template; for each θ,
+     FFT-NCC against the HCR image to find best (tx, ty).
+  4. Save overlay figures + JSON of best (θ, tx, ty, ncc) per variant.
+
+Variants per subject (788406, 790322):
+  V1: HCR ch561 [0,30] mean   ×  CZ [0,30] mean   (vasculature)
+  V2: HCR ch488 [0,30] max    ×  CZ [0,30] max    (488 vs CZ)
+  V3: HCR ch488 [0,100] max   ×  CZ [0,50] max    (deeper integration)
+"""
+from __future__ import annotations
+
+import json
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.ndimage import gaussian_filter, rotate as nd_rotate, zoom
+from scipy.signal import correlate
+
+sys.path.insert(0, "/root/capsule/code/dev_code")
+from benchmark_analysis import (  # type: ignore  # noqa: E402
+    list_hcr_channels,
+    load_hcr_volume,
+)
+from benchmark_data_loader import load_subject  # type: ignore  # noqa: E402
+from roi_area_sxy import estimate_sxy_roi_area  # type: ignore  # noqa: E402
+from surfaces_iter08 import (  # type: ignore  # noqa: E402
+    get_cz_surface_iter08,
+    get_hcr_top_surface_iter07,
+)
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from compute_projections import (  # type: ignore  # noqa: E402
+    load_cz_zstack,
+    top_slab_projection,
+)
+
+HERE = Path(__file__).resolve().parent
+FIG = HERE / "figures"
+FIG.mkdir(parents=True, exist_ok=True)
+
+SUBJECTS = ["788406", "790322"]
+HCR_LEVEL = 4
+
+VARIANTS = [
+    # (name, hcr_ch, hcr_slab, cz_slab, mode)
+    ("V1_ch561_0-30_mean",  "561", (0.0,  30.0), (0.0, 30.0), "mean"),
+    ("V2_ch488_0-30_max",   "488", (0.0,  30.0), (0.0, 30.0), "max"),
+    ("V3_ch488_0-100_max",  "488", (0.0, 100.0), (0.0, 50.0), "max"),
+]
+
+
+# --------------------------------------------------------------
+# FFT NCC over translation (template inside image)
+# --------------------------------------------------------------
+def fft_ncc(template: np.ndarray, image: np.ndarray) -> np.ndarray:
+    """Sliding-window NCC of `template` placed inside `image`. Returns
+    a map of shape ``(H-h+1, W-w+1)`` where position (oy, ox) is the
+    NCC for placing template's top-left at (oy, ox) of image. Both
+    inputs must be NaN-free.
+    """
+    h, w = template.shape
+    n = float(h * w)
+    mT = float(template.mean())
+    t_centered = (template - mT).astype(np.float32)
+    t_norm = float(np.sqrt((t_centered ** 2).sum()))
+    if t_norm <= 0:
+        return np.zeros(
+            (image.shape[0] - h + 1, image.shape[1] - w + 1), dtype=np.float32
+        )
+
+    box = np.ones((h, w), dtype=np.float32)
+    img = image.astype(np.float32)
+    sum_TI = correlate(img, t_centered, mode="valid", method="fft")
+    sum_I = correlate(img, box, mode="valid", method="fft")
+    sum_I2 = correlate(img * img, box, mode="valid", method="fft")
+    mean_I = sum_I / n
+    var_I = np.maximum(sum_I2 / n - mean_I ** 2, 0.0)
+    std_I_norm = np.sqrt(var_I) * np.sqrt(n)
+    ncc = sum_TI / (t_norm * std_I_norm + 1e-10)
+    return ncc.astype(np.float32)
+
+
+# --------------------------------------------------------------
+# Warm-start + sweep
+# --------------------------------------------------------------
+def warm_start_cz(
+    cz_proj: np.ndarray,
+    cz_xy_um: float,
+    hcr_xy_um: float,
+    sxy: float,
+) -> np.ndarray:
+    """Rotate 180° and rescale CZ projection so its pixels match
+    HCR-L4 pixels in physical (HCR-frame) µm.
+    Zoom factor = (cz_xy_um · sxy) / hcr_xy_um (per axis).
+    """
+    rot = nd_rotate(
+        np.where(np.isnan(cz_proj), 0.0, cz_proj),
+        180.0,
+        reshape=True,
+        order=1,
+        mode="constant",
+        cval=0.0,
+    )
+    f = (cz_xy_um * sxy) / hcr_xy_um
+    return zoom(rot, f, order=1).astype(np.float32)
+
+
+def sweep_rotation_translation(
+    template: np.ndarray,
+    image: np.ndarray,
+    theta_grid_deg: np.ndarray,
+) -> dict:
+    """Sweep θ over `theta_grid_deg` (residual rotation applied to
+    `template`), at each θ run FFT-NCC against `image`, return best
+    (theta, oy, ox, ncc).
+    """
+    image_clean = np.where(np.isnan(image), float(np.nanmean(image)), image).astype(
+        np.float32
+    )
+    best = {"ncc": -np.inf}
+    log = []
+    for theta in theta_grid_deg:
+        t_rot = nd_rotate(
+            template, float(theta), reshape=True, order=1, mode="constant", cval=0.0
+        )
+        # If template is bigger than image, skip
+        if t_rot.shape[0] >= image_clean.shape[0] or t_rot.shape[1] >= image_clean.shape[1]:
+            log.append((float(theta), float("nan"), -1, -1))
+            continue
+        ncc = fft_ncc(t_rot, image_clean)
+        idx = int(np.argmax(ncc))
+        oy, ox = np.unravel_index(idx, ncc.shape)
+        v = float(ncc[oy, ox])
+        log.append((float(theta), v, int(oy), int(ox)))
+        if v > best["ncc"]:
+            best = {
+                "theta": float(theta),
+                "oy": int(oy),
+                "ox": int(ox),
+                "ncc": v,
+                "template_shape": tuple(int(x) for x in t_rot.shape),
+            }
+    best["sweep_log"] = log
+    return best
+
+
+# --------------------------------------------------------------
+# Per-variant driver
+# --------------------------------------------------------------
+@dataclass
+class ProjResult:
+    hcr: np.ndarray
+    cz: np.ndarray
+    hcr_xy_um: float
+    cz_xy_um: float
+    cz_z_um: float
+    hcr_z_um: float
+
+
+def compute_projections_for_variant(
+    s, hcr_ch: str, hcr_slab, cz_slab, mode: str,
+) -> ProjResult:
+    hcr_surf = get_hcr_top_surface_iter07(s, level=HCR_LEVEL)
+    cz_surf = get_cz_surface_iter08(s)
+    vol, hcr_xy_um, hcr_z_um = load_hcr_volume(s, channel=hcr_ch, level=HCR_LEVEL)
+    vol = vol.astype(np.float32)
+    hcr_proj = top_slab_projection(
+        vol, hcr_surf, xy_um=float(hcr_xy_um), z_um=float(hcr_z_um),
+        d_lo=hcr_slab[0], d_hi=hcr_slab[1], mode=mode,
+    )
+    del vol
+    cz_vol = load_cz_zstack(s)
+    cz_proj = top_slab_projection(
+        cz_vol, cz_surf, xy_um=float(s.cz_xy_um), z_um=float(s.cz_z_um),
+        d_lo=cz_slab[0], d_hi=cz_slab[1], mode=mode,
+    )
+    return ProjResult(
+        hcr=hcr_proj, cz=cz_proj,
+        hcr_xy_um=float(hcr_xy_um), cz_xy_um=float(s.cz_xy_um),
+        cz_z_um=float(s.cz_z_um), hcr_z_um=float(hcr_z_um),
+    )
+
+
+def stretch01(img, p_lo=1, p_hi=99):
+    a = np.asarray(img, dtype=np.float32)
+    finite = np.isfinite(a)
+    if not finite.any():
+        return np.zeros_like(a)
+    lo, hi = np.percentile(a[finite], [p_lo, p_hi])
+    return np.clip((a - lo) / max(hi - lo, 1e-6), 0, 1)
+
+
+def render_overlay(
+    sid: str, variant: str, hcr_img: np.ndarray, cz_warm: np.ndarray,
+    cz_template_rot: np.ndarray, oy: int, ox: int, theta: float, ncc: float,
+    sweep_log: list, hcr_xy_um: float, out_path: Path,
+):
+    fig, axes = plt.subplots(1, 4, figsize=(20, 5.5))
+
+    # 1. HCR
+    H, W = hcr_img.shape
+    extent = [0, W * hcr_xy_um, H * hcr_xy_um, 0]
+    axes[0].imshow(stretch01(hcr_img), cmap="gray", extent=extent, origin="upper")
+    axes[0].set_title(f"HCR ({variant})")
+    axes[0].set_xlabel("x (µm)"); axes[0].set_ylabel("y (µm)")
+
+    # 2. CZ warm-started (180° + sxy scale)
+    h, w = cz_warm.shape
+    extent_cz = [0, w * hcr_xy_um, h * hcr_xy_um, 0]
+    axes[1].imshow(stretch01(cz_warm), cmap="gray", extent=extent_cz, origin="upper")
+    axes[1].set_title("CZ warm start (180°, ×sxy)")
+    axes[1].set_xlabel("x (µm)"); axes[1].set_ylabel("y (µm)")
+
+    # 3. Overlay HCR(red) + best CZ(green)
+    rgb = np.zeros((H, W, 3), dtype=np.float32)
+    rgb[..., 0] = stretch01(hcr_img)
+    th, tw = cz_template_rot.shape
+    canvas = np.zeros((H, W), dtype=np.float32)
+    y1 = min(H, oy + th); x1 = min(W, ox + tw)
+    canvas[oy:y1, ox:x1] = stretch01(cz_template_rot)[: y1 - oy, : x1 - ox]
+    rgb[..., 1] = canvas
+    axes[2].imshow(rgb, extent=extent, origin="upper")
+    cz_center_x = (ox + tw / 2) * hcr_xy_um
+    cz_center_y = (oy + th / 2) * hcr_xy_um
+    axes[2].plot(cz_center_x, cz_center_y, "+", color="cyan", markersize=14, mew=2)
+    axes[2].set_title(
+        f"overlay  θ={theta:+.2f}°  (oy,ox)=({oy},{ox}) px  NCC={ncc:.3f}"
+    )
+    axes[2].set_xlabel("x (µm)"); axes[2].set_ylabel("y (µm)")
+
+    # 4. NCC vs θ
+    log = np.array([(t, n) for (t, n, _, _) in sweep_log if np.isfinite(n)])
+    if len(log):
+        axes[3].plot(log[:, 0], log[:, 1], "o-", ms=3)
+        axes[3].axvline(theta, color="r", lw=0.8, label=f"best θ={theta:+.2f}°")
+        axes[3].set_xlabel("θ residual after warm start (°)")
+        axes[3].set_ylabel("max NCC over (tx, ty)")
+        axes[3].set_title("rotation sweep")
+        axes[3].legend(loc="lower center", fontsize=8)
+        axes[3].grid(True, alpha=0.3)
+
+    fig.suptitle(f"{sid} — {variant}")
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=110, bbox_inches="tight")
+    plt.close(fig)
+
+
+# --------------------------------------------------------------
+# Main
+# --------------------------------------------------------------
+def process_subject(sid: str) -> dict:
+    print(f"\n=== {sid} ===", flush=True)
+    s = load_subject(sid)
+    sxy_info = estimate_sxy_roi_area(sid)
+    sxy = float(sxy_info["sxy_median"])
+    print(f"  sxy_median={sxy:.4f}  sxy_gt={sxy_info['sxy_gt']:.4f}  cz_xy={s.cz_xy_um:.3f}")
+
+    out: dict = {"sid": sid, "sxy": sxy, "sxy_gt": float(sxy_info["sxy_gt"]),
+                 "cz_xy_um": float(s.cz_xy_um), "variants": {}}
+
+    # Coarse + fine rotation grid (residual θ around the 180° warm start)
+    coarse = np.arange(-30.0, 30.0 + 1e-9, 2.0)
+    fine_window_deg = 3.0
+    fine_step_deg = 0.25
+
+    for (vname, hcr_ch, hcr_slab, cz_slab, mode) in VARIANTS:
+        print(f"  [{vname}] computing projections …", flush=True)
+        r = compute_projections_for_variant(s, hcr_ch, hcr_slab, cz_slab, mode)
+        # mild Gaussian blur to suppress noise / tile-edge artifacts
+        sigma_um = 6.0
+        sig_h_px = sigma_um / r.hcr_xy_um
+        sig_c_px = sigma_um / r.cz_xy_um
+        hcr_blur = gaussian_filter(
+            np.where(np.isnan(r.hcr), float(np.nanmean(r.hcr)), r.hcr),
+            sigma=sig_h_px,
+        ).astype(np.float32)
+        cz_blur = gaussian_filter(
+            np.where(np.isnan(r.cz), float(np.nanmean(r.cz)), r.cz),
+            sigma=sig_c_px,
+        ).astype(np.float32)
+
+        cz_warm = warm_start_cz(cz_blur, cz_xy_um=r.cz_xy_um, hcr_xy_um=r.hcr_xy_um, sxy=sxy)
+        print(
+            f"    HCR shape={r.hcr.shape} xy={r.hcr_xy_um:.3f}µm   "
+            f"CZ raw={r.cz.shape} xy={r.cz_xy_um:.3f}µm   "
+            f"CZ warm={cz_warm.shape}"
+        )
+
+        coarse_best = sweep_rotation_translation(cz_warm, hcr_blur, coarse)
+        fine_grid = np.arange(
+            coarse_best["theta"] - fine_window_deg,
+            coarse_best["theta"] + fine_window_deg + 1e-9,
+            fine_step_deg,
+        )
+        fine_best = sweep_rotation_translation(cz_warm, hcr_blur, fine_grid)
+        best = fine_best if fine_best["ncc"] >= coarse_best["ncc"] else coarse_best
+
+        # Re-rotate template at best θ for visualisation
+        cz_template_rot = nd_rotate(
+            cz_warm, best["theta"], reshape=True, order=1, mode="constant", cval=0.0
+        )
+
+        png = FIG / f"register_{sid}_{vname}.png"
+        render_overlay(
+            sid, vname, hcr_blur, cz_warm, cz_template_rot,
+            best["oy"], best["ox"], best["theta"], best["ncc"],
+            best["sweep_log"], r.hcr_xy_um, png,
+        )
+
+        # Convert (oy, ox) to physical translation in HCR µm of CZ center
+        th, tw = cz_template_rot.shape
+        cz_center_um_xy = (
+            (best["ox"] + tw / 2) * r.hcr_xy_um,
+            (best["oy"] + th / 2) * r.hcr_xy_um,
+        )
+        out["variants"][vname] = {
+            "best_theta_deg": best["theta"],
+            "best_oy_px": best["oy"],
+            "best_ox_px": best["ox"],
+            "best_ncc": best["ncc"],
+            "cz_center_in_hcr_um": cz_center_um_xy,
+            "hcr_shape": list(r.hcr.shape),
+            "cz_shape_warm": list(cz_warm.shape),
+            "hcr_xy_um": r.hcr_xy_um,
+            "hcr_ch": hcr_ch,
+            "hcr_slab_um": list(hcr_slab),
+            "cz_slab_um": list(cz_slab),
+            "mode": mode,
+            "sigma_blur_um": sigma_um,
+            "wrote": str(png.relative_to(HERE)),
+        }
+        print(
+            f"    best: θ={best['theta']:+.2f}°  "
+            f"(oy,ox)=({best['oy']},{best['ox']}) px  "
+            f"CZ center=({cz_center_um_xy[0]:.0f}, {cz_center_um_xy[1]:.0f}) µm  "
+            f"NCC={best['ncc']:.3f}"
+        )
+
+    out_json = HERE / f"register_{sid}.json"
+    out_json.write_text(json.dumps(out, indent=2, default=float))
+    print(f"  wrote {out_json.name}")
+    return out
+
+
+def main():
+    all_results = {}
+    for sid in SUBJECTS:
+        all_results[sid] = process_subject(sid)
+    summary = HERE / "register_summary.json"
+    summary.write_text(json.dumps(all_results, indent=2, default=float))
+    print(f"\nwrote {summary.name}")
+
+
+if __name__ == "__main__":
+    main()

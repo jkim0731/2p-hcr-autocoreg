@@ -1,0 +1,9 @@
+{
+  "id": "8",
+  "subject": "v2-S01: Stage A locked-prior warm-start",
+  "description": "Build LockedPriorWarmStart consuming surface_registration_v2, roi_area_sxy, surfaces_iter08; emit (R, sxy, t_x, t_y, t_z) for all 6 subjects; replace default_warmstart_zyx in P1/P4/P6/C5 dispatch and re-bench on F9. Validate locked-prior matches or beats v1 default warm-start on ≥4/6 subjects.",
+  "activeForm": "Running v2-S01 Stage A locked-prior warm-start",
+  "status": "completed",
+  "blocks": [],
+  "blockedBy": []
+}

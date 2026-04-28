@@ -1,0 +1,9 @@
+{
+  "id": "10",
+  "subject": "Build 07f driver script",
+  "description": "Build dev_code/07f_sz_from_zbbox.py that uses roi_area_sxy per-cell bboxes and computes sz_bbox + depth-binned sz + aspect-ratio diagnostic on 4 spot subjects",
+  "activeForm": "Building driver script",
+  "status": "completed",
+  "blocks": [],
+  "blockedBy": []
+}

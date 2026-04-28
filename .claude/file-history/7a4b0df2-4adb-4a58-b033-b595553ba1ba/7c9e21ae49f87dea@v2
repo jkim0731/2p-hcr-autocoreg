@@ -1,0 +1,105 @@
+"""Build a side-by-side comparison of the three V3 registration methods.
+
+Reads:
+  • register_binary_summary.json
+  • register_constellation_summary.json
+  • register_mi_summary.json
+
+Writes:
+  • comparison.csv  (one row per (sid, method)) — best NCC + chosen stage
+  • figures/comparison_summary.png — bar chart per subject
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+
+HERE = Path(__file__).resolve().parent
+FIG = HERE / "figures"
+
+SUBJECTS = ["788406", "790322", "767018", "782149", "755252", "767022"]
+
+
+def load_or_empty(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    return json.loads(path.read_text())
+
+
+def main():
+    bin_ = load_or_empty(HERE / "register_binary_summary.json")
+    cons = load_or_empty(HERE / "register_constellation_summary.json")
+    mi = load_or_empty(HERE / "register_mi_summary.json")
+
+    rows = []
+    for sid in SUBJECTS:
+        # Binary: best stage NCC
+        b = bin_.get(sid, {})
+        if "best_stage" in b:
+            rows.append({
+                "sid": sid, "method": "binary",
+                "best_stage": b["best_stage"], "best_ncc": b.get("best_ncc"),
+                "rigid_ncc": b.get("rigid", {}).get("ncc"),
+                "affine_ncc": b.get("affine", {}).get("ncc"),
+                "nonrigid_ncc": b.get("nonrigid", {}).get("ncc"),
+                "rigid_theta_deg": b.get("rigid", {}).get("theta_deg"),
+            })
+        # Constellation: binary NCC after RANSAC
+        c = cons.get(sid, {})
+        if "binary_ncc_after_ransac" in c:
+            rows.append({
+                "sid": sid, "method": "constellation",
+                "best_stage": "ransac",
+                "best_ncc": c["binary_ncc_after_ransac"],
+                "n_inliers": c.get("ransac", {}).get("n_inliers"),
+                "n_cz_blobs": c.get("n_cz_blobs"),
+                "ransac_theta_deg": c.get("ransac", {}).get("theta_deg"),
+                "ransac_scale": c.get("ransac", {}).get("scale"),
+                "ransac_ok": c.get("ransac", {}).get("ok"),
+            })
+        # MI: re-scored binary NCC of the best stage
+        m = mi.get(sid, {})
+        if "rigid" in m:
+            stages = {"rigid": m["rigid"]["bin_ncc"],
+                      "affine_mi": m["affine_mi"]["bin_ncc"],
+                      "nonrigid": m["nonrigid"]["bin_ncc"]}
+            best_st = max(stages, key=stages.get)
+            rows.append({
+                "sid": sid, "method": "mi",
+                "best_stage": best_st, "best_ncc": stages[best_st],
+                "rigid_ncc": stages["rigid"],
+                "affine_ncc": stages["affine_mi"],
+                "nonrigid_ncc": stages["nonrigid"],
+            })
+
+    df = pd.DataFrame(rows)
+    df.to_csv(HERE / "comparison.csv", index=False)
+    print(df.to_string(index=False))
+    print(f"\nwrote comparison.csv ({len(df)} rows)")
+
+    # Bar chart: subject × method, best NCC
+    fig, ax = plt.subplots(figsize=(12, 5))
+    methods = ["binary", "constellation", "mi"]
+    width = 0.27
+    x = np.arange(len(SUBJECTS))
+    for i, meth in enumerate(methods):
+        ys = []
+        for sid in SUBJECTS:
+            r = df[(df.sid == sid) & (df.method == meth)]
+            ys.append(float(r.best_ncc.iloc[0]) if len(r) else np.nan)
+        ax.bar(x + i * width, ys, width, label=meth)
+    ax.set_xticks(x + width); ax.set_xticklabels(SUBJECTS)
+    ax.set_ylabel("best binary-NCC (HCR vs warped CZ)")
+    ax.set_title("V3 registration: method comparison (best NCC per subject)")
+    ax.legend(); ax.grid(True, alpha=0.3, axis="y")
+    fig.tight_layout()
+    fig.savefig(FIG / "comparison_summary.png", dpi=120, bbox_inches="tight")
+    print(f"wrote comparison_summary.png")
+
+
+if __name__ == "__main__":
+    main()

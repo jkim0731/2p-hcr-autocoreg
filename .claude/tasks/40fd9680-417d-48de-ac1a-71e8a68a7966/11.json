@@ -1,0 +1,9 @@
+{
+  "id": "11",
+  "subject": "v2-S04: Stage D seed constellation",
+  "description": "Surface-anchored seed enumerator + drop-lift filter on 788406; benchmark vs landmarks_qced.csv; generalize to other subjects.",
+  "activeForm": "Running v2-S04 seed constellation",
+  "status": "pending",
+  "blocks": [],
+  "blockedBy": []
+}

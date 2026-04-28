@@ -1,0 +1,439 @@
+"""Final 4-method comparison against two HCR target binaries.
+
+Methods (all initialised by the same FFT-NCC θ-sweep rigid stage):
+  M1 rigid               — translation + rotation only.
+  M2 rigid + affine      — 4-DOF similarity, scale ±15 %, θ ±15°.
+  M4a rigid + PWR 3×3    — Suite2p-style piecewise rigid on binary.
+  M4b rigid + PWR 4×4    — same, finer block grid.
+
+HCR targets (both rendered on the level-4 pia-flat 0–100 µm grid):
+  A. ws488 — watershed-binarised HCR 488 MIP (current).
+  B. gfp_roi — GFP+ HCR cell-body ROI disks (radius ≈ 5 µm) projected
+     from ``s.hcr_centroids`` filtered by ``s.hcr_gfp_df``, depth-
+     filtered to [0, 100] µm beneath the HCR top surface.
+
+Protocol:
+  1. Run M1 on FULL HCR canvas (independently per target).
+  2. Crop HCR to bbox of M1 mapping + 15 % margin → cropped frame.
+  3. Run M2/M4a/M4b on the cropped frame.
+  4. NCC = binary-vs-binary on the cropped frame, single mask, for
+     every method.
+  5. For each subject report the best of {M1, M2, M4a, M4b} per
+     target.
+
+Outputs:
+  • figures/compare_methods_final_{sid}.png — 2×5 panel per subject
+    (rows = target ws488 / gfp_roi, cols = HCR / M1 / M2 / M4a / M4b)
+  • figures/compare_methods_final_summary.png — grouped bar chart
+  • compare_methods_final_summary.json
+"""
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.ndimage import (
+    affine_transform, binary_dilation, gaussian_filter, map_coordinates,
+)
+from scipy.interpolate import RegularGridInterpolator
+
+sys.path.insert(0, "/root/capsule/code/dev_code")
+from benchmark_analysis import depth_from_surface  # type: ignore  # noqa: E402
+from benchmark_data_loader import (  # type: ignore  # noqa: E402
+    hcr_px_to_um, load_subject,
+)
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from compare_binarization import variant_watershed  # type: ignore  # noqa: E402
+from register_binary import (  # type: ignore  # noqa: E402
+    cz_binary_top_mip, get_sxy_with_fallback, hcr488_top_mip,
+    stage1_rigid, stage2_affine, warm_start_cz_binary,
+)
+from register_nonrigid_variants import (  # type: ignore  # noqa: E402
+    nonrigid_piecewise_rigid,
+)
+from surfaces_iter08 import (  # type: ignore  # noqa: E402
+    get_cz_surface_iter08, get_hcr_top_surface_iter07,
+)
+
+HERE = Path(__file__).resolve().parent
+FIG = HERE / "figures"
+FIG.mkdir(parents=True, exist_ok=True)
+SUBJECTS = ["788406", "790322", "767018", "782149", "755252", "767022"]
+HCR_LEVEL = 4
+CZ_SLAB = (0.0, 50.0)
+HCR_SLAB = (0.0, 100.0)
+
+SCALE_BOUNDS = (0.85, 1.15)
+THETA_BOUND_DEG = 15.0
+PWR_MAX_SHIFT_PX = 16
+PWR_SMOOTH_SIGMA_PX = 8.0
+GFP_DISK_RADIUS_UM = 5.0
+CROP_MARGIN_FRAC = 0.15
+WARP_BIN_THR = 0.5
+
+TARGET_KEYS = ["ws488", "gfp_roi"]
+METHOD_KEYS = ["rigid", "affine", "pwr3x3", "pwr4x4"]
+METHOD_LABELS = {
+    "rigid":  "M1 rigid",
+    "affine": "M2 rig+aff",
+    "pwr3x3": "M4a rig+PWR 3×3",
+    "pwr4x4": "M4b rig+PWR 4×4",
+}
+
+
+# --------------------------------------------------------------
+# HCR GFP+ ROI mask on level-4 MIP grid
+# --------------------------------------------------------------
+def hcr_gfp_roi_mask(s, hcr_surf, hcr_xy_um: float, mip_shape: tuple,
+                    d_lo: float = HCR_SLAB[0], d_hi: float = HCR_SLAB[1],
+                    radius_min_um: float = 4.0,
+                    radius_max_um: float = 9.0) -> np.ndarray:
+    """Binary mask of GFP+ HCR ROIs (one disk per cell) on the level-4
+    MIP grid. The per-cell disk radius is derived from the segmentation
+    `volume` field (level-0 voxels → µm³ → equivalent-sphere radius),
+    clipped to ``[radius_min_um, radius_max_um]`` so the ROIs reflect
+    cell-body size while clipping over-large ROIs that include
+    processes."""
+    H, W = mip_shape
+    mask = np.zeros((H, W), dtype=np.uint8)
+    if s.hcr_centroids.empty or s.hcr_gfp_df.empty:
+        return mask
+
+    cents = s.hcr_centroids.copy()
+    cents["hcr_id"] = cents["hcr_id"].astype(int)
+    gfp = s.hcr_gfp_df.copy()
+    # Different builds use either 'volume' or 'count' for the
+    # ROI voxel count (level-0). Pick whichever exists.
+    if "volume" in gfp.columns:
+        vol_col = "volume"
+    elif "count" in gfp.columns:
+        vol_col = "count"
+    else:
+        vol_col = None  # fall back to fixed-radius disks
+    keep_cols = ["hcr_id"] + ([vol_col] if vol_col else [])
+    gfp = gfp[keep_cols].copy()
+    gfp["hcr_id"] = gfp["hcr_id"].astype(int)
+    merged = cents.merge(gfp, on="hcr_id", how="inner")
+    if merged.empty:
+        return mask
+
+    px = merged[["z_px", "y_px", "x_px"]].to_numpy(float)
+    zyx_um = hcr_px_to_um(px, s)
+    xyz_um = zyx_um[:, [2, 1, 0]]
+    depth = depth_from_surface(xyz_um, hcr_surf)
+    keep = (depth >= d_lo) & (depth <= d_hi)
+    if not keep.any():
+        return mask
+
+    yy_um = zyx_um[keep, 1]
+    xx_um = zyx_um[keep, 2]
+
+    if vol_col is not None:
+        vol_l0 = merged.loc[keep, vol_col].to_numpy(float)
+        # level-0 voxel size: xy_um at level-0 = s.hcr_xy_um / 4
+        xy_um_l0 = s.hcr_xy_um / 4.0
+        z_um_l0 = float(s.hcr_z_um)
+        vol_um3 = vol_l0 * (xy_um_l0 ** 2) * z_um_l0
+        radii_um = np.cbrt(3.0 * vol_um3 / (4.0 * np.pi))
+        radii_um = np.clip(radii_um, radius_min_um, radius_max_um)
+    else:
+        # Fallback to a fixed mid-range cell-body radius
+        radii_um = np.full(int(keep.sum()),
+                           0.5 * (radius_min_um + radius_max_um),
+                           dtype=np.float32)
+
+    yy_px = np.round(yy_um / hcr_xy_um).astype(int)
+    xx_px = np.round(xx_um / hcr_xy_um).astype(int)
+    radii_px = np.maximum(1, np.round(radii_um / hcr_xy_um).astype(int))
+
+    for yc, xc, rp in zip(yy_px, xx_px, radii_px):
+        if not (0 <= yc < H and 0 <= xc < W):
+            continue
+        y_lo = max(0, yc - rp); y_hi = min(H, yc + rp + 1)
+        x_lo = max(0, xc - rp); x_hi = min(W, xc + rp + 1)
+        yy, xx = np.ogrid[y_lo - yc:y_hi - yc, x_lo - xc:x_hi - xc]
+        disk = (yy * yy + xx * xx) <= rp * rp
+        mask[y_lo:y_hi, x_lo:x_hi] |= disk.astype(np.uint8)
+    return mask
+
+
+# --------------------------------------------------------------
+# NCC + helpers
+# --------------------------------------------------------------
+def ncc_binary(warped: np.ndarray, hcr_bin: np.ndarray,
+               mask: np.ndarray | None = None) -> float:
+    a = (np.asarray(warped, dtype=np.float32) > WARP_BIN_THR).astype(np.float64)
+    b = (np.asarray(hcr_bin) > 0.5).astype(np.float64)
+    if mask is None:
+        mask = np.ones(b.shape, dtype=bool)
+    if mask.sum() < 50:
+        return -1.0
+    av = a[mask]; bv = b[mask]
+    av = av - av.mean(); bv = bv - bv.mean()
+    den = av.std() * bv.std()
+    if den <= 1e-12:
+        return -1.0
+    return float((av * bv).mean() / den)
+
+
+def _rigid_to_M_off(rigid: dict, template_shape, template_shape_rot) -> tuple:
+    th = np.deg2rad(rigid["theta"])
+    c, s = np.cos(th), np.sin(th)
+    M0 = np.array([[c, s], [-s, c]], dtype=np.float64)
+    H_t, W_t = template_shape
+    rh, rw = template_shape_rot
+    cy_out = rigid["oy"] + rh / 2.0
+    cx_out = rigid["ox"] + rw / 2.0
+    cy_in = H_t / 2.0; cx_in = W_t / 2.0
+    off0 = np.array([cy_in, cx_in]) - M0 @ np.array([cy_out, cx_out])
+    return M0, off0
+
+
+def _bbox_with_margin(mask_bool: np.ndarray, margin_frac: float, shape):
+    H, W = shape
+    if not mask_bool.any():
+        return 0, H, 0, W
+    rows = np.any(mask_bool, axis=1)
+    cols = np.any(mask_bool, axis=0)
+    y0, y1 = int(np.where(rows)[0][0]), int(np.where(rows)[0][-1])
+    x0, x1 = int(np.where(cols)[0][0]), int(np.where(cols)[0][-1])
+    h = y1 - y0 + 1; w = x1 - x0 + 1
+    my = int(round(h * margin_frac)); mx = int(round(w * margin_frac))
+    return (max(0, y0 - my), min(H, y1 + 1 + my),
+            max(0, x0 - mx), min(W, x1 + 1 + mx))
+
+
+# --------------------------------------------------------------
+# Run M1/M2/M4a/M4b for one (CZ, HCR_target) pair
+# --------------------------------------------------------------
+def run_methods_for_target(cz_bin_warm: np.ndarray, hcr_bin_full: np.ndarray) -> dict:
+    rigid = stage1_rigid(cz_bin_warm, hcr_bin_full)
+    M0, off0 = _rigid_to_M_off(
+        rigid, template_shape=cz_bin_warm.shape,
+        template_shape_rot=rigid["template_shape"],
+    )
+    rigid_warp_full = affine_transform(
+        cz_bin_warm.astype(np.float32), M0, offset=off0,
+        output_shape=hcr_bin_full.shape, order=1, mode="constant", cval=0.0,
+    )
+
+    fg = rigid_warp_full > WARP_BIN_THR
+    y0, y1, x0, x1 = _bbox_with_margin(fg, CROP_MARGIN_FRAC, hcr_bin_full.shape)
+    hcr_bin = hcr_bin_full[y0:y1, x0:x1].astype(np.uint8)
+    rigid_warp = rigid_warp_full[y0:y1, x0:x1]
+    off0_c = off0 + M0 @ np.array([y0, x0], dtype=np.float64)
+    rigid_ncc = ncc_binary(rigid_warp, hcr_bin)
+
+    affine = stage2_affine(
+        cz_bin_warm, hcr_bin, M0, off0_c,
+        scale_bounds=SCALE_BOUNDS, theta_bounds_deg=THETA_BOUND_DEG,
+    )
+    affine_warp = affine_transform(
+        cz_bin_warm.astype(np.float32), affine["M"], offset=affine["offset"],
+        output_shape=hcr_bin.shape, order=1, mode="constant", cval=0.0,
+    )
+    affine_ncc = ncc_binary(affine_warp, hcr_bin)
+
+    pwr3 = nonrigid_piecewise_rigid(
+        rigid_warp, hcr_bin, n_blocks=3,
+        max_shift_px=PWR_MAX_SHIFT_PX,
+        interp_smooth_sigma_px=PWR_SMOOTH_SIGMA_PX,
+    )
+    pwr3_ncc = ncc_binary(pwr3["warped"], hcr_bin)
+
+    pwr4 = nonrigid_piecewise_rigid(
+        rigid_warp, hcr_bin, n_blocks=4,
+        max_shift_px=PWR_MAX_SHIFT_PX,
+        interp_smooth_sigma_px=PWR_SMOOTH_SIGMA_PX,
+    )
+    pwr4_ncc = ncc_binary(pwr4["warped"], hcr_bin)
+
+    return {
+        "crop_bbox": (int(y0), int(y1), int(x0), int(x1)),
+        "hcr_bin_crop": hcr_bin,
+        "rigid":  {"warp": rigid_warp,    "ncc": rigid_ncc,
+                   "theta_deg": float(rigid["theta"])},
+        "affine": {"warp": affine_warp,   "ncc": affine_ncc,
+                   "params": affine["params"]},
+        "pwr3x3": {"warp": pwr3["warped"], "ncc": pwr3_ncc,
+                   "df_max_dy_px": float(pwr3.get("df_max_dy_px", 0.0)),
+                   "df_max_dx_px": float(pwr3.get("df_max_dx_px", 0.0))},
+        "pwr4x4": {"warp": pwr4["warped"], "ncc": pwr4_ncc,
+                   "df_max_dy_px": float(pwr4.get("df_max_dy_px", 0.0)),
+                   "df_max_dx_px": float(pwr4.get("df_max_dx_px", 0.0))},
+    }
+
+
+# --------------------------------------------------------------
+# Render
+# --------------------------------------------------------------
+def render_subject(sid, results: dict, hcr_xy_um: float, sxy: float,
+                   out_path: Path):
+    fig, axes = plt.subplots(2, 5, figsize=(22, 10))
+
+    for r, tk in enumerate(TARGET_KEYS):
+        res = results[tk]
+        hcr_bin = res["hcr_bin_crop"]
+        H, W = hcr_bin.shape
+        extent = [0, W * hcr_xy_um, H * hcr_xy_um, 0]
+
+        ax = axes[r, 0]
+        rgb = np.zeros((H, W, 3), dtype=np.float32)
+        rgb[..., 0] = (hcr_bin > 0.5).astype(np.float32)
+        ax.imshow(rgb, extent=extent, origin="upper")
+        ax.set_title(f"{tk} target  (crop {H}×{W})")
+        ax.set_ylabel(f"{tk}\n", fontsize=11)
+
+        for c, mk in enumerate(METHOD_KEYS, start=1):
+            warped = res[mk]["warp"]
+            wb = (np.asarray(warped, dtype=np.float32) > WARP_BIN_THR).astype(np.float32)
+            rgb = np.zeros((H, W, 3), dtype=np.float32)
+            rgb[..., 0] = (hcr_bin > 0.5).astype(np.float32)
+            rgb[..., 1] = wb
+            ax = axes[r, c]
+            ax.imshow(rgb, extent=extent, origin="upper")
+            ncc = res[mk]["ncc"]
+            ax.set_title(f"{METHOD_LABELS[mk]}\nNCC={ncc:.3f}")
+            ax.set_xlabel("x (µm)")
+            if r == 1:
+                ax.set_xlabel("x (µm)")
+
+    fig.suptitle(f"{sid} — 4 methods × 2 HCR targets  (sxy={sxy:.3f})",
+                 fontsize=14)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=110, bbox_inches="tight")
+    plt.close(fig)
+
+
+def render_summary(all_results: dict, out_path: Path):
+    sids = [sid for sid in SUBJECTS if sid in all_results
+            and "error" not in all_results[sid]]
+    fig, axes = plt.subplots(1, 2, figsize=(18, 5.5), sharey=True)
+    width = 0.20
+    x = np.arange(len(sids))
+    colors = ["#4472C4", "#ED7D31", "#A5A5A5", "#FFC000"]
+
+    for ti, tk in enumerate(TARGET_KEYS):
+        ax = axes[ti]
+        for i, mk in enumerate(METHOD_KEYS):
+            ys = [all_results[sid][tk][mk]["ncc"] for sid in sids]
+            ax.bar(x + i * width, ys, width, label=METHOD_LABELS[mk],
+                   color=colors[i])
+        # Annotate the per-subject best method
+        for j, sid in enumerate(sids):
+            scores = {mk: all_results[sid][tk][mk]["ncc"] for mk in METHOD_KEYS}
+            best = max(scores, key=scores.get)
+            yb = scores[best]
+            i_best = METHOD_KEYS.index(best)
+            ax.text(j + i_best * width, yb + 0.005, "★",
+                    ha="center", fontsize=14, color="black")
+        ax.set_xticks(x + 1.5 * width)
+        ax.set_xticklabels(sids)
+        ax.set_title(f"target = {tk}")
+        ax.grid(True, alpha=0.3, axis="y")
+        if ti == 0:
+            ax.set_ylabel("binary NCC vs HCR target (M1-bbox crop)")
+        ax.legend(loc="upper left", fontsize=9)
+
+    fig.suptitle("4-method comparison × 2 HCR targets (★ = per-subject best)",
+                 fontsize=13)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=120, bbox_inches="tight")
+    plt.close(fig)
+
+
+# --------------------------------------------------------------
+# Driver
+# --------------------------------------------------------------
+def process_subject(sid: str) -> dict:
+    print(f"\n=== {sid} ===", flush=True)
+    s = load_subject(sid)
+    sxy, sxy_src = get_sxy_with_fallback(sid, s)
+    print(f"  sxy={sxy:.4f}  src={sxy_src}", flush=True)
+
+    hcr_surf = get_hcr_top_surface_iter07(s, level=HCR_LEVEL)
+    cz_surf = get_cz_surface_iter08(s)
+
+    hcr_488_full, hcr_xy_um = hcr488_top_mip(s, hcr_surf, *HCR_SLAB)
+    target_a = variant_watershed(hcr_488_full, hcr_xy_um)
+    target_b = hcr_gfp_roi_mask(s, hcr_surf, hcr_xy_um, hcr_488_full.shape)
+    n_gfp = int(s.hcr_gfp_df["hcr_id"].nunique()) if not s.hcr_gfp_df.empty else 0
+    print(f"  HCR full {target_a.shape}; "
+          f"ws488 fill={target_a.mean()*100:.1f}%, "
+          f"gfp_roi fill={target_b.mean()*100:.1f}%, "
+          f"GFP+ total ids={n_gfp}", flush=True)
+
+    cz_bin = cz_binary_top_mip(s, cz_surf, *CZ_SLAB)
+    cz_bin_warm = warm_start_cz_binary(
+        cz_bin, cz_xy_um=float(s.cz_xy_um), hcr_xy_um=hcr_xy_um, sxy=sxy,
+    )
+
+    results = {}
+    for tk, target in [("ws488", target_a), ("gfp_roi", target_b)]:
+        print(f"  --- target = {tk} ---", flush=True)
+        res = run_methods_for_target(cz_bin_warm, target)
+        for mk in METHOD_KEYS:
+            v = res[mk]
+            extra = ""
+            if "df_max_dy_px" in v:
+                extra = f"  df_max=({v['df_max_dy_px']:.1f},{v['df_max_dx_px']:.1f})px"
+            print(f"    {METHOD_LABELS[mk]:18s} bin-NCC={v['ncc']:.3f}{extra}",
+                  flush=True)
+        best = max(METHOD_KEYS, key=lambda k: res[k]["ncc"])
+        print(f"    best = {METHOD_LABELS[best]} ({res[best]['ncc']:.3f})", flush=True)
+        results[tk] = res
+
+    out_png = FIG / f"compare_methods_final_{sid}.png"
+    render_subject(sid, results, hcr_xy_um, sxy, out_png)
+
+    summary = {"sid": sid, "sxy": sxy, "sxy_source": sxy_src,
+               "hcr_xy_um": hcr_xy_um}
+    for tk in TARGET_KEYS:
+        r = results[tk]
+        summary[tk] = {"crop_bbox": list(r["crop_bbox"])}
+        for mk in METHOD_KEYS:
+            summary[tk][mk] = {kk: vv for kk, vv in r[mk].items() if kk != "warp"}
+        summary[tk]["best"] = max(METHOD_KEYS, key=lambda k: r[k]["ncc"])
+        summary[tk]["best_ncc"] = float(r[summary[tk]["best"]]["ncc"])
+    summary["wrote"] = str(out_png.relative_to(HERE))
+    return summary
+
+
+def main():
+    all_results = {}
+    for sid in SUBJECTS:
+        try:
+            all_results[sid] = process_subject(sid)
+        except Exception as e:
+            print(f"  ERROR {sid}: {type(e).__name__}: {e}", flush=True)
+            import traceback; traceback.print_exc()
+            all_results[sid] = {"sid": sid, "error": str(e)}
+
+    out_json = HERE / "compare_methods_final_summary.json"
+    out_json.write_text(json.dumps(all_results, indent=2, default=float))
+    print(f"\nwrote {out_json.name}")
+    out_png = FIG / "compare_methods_final_summary.png"
+    render_summary(all_results, out_png)
+    print(f"wrote {out_png.name}")
+
+    # Text tables — one per target
+    for tk in TARGET_KEYS:
+        print(f"\nbinary NCC table — target = {tk}")
+        print(f"{'sid':<8}" + "".join(f"{m:>14}" for m in METHOD_KEYS) +
+              "    best")
+        for sid in SUBJECTS:
+            r = all_results.get(sid, {})
+            if "error" in r:
+                print(f"{sid:<8}  ERROR"); continue
+            row = "".join(f"  {r[tk][m]['ncc']:12.3f}" for m in METHOD_KEYS)
+            best = r[tk]["best"]
+            print(f"{sid:<8}{row}    {METHOD_LABELS[best]} "
+                  f"({r[tk]['best_ncc']:.3f})")
+
+
+if __name__ == "__main__":
+    main()

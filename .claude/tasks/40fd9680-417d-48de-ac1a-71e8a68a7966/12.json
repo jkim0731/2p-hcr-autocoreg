@@ -1,0 +1,9 @@
+{
+  "id": "12",
+  "subject": "v2-S05: Stage E.TPS expansion (conditional)",
+  "description": "Run only on subjects where v2-S03 r@20 < 0.50. Wire B2 with v1 acceptance gates on top of Stage D seeds.",
+  "activeForm": "Running v2-S05 TPS expansion",
+  "status": "pending",
+  "blocks": [],
+  "blockedBy": []
+}

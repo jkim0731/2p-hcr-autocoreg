@@ -1,0 +1,62 @@
+# v2-S02 — Stage B-Image sz NCC sweep
+
+**Date:** 2026-04-27
+**Owner:** automatic
+**Status:** in-progress
+**Companion docs:** `/root/capsule/code/docs/09 Full automatic v2 plan.md` §2 Stage B
+
+## Goal
+
+For each subject, sweep `sz ∈ [1.5, 4.0]` at 0.05 step.  At each sz,
+warp the CZ raw (488 channel) volume into HCR µm using the Stage A
+locked frame plus that sz + a 1-D-NCC-refined `t_z`, and compute
+Pearson NCC against the HCR raw 488 inside the
+`surface_registration_v2` crop bbox.  Pick the sz that maximises NCC.
+
+## Pass criterion (per subject)
+
+* Unimodal peak with `peak / median(NCC over sweep) ≥ 1.10`
+* Half-width at half-max ≤ 0.30 in `sz` units
+
+Failure (per subject) → `sz_s = FAILED`, no fallback. Stages C and any
+sz-locked variant of E.RV are skipped on `s` downstream; Stage D and
+sxy-only variants of E.RV still run.
+
+## Method
+
+Implementation in `full_automatic_execution_02/lib/sz_estimator.py`:
+
+1. Load Stage A locked frame (`compute_locked_prior_warm_start(s)`).
+2. Load CZ raw 488 stack at level matching HCR sampling.  Use
+   `level_4` HCR (~1 µm/vox) — same as `surface_registration_v2`.
+3. For each candidate `sz`:
+   a. Construct the 7-DOF affine `(R, sxy, sz, t_x, t_y, t_z_init)`.
+   b. Warp the CZ stack into HCR µm via
+      `scipy.ndimage.affine_transform`.
+   c. Refine `t_z` by sliding the warped stack ±100 µm in z;
+      take the offset that maximises the per-z mean-intensity Pearson
+      NCC vs HCR 488 mean-intensity-per-z.
+   d. Crop both warped CZ and HCR 488 to the
+      `surface_registration_v2` `crop_bbox` × axial range and compute
+      voxel-Pearson NCC.
+4. Sweep `sz ∈ {1.5, 1.55, ..., 4.0}` (51 steps).
+5. Apply pass criterion; emit per-subject record.
+
+## Inputs (cached)
+
+* Stage A: `compute_locked_prior_warm_start(s)` from
+  `full_automatic_execution_02/lib/locked_prior_warm.py` (v2-S01).
+* Surface registration: `surface_registration_v2.get_surface_registration(s)`
+  → `crop_bbox`, `M`, `offset`, `hcr_xy_um`.
+* CZ 488 raw: subject's `.cz_zarr` (same one R1 reads).
+* HCR 488 raw: `hcr_dir / 488_*.zarr`.
+
+## Cost estimate
+
+Each sz step: ~2 s (3-D resample) × 51 steps = ~100 s per subject.
+6 subjects × 100 s = 10 min. Manageable.
+
+## Iteration log
+
+* **2026-04-27 — iter 1.** Scaffolding session. About to implement
+  `sz_estimator.py`.

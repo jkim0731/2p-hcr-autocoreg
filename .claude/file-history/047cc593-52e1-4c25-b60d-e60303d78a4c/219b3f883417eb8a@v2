@@ -1,0 +1,229 @@
+"""Step-by-step diagnostic of the piecewise-rigid (PWR) implementation.
+
+For 782149 we:
+  1. Build the same inputs the comparison uses: watershed HCR + CZ
+     binary warped through M1 (rigid) into the M1-bbox crop frame.
+  2. Pick the centre block of a 4×4 grid (so it has plenty of cells).
+  3. Sweep NCC over (dy, dx) ∈ [-16, +16] EXACTLY as
+     ``_block_best_shift`` does.
+  4. Show the sweep heat-map and the best (dy, dx).
+  5. Apply the resulting shift two ways:
+        warp_minus(y, x) = cz(y - dy, x - dx)   (the current code)
+        warp_plus (y, x) = cz(y + dy, x + dx)   (the inverted sign)
+     and report block-NCC and full-frame NCC for each.
+  6. Also test a phase-correlation (FFT) cross-check that returns the
+     same answer up to a sign convention so we can be sure which way
+     "shift" goes.
+
+Output: figures/debug_pwr_782149.png + printed tables.
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.ndimage import affine_transform, map_coordinates
+
+sys.path.insert(0, "/root/capsule/code/dev_code")
+from benchmark_data_loader import load_subject  # type: ignore  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from compare_binarization import variant_watershed  # type: ignore  # noqa: E402
+from compare_methods_final import _bbox_with_margin, _rigid_to_M_off
+from register_binary import (  # type: ignore  # noqa: E402
+    cz_binary_top_mip, get_sxy_with_fallback, hcr488_top_mip,
+    stage1_rigid, warm_start_cz_binary,
+)
+from register_nonrigid_variants import _block_best_shift  # type: ignore  # noqa: E402
+from surfaces_iter08 import (  # type: ignore  # noqa: E402
+    get_cz_surface_iter08, get_hcr_top_surface_iter07,
+)
+
+HERE = Path(__file__).resolve().parent
+FIG = HERE / "figures"
+SID = "782149"
+N_BLOCKS = 4
+MAX_SHIFT = 16
+WARP_BIN_THR = 0.5
+
+
+def ncc_binary(warped, hcr_bin):
+    a = (np.asarray(warped, dtype=np.float32) > WARP_BIN_THR).astype(np.float64)
+    b = (np.asarray(hcr_bin) > 0.5).astype(np.float64)
+    av = a.ravel() - a.mean(); bv = b.ravel() - b.mean()
+    den = av.std() * bv.std()
+    if den <= 1e-12:
+        return -1.0
+    return float((av * bv).mean() / den)
+
+
+def ncc_sweep(cz_block, hcr_block, max_shift):
+    """Mirror of `_block_best_shift` but returns the full (2K+1)² heatmap."""
+    H, W = cz_block.shape
+    K = max_shift
+    out = np.full((2 * K + 1, 2 * K + 1), np.nan, dtype=np.float32)
+    for di, dy in enumerate(range(-K, K + 1)):
+        for dj, dx in enumerate(range(-K, K + 1)):
+            y0, y1 = max(0, dy), min(H, H + dy)
+            x0, x1 = max(0, dx), min(W, W + dx)
+            yy0, yy1 = max(0, -dy), min(H, H - dy)
+            xx0, xx1 = max(0, -dx), min(W, W - dx)
+            cz_s = cz_block[y0:y1, x0:x1]
+            hcr_s = hcr_block[yy0:yy1, xx0:xx1]
+            if cz_s.size < 25 or cz_s.std() < 1e-6 or hcr_s.std() < 1e-6:
+                continue
+            cz_z = (cz_s - cz_s.mean()) / cz_s.std()
+            hcr_z = (hcr_s - hcr_s.mean()) / hcr_s.std()
+            out[di, dj] = float((cz_z * hcr_z).mean())
+    return out  # rows = dy from -K to K, cols = dx from -K to K
+
+
+def fft_phase_corr(a, b):
+    """Return (dy, dx) shift of `a` w.r.t. `b` via phase correlation.
+    Convention: positive (dy, dx) means b was shifted (dy, dx) DOWN-RIGHT
+    relative to a (i.e. b[y, x] ≈ a[y - dy, x - dx])."""
+    a = a.astype(np.float32) - a.mean()
+    b = b.astype(np.float32) - b.mean()
+    A = np.fft.rfft2(a)
+    B = np.fft.rfft2(b)
+    R = A * np.conj(B)
+    R = R / (np.abs(R) + 1e-12)
+    r = np.fft.irfft2(R, s=a.shape)
+    idx = np.unravel_index(np.argmax(r), r.shape)
+    dy = idx[0] if idx[0] <= a.shape[0] // 2 else idx[0] - a.shape[0]
+    dx = idx[1] if idx[1] <= a.shape[1] // 2 else idx[1] - a.shape[1]
+    return int(dy), int(dx)
+
+
+def main():
+    print(f"=== {SID} PWR diagnostic ===")
+    s = load_subject(SID)
+    sxy, _ = get_sxy_with_fallback(SID, s)
+    hcr_surf = get_hcr_top_surface_iter07(s, level=4)
+    cz_surf = get_cz_surface_iter08(s)
+    hcr_488_full, hcr_xy_um = hcr488_top_mip(s, hcr_surf, 0.0, 100.0)
+    hcr_bin_full = variant_watershed(hcr_488_full, hcr_xy_um)
+
+    cz_bin = cz_binary_top_mip(s, cz_surf, 0.0, 50.0)
+    cz_warm = warm_start_cz_binary(
+        cz_bin, cz_xy_um=float(s.cz_xy_um), hcr_xy_um=hcr_xy_um, sxy=sxy)
+
+    rigid = stage1_rigid(cz_warm, hcr_bin_full)
+    M0, off0 = _rigid_to_M_off(rigid, cz_warm.shape, rigid["template_shape"])
+    rigid_warp_full = affine_transform(
+        cz_warm.astype(np.float32), M0, offset=off0,
+        output_shape=hcr_bin_full.shape, order=1, mode="constant", cval=0.0)
+    fg = rigid_warp_full > WARP_BIN_THR
+    y0, y1, x0, x1 = _bbox_with_margin(fg, 0.15, hcr_bin_full.shape)
+    hcr = hcr_bin_full[y0:y1, x0:x1].astype(np.float32)
+    cz_pre = rigid_warp_full[y0:y1, x0:x1].astype(np.float32)
+    H_im, W_im = hcr.shape
+    print(f"  crop {H_im}×{W_im};  pre-warp NCC = {ncc_binary(cz_pre, hcr):.4f}")
+
+    # Pick the (1, 1) block — interior of a 4x4 grid
+    bh, bw = H_im // N_BLOCKS, W_im // N_BLOCKS
+    bi, bj = 1, 1
+    Y0, Y1 = bi * bh, (bi + 1) * bh
+    X0, X1 = bj * bw, (bj + 1) * bw
+    cz_b = cz_pre[Y0:Y1, X0:X1]
+    hcr_b = hcr[Y0:Y1, X0:X1]
+    fill_cz = float(cz_b.mean())
+    fill_hcr = float(hcr_b.mean())
+    print(f"  block ({bi},{bj}) at y[{Y0}:{Y1}] x[{X0}:{X1}], "
+          f"shape={cz_b.shape}  fill_cz={fill_cz*100:.1f}%  "
+          f"fill_hcr={fill_hcr*100:.1f}%")
+
+    # NCC sweep
+    heat = ncc_sweep(cz_b, hcr_b, MAX_SHIFT)
+    di, dj = np.unravel_index(np.nanargmax(heat), heat.shape)
+    dy_best = di - MAX_SHIFT; dx_best = dj - MAX_SHIFT
+    ncc_at_zero = float(heat[MAX_SHIFT, MAX_SHIFT])
+    ncc_best = float(heat[di, dj])
+    print(f"  block NCC at (0,0) = {ncc_at_zero:.4f}")
+    print(f"  block best (dy,dx)= ({dy_best:+d},{dx_best:+d})  "
+          f"NCC = {ncc_best:.4f}")
+
+    # Cross-check with FFT phase correlation
+    pc_dy, pc_dx = fft_phase_corr(cz_b, hcr_b)
+    print(f"  FFT phase-corr (cz,hcr): (dy,dx) = ({pc_dy:+d},{pc_dx:+d})  "
+          f"-- this convention: hcr ≈ cz shifted by (dy,dx) DOWN-RIGHT")
+
+    # Apply the block shift to the WHOLE cropped CZ pre-warp two ways.
+    yy, xx = np.mgrid[:H_im, :W_im]
+    coords_minus = np.array([yy - dy_best, xx - dx_best])  # current code
+    coords_plus  = np.array([yy + dy_best, xx + dx_best])  # inverted sign
+    warp_minus = map_coordinates(cz_pre, coords_minus, order=1,
+                                 mode="constant", cval=0.0)
+    warp_plus  = map_coordinates(cz_pre, coords_plus,  order=1,
+                                 mode="constant", cval=0.0)
+    n_minus = ncc_binary(warp_minus, hcr)
+    n_plus  = ncc_binary(warp_plus,  hcr)
+    n_pre   = ncc_binary(cz_pre,     hcr)
+    print(f"\n  GLOBAL NCC if we apply this single block shift to the WHOLE cropped CZ:")
+    print(f"    pre-warp (no shift)         {n_pre:+.4f}")
+    print(f"    coords = yy - dy, xx - dx   {n_minus:+.4f}   (current code)")
+    print(f"    coords = yy + dy, xx + dx   {n_plus:+.4f}   (inverted sign)")
+
+    # Also run the NCC sweep on the WHOLE cropped frame (treat the whole
+    # frame as one giant 'block') to cross-check the block result.
+    full_sweep = ncc_sweep(cz_pre, hcr, MAX_SHIFT)
+    di2, dj2 = np.unravel_index(np.nanargmax(full_sweep), full_sweep.shape)
+    fdy, fdx = di2 - MAX_SHIFT, dj2 - MAX_SHIFT
+    print(f"\n  FULL-FRAME NCC sweep best (dy,dx)= ({fdy:+d},{fdx:+d})  "
+          f"NCC = {full_sweep[di2, dj2]:.4f}  (centre={full_sweep[MAX_SHIFT,MAX_SHIFT]:.4f})")
+
+    # Render
+    fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+    rgb = np.zeros((bh, bw, 3), dtype=np.float32)
+    rgb[..., 0] = (hcr_b > 0.5).astype(np.float32)
+    rgb[..., 1] = (cz_b > 0.5).astype(np.float32)
+    axes[0, 0].imshow(rgb)
+    axes[0, 0].set_title(f"block ({bi},{bj}) before shift\n"
+                         f"NCC@(0,0) = {ncc_at_zero:.3f}")
+
+    im = axes[0, 1].imshow(heat, cmap="viridis",
+                           extent=[-MAX_SHIFT, MAX_SHIFT, MAX_SHIFT, -MAX_SHIFT])
+    axes[0, 1].plot(dx_best, dy_best, "wx", ms=14, mew=3)
+    axes[0, 1].axhline(0, color="w", lw=0.5, alpha=0.5)
+    axes[0, 1].axvline(0, color="w", lw=0.5, alpha=0.5)
+    axes[0, 1].set_xlabel("dx (px)"); axes[0, 1].set_ylabel("dy (px)")
+    axes[0, 1].set_title(f"NCC heat-map\nbest = ({dy_best:+d},{dx_best:+d}) "
+                         f"NCC={ncc_best:.3f}")
+    fig.colorbar(im, ax=axes[0, 1], fraction=0.046)
+
+    full_im = axes[0, 2].imshow(full_sweep, cmap="viridis",
+                                extent=[-MAX_SHIFT, MAX_SHIFT,
+                                         MAX_SHIFT, -MAX_SHIFT])
+    axes[0, 2].plot(fdx, fdy, "wx", ms=14, mew=3)
+    axes[0, 2].axhline(0, color="w", lw=0.5, alpha=0.5)
+    axes[0, 2].axvline(0, color="w", lw=0.5, alpha=0.5)
+    axes[0, 2].set_xlabel("dx (px)"); axes[0, 2].set_ylabel("dy (px)")
+    axes[0, 2].set_title(f"FULL FRAME NCC heat-map\n"
+                         f"best=({fdy:+d},{fdx:+d}) "
+                         f"NCC={full_sweep[di2, dj2]:.3f}")
+    fig.colorbar(full_im, ax=axes[0, 2], fraction=0.046)
+
+    def overlay(ax, w, title, ncc):
+        rgb = np.zeros((H_im, W_im, 3), dtype=np.float32)
+        rgb[..., 0] = (hcr > 0.5).astype(np.float32)
+        rgb[..., 1] = (np.asarray(w, dtype=np.float32) > 0.5).astype(np.float32)
+        ax.imshow(rgb)
+        ax.set_title(f"{title}\nfull-frame NCC = {ncc:.4f}")
+
+    overlay(axes[1, 0], cz_pre,     "pre-warp (no shift)",     n_pre)
+    overlay(axes[1, 1], warp_minus, f"coords = yy - dy, xx - dx\n(current code)", n_minus)
+    overlay(axes[1, 2], warp_plus,  f"coords = yy + dy, xx + dx\n(inverted sign)", n_plus)
+
+    fig.suptitle(f"{SID} — PWR convention check (block ({bi},{bj}) of "
+                 f"{N_BLOCKS}×{N_BLOCKS}, ±{MAX_SHIFT}px sweep)")
+    fig.tight_layout()
+    out = FIG / f"debug_pwr_{SID}.png"
+    fig.savefig(out, dpi=110, bbox_inches="tight")
+    plt.close(fig)
+    print(f"\nwrote {out.name}")
+
+
+if __name__ == "__main__":
+    main()

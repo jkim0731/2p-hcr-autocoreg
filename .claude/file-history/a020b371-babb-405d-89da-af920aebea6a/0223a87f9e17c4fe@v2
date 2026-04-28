@@ -1,0 +1,225 @@
+# Session 07f — sz from per-cell z-bbox ratio
+
+**Verdict: FAIL as a point estimator; PASS as a bias-consistent
+signal on 3/4 spot subjects.**
+
+| subject | cz_dz_med (µm) | hcr_dz_med (µm) | sz_bbox | sz_GT | err_pct |
+|---------|---------------:|----------------:|--------:|------:|--------:|
+| 788406  | 20.0 | 29.0 | 1.450 | 2.820 | **−48.6 %** |
+| 790322  | 19.0 | 31.0 | 1.632 | 3.042 | **−46.4 %** |
+| 767018  | 20.0 | 34.0 | 1.700 | 3.583 | **−52.6 %** |
+| 782149  | 27.0 | 30.0 | 1.111 | 2.926 | **−62.0 %** |
+
+**Cross-subject std of err_pct: 5.99 % across all 4 subjects.**
+On the 3 well-behaved subjects (788406/790322/767018), std is
+**3.3 %** — tighter than any prior attempt (sessions 06/07/07b/07c/07d/07e
+all had per-subject err spread ≥ 30 pp).
+
+The raw ratio is ~50 % too low, as predicted physically. It is
+**not** a usable point estimate. It may be usable as a
+calibration-constant-corrected signal on spot subjects that behave
+like 788406/790322/767018; 782149 is an outlier.
+
+## 1. What was measured
+
+Per-cell tight z-bounding-box medians:
+- CZ (from `segmentation_masks.tif` regionprops, `bbox_dz_um`),
+- HCR (from `segmentation_mask.zarr` level-0 with the cellpose
+  label, `bbox_dz_um`).
+
+Same cell sets the sxy estimator uses: BIC-GMM-strict GFP+ in the
+center-¼ FOV, depth ∈ [100 µm, p99]. Cells within `pad_CZ = 5 µm`
+of the CZ top/bottom z-plane and within `pad_HCR = 2 µm` of the
+HCR top/bottom z-plane are excluded (avoid partial cells).
+
+`sz_bbox = median(hcr_dz_um) / median(cz_dz_um)`.
+
+## 2. Per-subject outcome
+
+```
+sid      cz_med   hcr_med   sz_bbox   sz_GT   err_pct   n_cz   n_hcr
+788406    20.0     29.0      1.45     2.82   −48.6 %     642   3030
+790322    19.0     31.0      1.63     3.04   −46.4 %     752   2367
+767018    20.0     34.0      1.70     3.58   −52.6 %     469   2174
+782149    27.0     30.0      1.11     2.93   −62.0 %     554    798
+```
+
+Histograms: `figures/zbbox_hist_<sid>.png`. Both distributions are
+unimodal and overlap in the 15–50 µm range; CZ has 42–60 unique
+values — z-quantisation is not the dominant error source.
+
+## 3. Physical interpretation — the user's caveat, measured
+
+Lightsheet axial resolution (HCR) is ~1–2 µm/voxel (`s.hcr_z_um`),
+2P axial PSF (CZ) is ~3–5 µm FWHM. If a cell has true axial height
+`h` and the expansion factor is `sz`, the bbox measurements are
+approximately:
+
+    bbox_dz_HCR ≈ h · sz + PSF_HCR_z     (with PSF_HCR_z ≈ 1–2 µm)
+    bbox_dz_CZ  ≈ h + PSF_CZ_z           (with PSF_CZ_z ≈ 4–6 µm)
+
+For `h ≈ 12 µm`, typical CZ bbox should be ~16–18 µm (we observe
+20 µm; high end of prediction); typical HCR bbox at sz=3 should be
+~37 µm (we observe 29–34 µm, below prediction — cellpose trims).
+Both deviations conspire to **shrink** the ratio below the true sz:
+
+    sz_bbox = (h · sz + PSF_HCR_z) / (h + PSF_CZ_z)
+            ≈ sz · [h / (h + PSF_CZ_z)]   when PSF_HCR_z ≈ 0
+            = sz · [12 / 16] ≈ 0.75 · sz
+
+Our observed `sz_bbox / sz_GT` = 0.51, 0.54, 0.47, 0.38 — more
+aggressive than the 0.75 prediction. The extra bias means cellpose
+HCR segmentation is *also* shrinking the HCR cells relative to their
+true physical extent (predicted HCR bbox ~37 µm; observed 29–34 µm
+→ HCR under-traces by ~15–20 % on axial).
+
+**Take-away:** both PSF anisotropy and modality-specific segmenter
+trim contribute. Physics floor was −25 %; observed floor is −50 %.
+
+## 4. Cross-subject consistency (the thing that *might* be useful)
+
+```
+err_pct              mean      std      spread
+all 4 subjects     −52.4 %    5.99 %   [−62.0, −46.4]
+drop 782149        −49.2 %    3.32 %   [−52.6, −46.4]
+```
+
+On 3/4 subjects the bias is uniform to ±3.3 %. This is the tightest
+cross-subject consistency any non-GT-tuned sz estimator has achieved
+in this project. The thickness prior is ±30 pp; 07d/07e 1D NCC is
+±40 pp; 07e density conservation is ±23 pp. 07f is ±10 pp on 4
+subjects, ±7 pp on 3.
+
+### Leave-one-out correction-factor CV (diagnostic only)
+
+Calibrate `k = mean(sz_GT / sz_bbox)` across the other 3 subjects,
+apply to the held-out one:
+
+| held-out | k_other3 | sz_bbox_corr | sz_GT | err |
+|----------|---------:|-------------:|------:|----:|
+| 788406 | 2.202 | 3.193 | 2.820 | **+13.2 %** |
+| 790322 | 2.229 | 3.638 | 3.042 | **+19.6 %** |
+| 767018 | 2.148 | 3.652 | 3.583 | **+1.9 %** |
+| 782149 | 1.972 | 2.191 | 2.926 | −25.1 % |
+
+782149 kills the calibration: its err is both larger and
+opposite-sign relative to its peers.  Without 782149, LOO on the
+other three gives err ∈ {+2 %, +13 %, +20 %} — ±10 % is not
+achievable even on well-behaved subjects with a 3-subject calibration.
+
+## 5. Why 782149 breaks the pattern
+
+Aspect ratio `bbox_dz / sqrt(bbox_dx · bbox_dy)` per subject:
+
+| subject | CZ AR | HCR AR |
+|---------|------:|-------:|
+| 788406  | 1.30  | 1.18 |
+| 790322  | 1.28  | 1.25 |
+| 767018  | 1.32  | 1.38 |
+| 782149  | **1.88** | 1.35 |
+
+3/4 subjects have CZ axial AR in [1.28, 1.32]. **782149's CZ axial
+AR is 1.88** — CZ cells look ~50 % taller than wide. Possible
+causes: motion jitter during CZ acquisition; brain-tilt during
+imaging so a 2P "plane" is not orthogonal to the cortical column;
+drift between planes mistakenly binding the 2P segmenter to multi-
+plane ghosts. None is fixable at this stage without re-acquiring.
+
+Regardless of cause, 782149's per-cell z-bbox ratio reports the CZ
+side as *larger*, not smaller than expected, and the sz ratio
+collapses.
+
+## 6. Depth profile (does `sz_bbox(d)` vary by depth?)
+
+Figures: `figures/sz_depth_profile_<sid>.png`.
+
+`sz_bbox(d)` is computed per 50 µm pia-depth bin. On all 4 subjects
+the per-bin ratio is approximately flat across depth — the bias is
+not depth-dependent within a single subject, it's a global offset.
+This means a depth-stratified correction would not help on top of
+the constant-factor correction.
+
+## 7. Decision
+
+- **Reject 07f as a standalone sz estimator.** Raw ratio is −50 %
+  biased; corrected versions give ±20 % LOO error — nowhere near
+  the 5 % bar.
+- **Keep 07f as a *consistency* signal on spot subjects that pass
+  the aspect-ratio sanity gate** (CZ AR ∈ [1.20, 1.45]). On those
+  subjects the raw value is tightly clustered near `0.5 · sz_GT`,
+  which makes it a low-resolution **upper bound** on the ratio's
+  uncertainty: i.e. `sz ≥ sz_bbox / 0.55` (a guaranteed lower bound
+  with wide margin), `sz ≤ sz_bbox / 0.45` (a looser upper bound).
+- **Do not use 07f on subjects that fail the AR gate.** 782149 is
+  the documented failure; log the AR as a precondition.
+- **Bound-ensemble candidate.** Fold 07f into the bound-ensemble
+  sketched in `reassess_with_surfaces/sz_design.md §Avenue B`
+  as one of four signals, weighted down because its bias is large.
+  The intersection of three different-structure bounds may still
+  narrow the sz interval enough for the prior-locked warm-start.
+
+## 8. What this teaches about sz estimation from per-cell features
+
+The 07-series as a whole now has a clean summary of what carries
+sz signal and what does not. Adding 07f:
+
+| signal family | status | ceiling |
+|---------------|--------|---------|
+| centroid-count density / k-NN / ICP (06, 07, 07b, 07c) | **FAIL** | depth-dependent detection bias (CV 0.30–0.60) |
+| 1D pia-normal profile (intensity 07d, σ_z 07e) | **FAIL** | shape mismatch / flatness |
+| density conservation (07e) | **FAIL** | CZ imaging cap cuts T_CZ |
+| thickness ratio (07f baseline) | **FAIL** | bottom-surface ≠ biological floor |
+| per-cell lateral area (sxy only, roi_area_sxy) | **PASS** (±2 %) | — |
+| **per-cell axial bbox (07f)** | **BIASED but consistent on 3/4** | PSF anisotropy + segmenter trim ≈ 50 % undershoot |
+
+The only signal family with uniformly low cross-subject error remains
+the one that led to the sxy win: **per-cell physical size in a
+sz-invariant feature (lateral area — preserved exactly under xy
+stretch)**. The axial analogue doesn't preserve exactly under z
+stretch because PSF is additive, not multiplicative.
+
+**Two plausible axial replacements** that *are* close to
+multiplicative and could mirror the sxy result:
+
+A. **Per-cell volume ratio (unbiased in principle).** The per-cell
+   volume `V = n_voxels · voxel_xyz` scales as `sxy²·sz` under
+   anisotropic expansion. PSF broadens all three axes additively,
+   so `V_measured ≈ V_true · (1 + PSF/h)^3`, which is ≈ 1.5× in
+   CZ and ≈ 1.1× in HCR for the same PSF values — a ~1.4× ratio
+   bias, still sizeable but less severe than the 2× axial bias.
+   Combined with the clean sxy estimate, `sz = (V_HCR/V_CZ) / sxy²`
+   would give a number. Already computed as `volume_um3` in the
+   per-cell tables. **Quick probe possible, same data.**
+
+B. **Per-cell inter-centroid z-distance on matched pairs.** Pairs
+   of nearest-neighbour cells in CZ whose HCR counterparts are
+   also nearest neighbours — their z-difference scales exactly by
+   sz without any PSF additive bias (because the noise is on each
+   centroid independently, not on the distance). Matching is hard
+   without a warm-start, but the warm-start from the current
+   pipeline might be good enough for this to work. Separate session.
+
+## 9. Files
+
+```
+sessions/07f_sz_from_zbbox/
+    plan.md                              pre-run plan
+    log.md                               this file
+    results.json                         per-subject numeric
+    notebook.ipynb                       rendered summary
+    figures/
+        zbbox_hist_<sid>.png             dual histogram (4 subjects)
+        sz_depth_profile_<sid>.png       sz_bbox(d) per subject
+        aspect_ratio_<sid>.png           cell AR CZ vs HCR
+        subject_summary.png              err bar + sz scatter
+
+dev_code/
+    07f_sz_from_zbbox.py                 driver + plots
+```
+
+## 10. Next session candidate
+
+**07g — per-cell volume ratio.** Volume has PSF bias ~(1.4×) vs
+axial bbox's (~2×) — same infrastructure, quick probe. If volume
+ratio / sxy² lands within ±10 % across 3/4 spot subjects, it
+supersedes 07f as the bound-ensemble member.

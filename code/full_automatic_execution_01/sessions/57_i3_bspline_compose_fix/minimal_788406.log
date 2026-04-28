@@ -1,9 +1,0 @@
-subject loaded
-/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
-  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
-I2 wall=14.2s metric=-0.0018 scales=[2.693643524090469, 1.8137447281346424, 1.6925398959339355]
-/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
-  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
-cz raw=(450, 512, 512) hcr raw=(379, 580, 579)
-cz ds=(56, 50, 50) hcr ds=(190, 287, 286)
-calling mi_bspline with iters=10 sampling=0.05 grid=60µm (coarse)

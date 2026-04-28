@@ -1,0 +1,127 @@
+"""F9 candidates that consume the Stage A locked-prior warm-start.
+
+P4, P6, and C5 don't accept a `cz_init` argument — they always call
+`lib.centroid_helpers.default_warmstart_zyx` internally. We monkey-patch
+that function for the duration of each LP candidate's invocation so the
+v1 candidate code is unchanged.
+
+Registers candidate IDs:
+  P1_LP   — P1 + locked-prior warm-start
+  P4_LP   — P4 + locked-prior warm-start
+  P6_LP   — P6 + locked-prior warm-start
+  C5_LP   — C5 dispatch with all three legs warm-started by the prior
+"""
+from __future__ import annotations
+
+import contextlib
+import sys
+from pathlib import Path
+
+import numpy as np
+
+_THIS = Path(__file__).resolve().parent
+_V2 = _THIS.parent
+_CODE = _V2.parent
+_V1 = _CODE / "full_automatic_execution_01"
+for p in (_V1, _V1 / "lib", _CODE / "dev_code", _V2):
+    sp = str(p)
+    if sp not in sys.path:
+        sys.path.insert(0, sp)
+
+from bench.harness import register_candidate, CoregResult  # noqa: E402
+from bench.candidate_impls._p1_teaser import run_p1  # noqa: E402
+from bench.candidate_impls._p4_spectral import run_p4  # noqa: E402
+from bench.candidate_impls._p6_bcpd import run_p6  # noqa: E402
+from bench.candidate_impls._c5_p1_p4_p6_ensemble import (  # noqa: E402
+    run_c5_p1_p4_p6,
+)
+import lib.centroid_helpers as _ch  # noqa: E402
+
+from locked_prior_warm import (  # noqa: E402
+    LockedPriorWarmStart,
+    apply_to_cz_um,
+    compute_locked_prior_warm_start,
+)
+
+
+@contextlib.contextmanager
+def _patched_warmstart(s, lp: LockedPriorWarmStart):
+    """Replace `default_warmstart_zyx` with one returning the locked-prior
+    warmstart for the duration of the context. Stash the original so it
+    can be restored on exit (also covers exceptions)."""
+    orig = _ch.default_warmstart_zyx
+
+    def _patched(cz_um_zyx, hcr_um_zyx, *args, **kwargs):
+        cz_init = apply_to_cz_um(lp, np.asarray(cz_um_zyx, dtype=float))
+        info = {
+            "warmstart": "locked_prior_v2",
+            "subject_id": lp.subject_id,
+            "sxy": float(lp.sxy_value),
+            "sxy_source": lp.sxy_source,
+            "rotation_deg_z": float(lp.rotation_deg_z),
+            "translation": lp.translation.tolist(),
+            "scales_zyx": lp.scales.tolist(),
+            "src_mean": lp.src_mean.tolist(),
+            "pwr_ncc": float(lp.pwr_ncc),
+            "pwr_method": lp.pwr_method,
+        }
+        return cz_init, info
+
+    _ch.default_warmstart_zyx = _patched
+    try:
+        yield
+    finally:
+        _ch.default_warmstart_zyx = orig
+
+
+def _attach_lp(result: CoregResult, lp: LockedPriorWarmStart) -> CoregResult:
+    diag = dict(result.diagnostics) if result.diagnostics else {}
+    diag["locked_prior_warm_start"] = {
+        "subject_id": lp.subject_id,
+        "sxy": lp.sxy_value,
+        "sxy_source": lp.sxy_source,
+        "rotation_deg_z": lp.rotation_deg_z,
+        "translation": lp.translation.tolist(),
+        "scales": lp.scales.tolist(),
+        "src_mean": lp.src_mean.tolist(),
+        "pwr_ncc": lp.pwr_ncc,
+        "pwr_method": lp.pwr_method,
+    }
+    return CoregResult(
+        pairs_df=result.pairs_df,
+        confidence=result.confidence,
+        transform=result.transform,
+        diagnostics=diag,
+    )
+
+
+@register_candidate("P1_LP")
+def run_p1_lp(s) -> CoregResult:
+    lp = compute_locked_prior_warm_start(s)
+    with _patched_warmstart(s, lp):
+        out = run_p1(s)
+    return _attach_lp(out, lp)
+
+
+@register_candidate("P4_LP")
+def run_p4_lp(s) -> CoregResult:
+    lp = compute_locked_prior_warm_start(s)
+    with _patched_warmstart(s, lp):
+        out = run_p4(s)
+    return _attach_lp(out, lp)
+
+
+@register_candidate("P6_LP")
+def run_p6_lp(s) -> CoregResult:
+    lp = compute_locked_prior_warm_start(s)
+    with _patched_warmstart(s, lp):
+        out = run_p6(s)
+    return _attach_lp(out, lp)
+
+
+@register_candidate("C5_LP")
+def run_c5_lp(s) -> CoregResult:
+    lp = compute_locked_prior_warm_start(s)
+    with _patched_warmstart(s, lp):
+        out = run_c5_p1_p4_p6(s)
+    return _attach_lp(out, lp)

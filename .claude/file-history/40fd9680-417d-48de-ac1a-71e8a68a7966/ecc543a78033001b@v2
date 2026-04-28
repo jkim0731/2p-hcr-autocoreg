@@ -1,0 +1,30 @@
+"""v2-S03 smoke test — run P1 only on 788406 with locked-prior warmstart."""
+import sys
+import time
+
+sys.path.insert(0, "/root/capsule/code/full_automatic_execution_02/lib")
+sys.path.insert(0, "/root/capsule/code/full_automatic_execution_02/sessions/v2_S03_revival_pass")
+sys.path.insert(0, "/root/capsule/code/full_automatic_execution_01")
+sys.path.insert(0, "/root/capsule/code/dev_code")
+sys.path.insert(0, "/root/capsule/code/sessions/03c_onset_features/iterations")
+
+from benchmark_data_loader import load_subject
+from bench_a_p1_p4_p6_c5 import patch_warmstart_to_locked_prior
+from bench.harness import run_candidate
+import bench.candidates  # noqa
+import lib.centroid_helpers as ch
+
+s = load_subject("788406")
+original, lp = patch_warmstart_to_locked_prior(s)
+print(f"LP sxy={lp.sxy_value:.3f} sz={lp.scales[0]:.3f} t={lp.translation}")
+try:
+    t0 = time.time()
+    r = run_candidate("P1", "788406", write_csv=False)
+    print(f"P1 r@20={r.get('recall_at_20um',0):.3f} "
+          f"r@10={r.get('recall_at_10um',0):.3f} "
+          f"med={r.get('median_error_um','?'):.1f}µm "
+          f"n_pred={r.get('n_pred',0)} "
+          f"({time.time()-t0:.0f}s)")
+finally:
+    ch.default_warmstart_zyx = original
+print("DONE")

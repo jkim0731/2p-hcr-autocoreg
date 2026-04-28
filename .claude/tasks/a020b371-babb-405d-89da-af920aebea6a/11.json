@@ -1,0 +1,9 @@
+{
+  "id": "11",
+  "subject": "Run 07f on 4 spot subjects",
+  "description": "Execute driver on 788406, 790322, 767018, 782149; produce JSON results and per-subject + cross-subject figures",
+  "activeForm": "Running on 4 spot subjects",
+  "status": "completed",
+  "blocks": [],
+  "blockedBy": []
+}

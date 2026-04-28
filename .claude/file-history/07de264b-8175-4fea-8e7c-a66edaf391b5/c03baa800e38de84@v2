@@ -1,0 +1,259 @@
+# Reassessment — execution_01 with 03c surfaces + 07e sxy in hand
+
+**Date:** 2026-04-24
+**Scope:** reassess the `full_automatic_execution_01` findings given three
+new artefacts that were not available to those sessions:
+
+1. **CZ pia + HCR top + HCR bottom surfaces** (session 03c, iter07/iter08) —
+   all six subjects cached under `code/dev_code/cached_surfaces/`.
+2. **sxy from per-cell ROI-area ratio** (session 07e, promoted to
+   `code/dev_code/roi_area_sxy.py`) — 788406 err −1.6 %, 790322 err +1.2 %.
+3. **Shared convention**: scale / translation priors can now be *pinned*
+   rather than estimated from centroid positions.
+
+**Two "good" subjects** (per 01 Data Description §Testing priorities):
+788406 and 790322 — both spot-based GFP+, both pass the iter08 pipeline
+cleanly. All quantitative claims below are measured on these two
+subjects.
+
+**Headline:**
+
+> `default_warmstart_zyx` leaves ≥60 µm of median Z residual on both good
+> subjects. XY is near-perfect (13–38 µm). The Z residual is driven almost
+> entirely by *sz* error: ICP converges to sz = 3.36 / 2.25 when truth is
+> 2.82 / 3.04 (errors +19 % and −26 %). Pinning sxy from ROI-area leaves
+> that failure in place; pinning sz to the true value drops median residual
+> to 25 µm on 790322 and 49 µm on 788406 — so **sz is the binding
+> constraint**, not sxy, not R, not t_xy.
+>
+> Surfaces give a usable Z-translation anchor (HCR pia → CZ pia) and a
+> **bounded sz prior** via the HCR cortical thickness divided by CZ's
+> cortical span. The bound width is ~1.33× (vs ICP's effectively
+> unbounded), so surfaces can narrow the basin but cannot pin sz
+> subject-by-subject.
+
+---
+
+## 1. What `default_warmstart_zyx` currently gets right and wrong
+
+From `code/full_automatic_execution_01/reassess_with_surfaces/diagnostics.json`
+(computed from the production warm-start and joined against
+`coreg_table.csv`):
+
+| quantity            | 788406        | 790322        |
+|---------------------|---------------|---------------|
+| GT sxy              | 1.780         | 1.766         |
+| GT sz               | 2.820         | 3.042         |
+| ICP sxy             | 1.860 (+4.5 %)| 1.762 (−0.2 %)|
+| ICP sz              | **3.359 (+19 %)** | **2.246 (−26 %)** |
+| n GT coreg pairs    | 787           | 778           |
+| warm-start residual median | **78.5 µm** | **69.3 µm** |
+| per-axis median \|resid\| (x, y, z) | (38, 31, **62**) | (13, 14, **64**) |
+| LM-perfect residual median | 37.5 µm | 34.0 µm |
+
+**Observation.** Warm-start XY is tight on both subjects (especially
+790322 at 13–14 µm). Z is loose by 60+ µm. That Z offset is structurally
+the same size as the sz mismatch:
+
+> 788406 sz error 0.54 × (CZ depth span ≈ 400 µm)/2 ≈ 108 µm — observed 62.
+> 790322 sz error 0.80 × (CZ depth span ≈ 400 µm)/2 ≈ 159 µm — observed 64.
+
+(Observed Z residual is smaller than the raw sz × span product because
+the ICP's translation grid picks the Z offset that maximises mid-depth
+hits, so the tails pay the scale error rather than the median.)
+
+**sxy is essentially correct in the warm-start on 790322 already** — so
+ROI-area sxy does **not** help 790322's geometry. It helps 788406 only
+modestly (ICP +4.5 % is not catastrophic).
+
+## 2. Counter-factuals — how the new priors change the residual
+
+Same two subjects; four candidate transforms, all using the
+structural `R = 180°`-about-Z prior and the warm-start's XY
+translation (which is already tight):
+
+| variant | spec |
+|---------|------|
+| warm-start | production `default_warmstart_zyx` |
+| A | sxy pinned to `roi_area_sxy`, sz from ICP, t_z = HCR-pia anchor |
+| B | sxy pinned to `roi_area_sxy`, sz from **surface thickness × 0.90**, t_z = HCR-pia anchor |
+| C (oracle sz) | sxy pinned, sz = GT, t_z = HCR-pia anchor |
+| LM-perfect | `fit_anisotropic_similarity` on active landmarks |
+
+Residual medians and r@30:
+
+| variant | 788406 median | 788406 r@30 | 790322 median | 790322 r@30 |
+|---------|--------------:|------------:|--------------:|------------:|
+| warm-start | 78 | 11.2 % | 69 | 17.5 % |
+| A (sxy only) | 105 | 8.6 % | 144 | 2.4 % |
+| B (sxy + surf-sz90 %) | **62** | 10.7 % | 138 | 2.8 % |
+| C (sxy + oracle sz) | **49** | **25.8 %** | **25** | **65.3 %** |
+| LM-perfect | 37 | 33.9 % | 34 | 31.7 % |
+
+Plots: `figures/{788406,790322}_{residual_hist,recall_bar,per_axis_residual}.png`.
+
+**Take-aways.**
+
+1. **Injecting sxy alone regresses** — the sxy prior is accurate but the
+   bottleneck is sz, and A keeps ICP's wrong sz.
+2. **Injecting sxy + surface-sz (90 % coverage) helps 788406 but fails
+   790322** — because CZ's depth coverage of HCR cortex is
+   subject-specific (on 790322 it's >100 % after scaling, so the
+   thickness-ratio prior systematically under-shoots).
+3. **Injecting sxy + true sz** is a dramatic win on both subjects — 788406
+   median 78 → 49 µm, 790322 median 69 → 25 µm; 790322 r@30 goes from
+   17 % to **65 %**. This variant beats LM-perfect on both (because R is
+   pinned to the exact structural 180 °, which absorbs less noise than a
+   free R fit).
+4. The gap between B and C on 790322 (138 vs 25 µm) means surfaces **do
+   not give a reliable point estimate of sz** — but the 90 % coverage
+   assumption is what broke. See Section 4 for the usable form.
+
+## 3. Which failed execution_01 methods change tier with these priors
+
+Cross-reference against the failed-methods list in session 61's plain-
+English summary. For each, we mark whether the scale/translation
+priors remove the documented failure cause.
+
+| method | execution_01 verdict | documented root cause | sxy pin | HCR-pia Z anchor | sz interval prior | new verdict |
+|--------|---------------------|----------------------|--------:|-----------------:|------------------:|-------------|
+| **P3 — RANSAC affine** | near-zero | 7-DOF under-determined, any affine can explain wrong basin | ✔ removes 2 DOF | ✔ removes 1 DOF | ✔ bounds sz | **unblocks** — now a 3-DOF (R-fine, t_xy) problem |
+| **P5 — FGW** | collapsed on outliers | CZ vs HCR distances not scale-matched → GW entropic solver flattens to a single mode | ✔ pre-scales both clouds to µm-matched | — | — | **revival plausible** |
+| **M1 — mask density NCC** | HCR/CZ density mismatch | CZ mask density per µm³ doesn't match HCR at unknown scale | ✔ pre-scale CZ by sxy before NCC | ✔ | — | **reconsider** — density can be matched now |
+| **M3 — mask warm-start + centroid** | warm-start too weak | warm-start's sz can be −26 % off → mask offset >200 µm in Z | — | ✔ pins Z to ±50 µm | ✔ | **reconsider** |
+| **M4 — per-cell overlap** | CZ mask outline-only | CZ outline masks don't cover cell interiors | — | — | — | **still blocked** (orthogonal data issue) |
+| **I1 — depth intensity profile** | only recovers Z axis | 1-D signal insufficient | — | — | complementary | **stays neutral** |
+| **I2 — 3D MI affine** | only a warm-start | MI alone can't pin anisotropic scale without big search | ✔ pins sxy | ✔ pins t_z | ✔ narrows sz range | **reconsider as refiner** (use priors as warm-start, let MI do fine affine) |
+| **I3 — MI + B-spline** | overshoots, kills matches | B-spline absorbed affine → nonrigid overshoot | ✔ | ✔ | ✔ | **unblocks** — affine locked, B-spline only sees residuals ≤50 µm |
+| **G1 / G2 — learned matcher** | synthetic→real transfer gap | training distribution wrong | — | — | — | **still blocked** (representation, not geometry) |
+| **B1 / B2 — seed + TPS** | needs a seed we don't have | no reliable constellation | sxy pins local-distance match | ✔ | — | **partially** — improves seed viability |
+| **C1 — image warm-start + P1** | no gain over P1 alone | image warm-start was no better than ICP | ✔ replaces image warm-start with a principled scale prior | ✔ | ✔ | **supersedes** — the priors *are* C1's role |
+
+**Net.** The priors have asymmetric impact:
+
+- **Unblocks / revives four methods** that were killed by unknown
+  scale (P3, P5, M1, M3) or unknown t_z (I3). Priors pin 3 of the 7
+  affine DOF.
+- **No effect on four methods** that failed for reasons orthogonal to
+  geometry — G1/G2 transfer gap, M4 outline-only, I1 1-D info content.
+- **Improves the three promising methods** (P1/P4/P6) by tightening
+  their basin of attraction, not by changing their algorithm.
+
+## 4. The most promising single next session
+
+Target the place where priors buy the most on our two good subjects
+before investing in new method families.
+
+> **Build a prior-locked warm-start** `default_warmstart_v3_zyx(
+>   cz, hcr_gfp, sxy_prior, sz_bounds, t_xy_from_icp, t_z_from_pia)`
+> that replaces the free ICP fit with a bounded fit in which
+> sxy is pinned to `roi_area_sxy`, t_z to the pia-anchor, and sz is
+> searched in
+> `[0.75 × H_hcr / cz_span, 1.00 × H_hcr / cz_span]` (≈ 1.33× range).
+
+Expected effect on the two good subjects:
+
+| subject | ICP sz | feasible sz range (surface bounds) | GT sz | inside range? |
+|---------|-------:|-----------------------------------:|------:|---------------|
+| 788406  | 3.359  | [2.17, 2.89]                       | 2.82 | **yes** (near upper bound) |
+| 790322  | 2.246  | [1.90, 2.54]                       | 3.04 | **no** (above upper bound) |
+
+**On 790322 the GT sz is outside the surface bound** — so the pure
+surface-thickness prior still misses the right answer. This means the
+session must *also* resolve the "CZ extends past HCR cortex" issue on
+790322 — either by adjusting the HCR bottom surface (its current
+placement at 1152 µm may be at the end of cortex, not at the deepest
+imaged slice), or by extending the sz upper-bound to a subject-agnostic
+value like `1.25 × H_hcr / cz_span`.
+
+Alternative: use the *lower* bound (ICP-side or surface-side) as a seed
+and then let ICP search sz within a widened interval around it.
+
+## 5. What to do with `782149`
+
+`782149` was called out in session 61 as "structurally unreachable."
+The documented cause is 12 ° pia tilt + thin (<1 mm) Z + 34 % match
+rate. The priors available here do not change that:
+
+- sxy from ROI-area is −15 % off on 782149 (session 07e report). Not
+  usable without fixing the HCR bottom placement.
+- HCR cortex thickness on 782149 = 571 µm (from the cached surface
+  summary) — half the others. The sz bound
+  `[0.75 × 571 / cz_span, …]` narrows to 0.97–1.29 × depending on CZ
+  span, but this still requires a working sxy.
+- 12° pia tilt: the surface models *do* capture this (fits include `a`,
+  `b` tilt terms), so the Z-anchor at the CZ centroid XY should survive
+  the tilt for this subject. That is the *one* place surfaces actually
+  buy something new on 782149 — the tilt-aware Z translation no longer
+  averages the pia plane flat.
+
+Still, 782149 remains the weakest case; it does not unblock on these
+two priors alone.
+
+## 6. Concrete recommendation
+
+Split the work into two sessions.
+
+**Session A (1 working session, ~1 day):** "Prior-locked warm-start on
+the 4 spot subjects."
+
+1. Wire `s.hcr_top = load_cached_surface(sid, "hcr_top_iter07")` and
+   `s.hcr_bot = load_cached_surface(sid, "hcr_bottom_iter08")` and
+   `s.cz_top = load_cached_surface(sid, "cz_iter08")` into
+   `SubjectData` at load time (cached — no volume re-open).
+2. Add `default_warmstart_v3_zyx(cz, hcr_gfp, s)` under
+   `code/full_automatic_execution_01/lib/centroid_helpers.py` with:
+   - sxy pinned via `roi_area_sxy.estimate_sxy_roi_area(sid)` (cached
+     per-subject).
+   - t_z pinned via HCR-pia surface evaluated at the warm-start's XY
+     centroid.
+   - sz bounded in `[0.75 H_hcr/cz_span, 1.10 H_hcr/cz_span]`, searched
+     over a 10-point grid + ICP refine within the bounds.
+3. Benchmark the existing P1 / P4 / P6 candidates with the new
+   warm-start, in parallel to the old one. If r@20 lifts on 788406 and
+   790322 — ship as default.
+
+**Session B (blocked on A's landing):** "Revival pass for the four
+unblocked failed methods."
+
+Re-run **P3, P5, M1, M3** with the new prior-locked warm-start
+(scales pinned; they no longer estimate scale). Their documented
+failure causes were scale-estimation collapse; the priors remove those.
+Each is a 1–2 hour re-bench using the existing candidate glue.
+
+**Deferred:** I3 (B-spline with locked affine) is the natural
+tier-2 follow-up — blocked on F5 (SimpleITK wrapper), so leave as
+Grand Plan §3 item.
+
+## 7. Honest caveats
+
+- We do NOT have sxy for 755252 or 767022 yet (intensity-only subjects;
+  their HCR package lacks `cell_body_segmentation/metrics.pickle`).
+  This reassessment only argues for *lift on the 4 spot subjects*.
+- The counter-factual residuals in Section 2 use the warm-start's XY
+  translation verbatim. Any future Session-A warm-start must validate
+  the XY translation is still tight when sz changes (coupling via the
+  ICP cost function).
+- The sz interval [0.75, 1.10] × H_hcr/cz_span is a conjecture based
+  on two subjects; the right multiplier should be calibrated on more
+  than two subjects before being hard-coded.
+- The `roi_area_sxy` estimator has a documented failure on 782149
+  (HCR span issue). Session-A must either fix that or fall back to a
+  per-subject default sxy on 782149.
+
+## 8. File map
+
+```
+reassess_with_surfaces/
+├── reassessment.md          # this file
+├── compute_diagnostics.py   # reproducible driver
+├── diagnostics.json         # per-subject numbers (from compute_diagnostics.py)
+├── notebook.ipynb           # rendered summary with plots
+└── figures/
+    ├── 788406_residual_hist.png
+    ├── 788406_recall_bar.png
+    ├── 788406_per_axis_residual.png
+    ├── 790322_residual_hist.png
+    ├── 790322_recall_bar.png
+    └── 790322_per_axis_residual.png
+```

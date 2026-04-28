@@ -1,0 +1,9 @@
+{
+  "id": "12",
+  "subject": "Write 07f log and notebook",
+  "description": "Write log.md with the results and honest assessment; build notebook.ipynb with plots (histograms, depth profile, subject scatter)",
+  "activeForm": "Writing log and notebook",
+  "status": "in_progress",
+  "blocks": [],
+  "blockedBy": []
+}

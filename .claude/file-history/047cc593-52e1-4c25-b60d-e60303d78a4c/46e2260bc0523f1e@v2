@@ -1,0 +1,353 @@
+"""Piecewise-rigid (PWR) with overlapping blocks + grid/overlap sweep.
+
+Two improvements over `register_nonrigid_variants.nonrigid_piecewise_rigid`:
+  1. **Sign convention fix**: synthetic-shift test in this module
+     verifies that `_block_best_shift` returns (dy, dx) such that
+     ``cz[y+dy, x+dx] ≈ hcr[y, x]``, which means the inverse warp must
+     sample at ``(yy + dy, xx + dx)``, NOT ``(yy - dy, xx - dx)``.
+     The original module had the wrong sign — this module uses the
+     correct one.
+  2. **Overlapping blocks**: ``overlap_frac`` is the fraction of block
+     size shared with the adjacent block. block_size = stride /
+     (1 - overlap_frac). overlap_frac=0 → non-overlapping (the
+     original behaviour); overlap_frac=0.3 → block 1.43× bigger than
+     stride, sharing 30 % of its area with each neighbour.
+
+Per-block accept gate:
+  • block NCC must exceed ``ncc_min`` (else shift forced to 0)
+  • shift must NOT lie on the boundary of the ±max_shift_px search
+    window (boundary maxima are unreliable — confirmed in
+    debug_pwr_782149).
+
+Exploration driver sweeps {n_blocks=2,3,4} × {overlap=0,0.3,0.5}
+× {max_shift_px=4,8,16} for all 6 subjects on the ws488 target,
+reports mean NCC per config, and renders heatmaps + the best config
+per subject.
+"""
+from __future__ import annotations
+
+import json
+import sys
+from itertools import product
+from pathlib import Path
+
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.ndimage import affine_transform, gaussian_filter, map_coordinates
+from scipy.interpolate import RegularGridInterpolator
+
+sys.path.insert(0, "/root/capsule/code/dev_code")
+from benchmark_data_loader import load_subject  # type: ignore  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from compare_binarization import variant_watershed  # type: ignore  # noqa: E402
+from compare_methods_final import _bbox_with_margin, _rigid_to_M_off
+from register_binary import (  # type: ignore  # noqa: E402
+    cz_binary_top_mip, get_sxy_with_fallback, hcr488_top_mip,
+    stage1_rigid, warm_start_cz_binary,
+)
+from register_nonrigid_variants import _block_best_shift  # type: ignore  # noqa: E402
+from surfaces_iter08 import (  # type: ignore  # noqa: E402
+    get_cz_surface_iter08, get_hcr_top_surface_iter07,
+)
+
+HERE = Path(__file__).resolve().parent
+FIG = HERE / "figures"
+FIG.mkdir(parents=True, exist_ok=True)
+SUBJECTS = ["788406", "790322", "767018", "782149", "755252", "767022"]
+WARP_BIN_THR = 0.5
+
+
+# --------------------------------------------------------------
+# NCC + sign-convention test
+# --------------------------------------------------------------
+def ncc_binary(warped, hcr_bin):
+    a = (np.asarray(warped, dtype=np.float32) > WARP_BIN_THR).astype(np.float64)
+    b = (np.asarray(hcr_bin) > 0.5).astype(np.float64)
+    av = a.ravel() - a.mean(); bv = b.ravel() - b.mean()
+    den = av.std() * bv.std()
+    return -1.0 if den <= 1e-12 else float((av * bv).mean() / den)
+
+
+def synthetic_sign_test() -> dict:
+    """Build a known-shifted binary, run `_block_best_shift` and verify
+    which apply-formula recovers the original."""
+    rng = np.random.default_rng(0)
+    H, W = 200, 200
+    hcr = np.zeros((H, W), dtype=np.float32)
+    yy = rng.integers(20, 180, 60)
+    xx = rng.integers(20, 180, 60)
+    for y, x in zip(yy, xx):
+        hcr[max(0, y - 4):y + 5, max(0, x - 4):x + 5] = 1.0
+
+    sy, sx = +5, +3
+    yy_g, xx_g = np.mgrid[:H, :W]
+    cz = map_coordinates(hcr, [yy_g - sy, xx_g - sx], order=1,
+                         mode="constant", cval=0.0)
+
+    dy, dx, ncc = _block_best_shift(cz, hcr, max_shift=12)
+
+    coords_minus = np.array([yy_g - dy, xx_g - dx])
+    coords_plus = np.array([yy_g + dy, xx_g + dx])
+    warp_minus = map_coordinates(cz, coords_minus, order=1, mode="constant", cval=0.0)
+    warp_plus = map_coordinates(cz, coords_plus, order=1, mode="constant", cval=0.0)
+    return {
+        "true_shift": (sy, sx),
+        "found_shift": (dy, dx),
+        "block_ncc_at_found": float(ncc),
+        "ncc_minus": ncc_binary(warp_minus, hcr),
+        "ncc_plus": ncc_binary(warp_plus, hcr),
+        "ncc_pre": ncc_binary(cz, hcr),
+    }
+
+
+# --------------------------------------------------------------
+# Overlap-aware PWR (CORRECTED SIGN)
+# --------------------------------------------------------------
+def pwr_overlap(
+    cz_pre: np.ndarray, hcr_bin: np.ndarray,
+    n_blocks: int = 3, overlap_frac: float = 0.3,
+    max_shift_px: int = 8, df_smooth_sigma_px: float = 8.0,
+    ncc_min: float = 0.05,
+) -> dict:
+    H, W = hcr_bin.shape
+    stride_y = H / n_blocks
+    stride_x = W / n_blocks
+    if overlap_frac >= 0.99:
+        raise ValueError("overlap_frac must be < 1")
+    bh = int(round(stride_y / (1 - overlap_frac)))
+    bw = int(round(stride_x / (1 - overlap_frac)))
+
+    yc = np.array([(i + 0.5) * stride_y for i in range(n_blocks)])
+    xc = np.array([(j + 0.5) * stride_x for j in range(n_blocks)])
+
+    shifts = np.zeros((n_blocks, n_blocks, 2), dtype=np.float32)
+    nccs = np.zeros((n_blocks, n_blocks), dtype=np.float32)
+    accepted = np.zeros((n_blocks, n_blocks), dtype=bool)
+
+    cz_f = cz_pre.astype(np.float32)
+    hcr_f = hcr_bin.astype(np.float32)
+
+    for i in range(n_blocks):
+        for j in range(n_blocks):
+            cy = int(round(yc[i])); cx = int(round(xc[j]))
+            y0 = max(0, cy - bh // 2); y1 = min(H, y0 + bh)
+            x0 = max(0, cx - bw // 2); x1 = min(W, x0 + bw)
+            cz_b = cz_f[y0:y1, x0:x1]
+            hcr_b = hcr_f[y0:y1, x0:x1]
+            if cz_b.size < 100 or cz_b.std() < 1e-6 or hcr_b.std() < 1e-6:
+                continue
+            dy, dx, ncc = _block_best_shift(cz_b, hcr_b, max_shift_px)
+            on_boundary = (abs(dy) == max_shift_px) or (abs(dx) == max_shift_px)
+            if (ncc < ncc_min) or on_boundary:
+                shifts[i, j] = (0.0, 0.0)
+                nccs[i, j] = ncc
+                accepted[i, j] = False
+            else:
+                shifts[i, j] = (dy, dx)
+                nccs[i, j] = ncc
+                accepted[i, j] = True
+
+    # Interpolate per-pixel DF
+    fy_dy = RegularGridInterpolator(
+        (yc, xc), shifts[..., 0], bounds_error=False, fill_value=None)
+    fy_dx = RegularGridInterpolator(
+        (yc, xc), shifts[..., 1], bounds_error=False, fill_value=None)
+    yy, xx = np.mgrid[:H, :W]
+    pts = np.stack([yy.ravel(), xx.ravel()], axis=-1).astype(np.float32)
+    dy_px = fy_dy(pts).reshape(H, W).astype(np.float32)
+    dx_px = fy_dx(pts).reshape(H, W).astype(np.float32)
+    if df_smooth_sigma_px > 0:
+        dy_px = gaussian_filter(dy_px, sigma=df_smooth_sigma_px)
+        dx_px = gaussian_filter(dx_px, sigma=df_smooth_sigma_px)
+
+    # CORRECTED SIGN: warped[y, x] = cz[y + dy, x + dx]
+    coords = np.array([yy + dy_px, xx + dx_px])
+    warped = map_coordinates(cz_f, coords, order=1, mode="constant", cval=0.0)
+    return {
+        "warped": warped, "ncc": ncc_binary(warped, hcr_bin),
+        "shifts": shifts, "block_nccs": nccs, "accepted": accepted,
+        "dy_px": dy_px, "dx_px": dx_px,
+        "block_size_px": (bh, bw),
+        "stride_px": (stride_y, stride_x),
+        "n_accepted": int(accepted.sum()),
+        "n_blocks_total": int(n_blocks * n_blocks),
+    }
+
+
+# --------------------------------------------------------------
+# Driver: build M1 + cropped frame for a subject (cached per subject)
+# --------------------------------------------------------------
+def build_inputs(sid: str) -> dict:
+    s = load_subject(sid)
+    sxy, _ = get_sxy_with_fallback(sid, s)
+    hcr_surf = get_hcr_top_surface_iter07(s, level=4)
+    cz_surf = get_cz_surface_iter08(s)
+    hcr_488_full, hcr_xy_um = hcr488_top_mip(s, hcr_surf, 0.0, 100.0)
+    hcr_bin_full = variant_watershed(hcr_488_full, hcr_xy_um)
+
+    cz_bin = cz_binary_top_mip(s, cz_surf, 0.0, 50.0)
+    cz_warm = warm_start_cz_binary(
+        cz_bin, cz_xy_um=float(s.cz_xy_um), hcr_xy_um=hcr_xy_um, sxy=sxy)
+
+    rigid = stage1_rigid(cz_warm, hcr_bin_full)
+    M0, off0 = _rigid_to_M_off(rigid, cz_warm.shape, rigid["template_shape"])
+    rigid_warp_full = affine_transform(
+        cz_warm.astype(np.float32), M0, offset=off0,
+        output_shape=hcr_bin_full.shape, order=1, mode="constant", cval=0.0)
+    fg = rigid_warp_full > WARP_BIN_THR
+    y0, y1, x0, x1 = _bbox_with_margin(fg, 0.15, hcr_bin_full.shape)
+    hcr = hcr_bin_full[y0:y1, x0:x1].astype(np.float32)
+    cz_pre = rigid_warp_full[y0:y1, x0:x1].astype(np.float32)
+    return {
+        "sid": sid, "cz_pre": cz_pre, "hcr_bin": hcr,
+        "hcr_xy_um": float(hcr_xy_um), "sxy": sxy,
+        "rigid_ncc": ncc_binary(cz_pre, hcr),
+        "crop_shape": cz_pre.shape,
+    }
+
+
+# --------------------------------------------------------------
+# Sweep
+# --------------------------------------------------------------
+N_BLOCKS_LIST = [2, 3, 4]
+OVERLAP_LIST = [0.0, 0.3, 0.5]
+MAX_SHIFT_LIST = [4, 8, 16]
+
+
+def main():
+    print("=== sign-convention test (synthetic) ===")
+    sig = synthetic_sign_test()
+    for k, v in sig.items():
+        print(f"  {k}: {v}")
+    if sig["ncc_plus"] > sig["ncc_minus"]:
+        print("  → coords = [yy + dy, xx + dx] is CORRECT.")
+    else:
+        print("  → coords = [yy - dy, xx - dx] is correct.  (unexpected)")
+
+    print("\n=== building inputs ===")
+    inputs = {sid: build_inputs(sid) for sid in SUBJECTS}
+    for sid in SUBJECTS:
+        d = inputs[sid]
+        print(f"  {sid}: crop {d['crop_shape']}  "
+              f"M1 NCC = {d['rigid_ncc']:+.4f}")
+
+    print("\n=== exploring (n_blocks, overlap, max_shift) ===")
+    rows = []
+    for n_blocks, overlap, max_shift in product(
+            N_BLOCKS_LIST, OVERLAP_LIST, MAX_SHIFT_LIST):
+        for sid in SUBJECTS:
+            d = inputs[sid]
+            res = pwr_overlap(
+                d["cz_pre"], d["hcr_bin"],
+                n_blocks=n_blocks, overlap_frac=overlap,
+                max_shift_px=max_shift, df_smooth_sigma_px=8.0,
+                ncc_min=0.05,
+            )
+            rows.append({
+                "sid": sid, "n_blocks": n_blocks, "overlap": overlap,
+                "max_shift": max_shift,
+                "rigid_ncc": d["rigid_ncc"],
+                "pwr_ncc": res["ncc"],
+                "delta": res["ncc"] - d["rigid_ncc"],
+                "n_accepted": res["n_accepted"],
+                "block_size": res["block_size_px"][0],
+            })
+
+    # Aggregate: mean Δ-NCC over subjects, per config
+    import pandas as pd
+    df = pd.DataFrame(rows)
+    agg = (df.groupby(["n_blocks", "overlap", "max_shift"])
+             .agg(mean_pwr=("pwr_ncc", "mean"),
+                  mean_rigid=("rigid_ncc", "mean"),
+                  mean_delta=("delta", "mean"),
+                  n_subj_better=("delta", lambda s: int((s > 0).sum())),
+                  mean_n_accepted=("n_accepted", "mean"))
+             .reset_index())
+    agg = agg.sort_values("mean_delta", ascending=False)
+    print("\nTop 10 configs by mean Δ-NCC vs M1:")
+    print(agg.head(10).to_string(index=False))
+    print("\nBottom 5 configs:")
+    print(agg.tail(5).to_string(index=False))
+
+    # CSV + JSON
+    df.to_csv(HERE / "pwr_overlap_runs.csv", index=False)
+    agg.to_csv(HERE / "pwr_overlap_agg.csv", index=False)
+
+    # ------- Heatmaps: one per max_shift, axes = (n_blocks, overlap) -------
+    fig, axes = plt.subplots(1, len(MAX_SHIFT_LIST),
+                             figsize=(4.5 * len(MAX_SHIFT_LIST), 4),
+                             sharey=True)
+    for ai, ms in enumerate(MAX_SHIFT_LIST):
+        sub = agg[agg.max_shift == ms]
+        H = sub.pivot(index="n_blocks", columns="overlap", values="mean_delta")
+        ax = axes[ai]
+        im = ax.imshow(H.values, cmap="RdBu_r",
+                       vmin=-abs(H.values).max(), vmax=abs(H.values).max(),
+                       aspect="auto")
+        ax.set_xticks(range(len(H.columns)))
+        ax.set_xticklabels([f"{c:.1f}" for c in H.columns])
+        ax.set_yticks(range(len(H.index)))
+        ax.set_yticklabels(H.index)
+        ax.set_xlabel("overlap_frac"); ax.set_ylabel("n_blocks")
+        ax.set_title(f"max_shift = {ms} px")
+        for i in range(H.shape[0]):
+            for j in range(H.shape[1]):
+                v = H.values[i, j]
+                ax.text(j, i, f"{v:+.4f}", ha="center", va="center",
+                        color="white" if abs(v) > 0.005 else "black",
+                        fontsize=9)
+        fig.colorbar(im, ax=ax, fraction=0.046)
+    fig.suptitle("PWR config sweep — mean Δ-NCC over 6 subjects (cropped frame)")
+    fig.tight_layout()
+    fig.savefig(FIG / "pwr_overlap_heatmaps.png", dpi=110, bbox_inches="tight")
+    plt.close(fig)
+    print(f"\nwrote pwr_overlap_heatmaps.png")
+
+    # ------- Per-subject best vs M1 (using overall-best config) -------
+    best = agg.iloc[0]
+    nb, ov, ms = int(best.n_blocks), float(best.overlap), int(best.max_shift)
+    print(f"\nBest config: n_blocks={nb}, overlap={ov:.2f}, max_shift={ms}px  "
+          f"(mean Δ = {best.mean_delta:+.4f})")
+    fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+    for k, sid in enumerate(SUBJECTS):
+        d = inputs[sid]
+        res = pwr_overlap(
+            d["cz_pre"], d["hcr_bin"],
+            n_blocks=nb, overlap_frac=ov, max_shift_px=ms,
+            df_smooth_sigma_px=8.0, ncc_min=0.05,
+        )
+        H, W = d["hcr_bin"].shape
+        rgb = np.zeros((H, W, 3), dtype=np.float32)
+        rgb[..., 0] = (d["hcr_bin"] > 0.5).astype(np.float32)
+        rgb[..., 1] = (res["warped"] > WARP_BIN_THR).astype(np.float32)
+        ax = axes[k // 3, k % 3]
+        ax.imshow(rgb)
+        ax.set_title(f"{sid}\nM1={d['rigid_ncc']:+.3f}  "
+                     f"PWR={res['ncc']:+.3f}  "
+                     f"Δ={res['ncc']-d['rigid_ncc']:+.3f}\n"
+                     f"accepted blocks: {res['n_accepted']}/{res['n_blocks_total']}")
+        ax.set_xticks([]); ax.set_yticks([])
+    fig.suptitle(f"PWR best config: n_blocks={nb}, overlap={ov:.2f}, "
+                 f"max_shift={ms}px  (target = ws488)")
+    fig.tight_layout()
+    fig.savefig(FIG / "pwr_overlap_best.png", dpi=110, bbox_inches="tight")
+    plt.close(fig)
+    print(f"wrote pwr_overlap_best.png")
+
+    # Save summary JSON
+    out = {
+        "sign_test": sig,
+        "best_config": {"n_blocks": nb, "overlap_frac": ov,
+                        "max_shift_px": ms,
+                        "mean_delta_ncc": float(best.mean_delta),
+                        "n_subj_better": int(best.n_subj_better)},
+        "agg": agg.to_dict("records"),
+    }
+    (HERE / "pwr_overlap_summary.json").write_text(
+        json.dumps(out, indent=2, default=float))
+    print("wrote pwr_overlap_summary.json")
+
+
+if __name__ == "__main__":
+    main()

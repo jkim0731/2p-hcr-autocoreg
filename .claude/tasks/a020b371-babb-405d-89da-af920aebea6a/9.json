@@ -1,0 +1,9 @@
+{
+  "id": "9",
+  "subject": "Write 07f plan",
+  "description": "Write /root/capsule/code/sessions/07f_sz_from_zbbox/plan.md incorporating user's caveats (HCR bottom is 400 µm target, not WM; 2P axial resolution worse than lightsheet)",
+  "activeForm": "Writing 07f plan",
+  "status": "completed",
+  "blocks": [],
+  "blockedBy": []
+}

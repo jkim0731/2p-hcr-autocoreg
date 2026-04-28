@@ -1,0 +1,71 @@
+"""Numeric self-check for v2-S02 iter 6 surface anchor on 788406.
+
+For the surface-anchor formula to be geometrically correct:
+
+    warped CZ pia z = t_z(sz) − sz · cz_mean_depth_um  ==  z_HCR_pia (constant)
+
+Print all the relevant intermediate values so the invariant can be verified
+without reading the side-view PNG.
+"""
+import sys
+
+sys.path.insert(0, "/root/capsule/code/full_automatic_execution_02/lib")
+sys.path.insert(0, "/root/capsule/code/dev_code")
+sys.path.insert(0, "/root/capsule/code/sessions/03c_onset_features/iterations")
+
+import numpy as np
+from benchmark_data_loader import load_subject
+from locked_prior_warm import compute_locked_prior_warm_start
+from surfaces_iter08 import get_cz_surface_iter08, get_hcr_top_surface_iter07
+from r1_revised import _surface_z_at
+from benchmark_analysis import depth_from_surface
+
+s = load_subject("788406")
+lp = compute_locked_prior_warm_start(s)
+
+cz_surface = get_cz_surface_iter08(s)
+hcr_surface = get_hcr_top_surface_iter07(s)
+
+# Quantities that go into the anchor formula
+src_mean = lp.src_mean                     # (z, y, x) µm in CZ frame
+sz_lp = float(lp.scales[0])
+tz_lp = float(lp.translation[0])
+x_target_um = float(lp.translation[2])
+y_target_um = float(lp.translation[1])
+
+# z of HCR pia at registered xy
+z_hcr_pia = float(_surface_z_at(
+    hcr_surface,
+    np.array([x_target_um]),
+    np.array([y_target_um]),
+)[0])
+
+# CZ centroid mean depth below CZ pia
+cz_mean_xyz = src_mean[[2, 1, 0]]
+cz_mean_depth = float(depth_from_surface(cz_mean_xyz[None, :], cz_surface)[0])
+
+print(f"subject  : 788406")
+print(f"sz_lp    : {sz_lp:.4f}")
+print(f"tz_lp    : {tz_lp:.2f} µm  (lp.translation[0])")
+print(f"x_target : {x_target_um:.2f} µm")
+print(f"y_target : {y_target_um:.2f} µm")
+print(f"z_HCR_pia(x_t,y_t) : {z_hcr_pia:.2f} µm")
+print(f"cz_mean_depth      : {cz_mean_depth:.2f} µm")
+print()
+print("Identity check 1: tz_lp == z_HCR_pia + sz_lp · cz_mean_depth  ?")
+predicted_tz_lp = z_hcr_pia + sz_lp * cz_mean_depth
+print(f"  predicted tz_lp = {z_hcr_pia:.2f} + {sz_lp:.4f} * {cz_mean_depth:.2f} "
+      f"= {predicted_tz_lp:.2f}")
+print(f"  actual    tz_lp = {tz_lp:.2f}")
+print(f"  diff = {tz_lp - predicted_tz_lp:.4f} µm  (should be ~0)")
+print()
+print(f"Per-sz table (warped CZ pia z should equal z_HCR_pia = {z_hcr_pia:.2f} µm):")
+print(f"{'sz':>6} {'tz_offset':>12} {'tz(sz)':>10} {'warped pia z':>14} "
+      f"{'pia error':>10}")
+for sz in [1.5, 2.0, 2.82, 3.5, 4.0]:
+    tz_off = (sz - sz_lp) * cz_mean_depth
+    tz_sz = tz_lp + tz_off
+    warped_pia_z = tz_sz - sz * cz_mean_depth
+    err = warped_pia_z - z_hcr_pia
+    print(f"{sz:>6.2f} {tz_off:>12.2f} {tz_sz:>10.2f} {warped_pia_z:>14.2f} "
+          f"{err:>10.4f}")

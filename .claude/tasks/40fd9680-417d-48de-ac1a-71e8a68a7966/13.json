@@ -1,0 +1,9 @@
+{
+  "id": "13",
+  "subject": "v2-S06: Stage F GUI integration",
+  "description": "Re-rank G1-review queue by drop-lift; wire user actions back into the E.TPS loop.",
+  "activeForm": "Running v2-S06 GUI integration",
+  "status": "pending",
+  "blocks": [],
+  "blockedBy": []
+}

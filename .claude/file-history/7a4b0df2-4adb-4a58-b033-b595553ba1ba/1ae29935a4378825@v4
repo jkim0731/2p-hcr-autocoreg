@@ -1,0 +1,285 @@
+"""Session 08 — V3 intensity registration with rigid → affine → nonrigid.
+
+Differences from `register_binary.py`:
+  • HCR side: raw ch488 MIP (no binarisation).
+  • CZ side: raw CZ intensity volume, **zeroed outside the ROI mask**
+    (filled `seg-mask-outline.tif`); pia-flat max-MIP at 0-50 µm.
+
+Same warm start (180° + sxy scale → HCR pixel grid) and same three-stage
+registration: RIGID (FFT-NCC θ sweep) → AFFINE (Powell on -NCC) →
+NONRIGID (SITK BSpline). Best-NCC stage reported per subject.
+"""
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+import numpy as np
+import matplotlib.pyplot as plt
+import tifffile
+from scipy.ndimage import (
+    affine_transform,
+    binary_fill_holes,
+    gaussian_filter,
+    rotate as nd_rotate,
+    zoom,
+)
+import SimpleITK as sitk
+
+sys.path.insert(0, "/root/capsule/code/dev_code")
+from benchmark_analysis import load_hcr_volume  # type: ignore  # noqa: E402
+from benchmark_data_loader import load_subject  # type: ignore  # noqa: E402
+from roi_area_sxy import estimate_sxy_roi_area  # type: ignore  # noqa: E402
+from surfaces_iter08 import (  # type: ignore  # noqa: E402
+    get_cz_surface_iter08,
+    get_hcr_top_surface_iter07,
+)
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from compute_projections import load_cz_zstack, top_slab_projection  # type: ignore  # noqa: E402
+from register_binary import (  # type: ignore  # noqa: E402
+    fft_ncc, get_sxy_with_fallback, ncc_overlap,
+    stage1_rigid, stage2_affine, stage3_nonrigid,
+)
+
+HERE = Path(__file__).resolve().parent
+FIG = HERE / "figures"
+FIG.mkdir(parents=True, exist_ok=True)
+SUBJECTS = ["788406", "790322", "767018", "782149", "755252", "767022"]
+HCR_LEVEL = 4
+
+CZ_SLAB = (0.0, 50.0)
+HCR_CH = "488"
+HCR_SLAB = (0.0, 100.0)
+
+
+# --------------------------------------------------------------
+# CZ ROI-gated intensity volume + pia-flat MIP
+# --------------------------------------------------------------
+def load_cz_roi_mask_volume(s) -> np.ndarray:
+    files = list(s.coreg_dir.glob("*seg-mask-outline.tif"))
+    if not files:
+        files = list(s.coreg_dir.glob("*seg_masks_outline.tif"))
+    if not files:
+        files = list(s.coreg_dir.glob("*seg*outline*.tif"))
+    if not files:
+        raise FileNotFoundError(f"No seg-mask-outline.tif in {s.coreg_dir}")
+    with tifffile.TiffFile(files[0]) as tf:
+        out = tf.asarray()
+    out = (out > 0).astype(np.uint8)
+    filled = np.empty_like(out)
+    for z in range(out.shape[0]):
+        filled[z] = binary_fill_holes(out[z]).astype(np.uint8)
+    return filled
+
+
+def cz_intensity_in_roi_top_mip(s, cz_surf, d_lo: float, d_hi: float) -> np.ndarray:
+    cz_vol = load_cz_zstack(s).astype(np.float32)
+    mask = load_cz_roi_mask_volume(s)
+    if mask.shape != cz_vol.shape:
+        raise ValueError(
+            f"CZ vol {cz_vol.shape} ≠ ROI mask {mask.shape} — frames mismatch"
+        )
+    gated = cz_vol * mask  # intensity only inside ROIs
+    proj = top_slab_projection(
+        gated, cz_surf, xy_um=float(s.cz_xy_um), z_um=float(s.cz_z_um),
+        d_lo=d_lo, d_hi=d_hi, mode="max",
+    )
+    return proj.astype(np.float32)
+
+
+def hcr488_top_mip(s, hcr_surf, d_lo: float, d_hi: float):
+    vol, xy_um, z_um = load_hcr_volume(s, channel=HCR_CH, level=HCR_LEVEL)
+    proj = top_slab_projection(
+        vol.astype(np.float32),
+        hcr_surf, xy_um=float(xy_um), z_um=float(z_um),
+        d_lo=d_lo, d_hi=d_hi, mode="max",
+    )
+    return proj.astype(np.float32), float(xy_um)
+
+
+# --------------------------------------------------------------
+# Warm start (continuous-valued)
+# --------------------------------------------------------------
+def warm_start_cz_intensity(
+    cz: np.ndarray, cz_xy_um: float, hcr_xy_um: float, sxy: float,
+) -> np.ndarray:
+    a = np.where(np.isnan(cz), 0.0, cz).astype(np.float32)
+    rot = nd_rotate(a, 180.0, reshape=True, order=1, mode="constant", cval=0.0)
+    f = (cz_xy_um * sxy) / hcr_xy_um
+    return zoom(rot, f, order=1).astype(np.float32)
+
+
+def fillnan_for_corr(img: np.ndarray) -> np.ndarray:
+    a = np.asarray(img, dtype=np.float32)
+    finite = np.isfinite(a)
+    if not finite.all():
+        a = np.where(finite, a, float(np.nanmean(a[finite])) if finite.any() else 0.0)
+    return a
+
+
+# --------------------------------------------------------------
+# Visualisation
+# --------------------------------------------------------------
+def stretch01(img, p_lo=1, p_hi=99):
+    a = np.asarray(img, dtype=np.float32)
+    finite = np.isfinite(a)
+    if not finite.any():
+        return np.zeros_like(a)
+    lo, hi = np.percentile(a[finite], [p_lo, p_hi])
+    return np.clip((a - lo) / max(hi - lo, 1e-6), 0, 1)
+
+
+def render_full(
+    sid, hcr_mip, cz_warm, rigid_warp, affine_warp, nonrigid_warp,
+    out_path, theta, sxy, hcr_xy_um, nccs,
+):
+    H, W = hcr_mip.shape
+    fig, axes = plt.subplots(2, 4, figsize=(20, 10))
+    extent = [0, W * hcr_xy_um, H * hcr_xy_um, 0]
+
+    axes[0, 0].imshow(stretch01(hcr_mip), cmap="gray", extent=extent, origin="upper")
+    axes[0, 0].set_title("HCR ch488 0-100 max (raw, p1-p99)")
+    axes[0, 0].set_xlabel("x (µm)"); axes[0, 0].set_ylabel("y (µm)")
+
+    axes[0, 1].imshow(stretch01(hcr_mip), cmap="hot", extent=extent, origin="upper")
+    axes[0, 1].set_title("HCR ch488 (hot cmap)")
+
+    h, w = cz_warm.shape
+    extent_cz = [0, w * hcr_xy_um, h * hcr_xy_um, 0]
+    axes[0, 2].imshow(stretch01(cz_warm), cmap="gray", extent=extent_cz, origin="upper")
+    axes[0, 2].set_title(f"CZ intensity-in-ROI warm-start  (180°, ×sxy={sxy:.3f})")
+
+    keys = ["rigid", "affine", "nonrigid"]
+    vals = [nccs[k] for k in keys]
+    axes[0, 3].bar(keys, vals, color=["#7f7", "#7af", "#f97"])
+    axes[0, 3].set_title("NCC by stage")
+    axes[0, 3].set_ylim(min(0, min(vals)) - 0.02, max(0.6, max(vals) * 1.1))
+    for i, v in enumerate(vals):
+        axes[0, 3].text(i, v + 0.01, f"{v:.3f}", ha="center")
+
+    def overlay(ax, warped, title):
+        rgb = np.zeros((H, W, 3), dtype=np.float32)
+        rgb[..., 0] = stretch01(hcr_mip)
+        rgb[..., 1] = stretch01(warped)
+        ax.imshow(rgb, extent=extent, origin="upper")
+        ax.set_title(title); ax.set_xlabel("x (µm)"); ax.set_ylabel("y (µm)")
+
+    overlay(axes[1, 0], rigid_warp,    f"RIGID  θ={theta:+.2f}°  NCC={nccs['rigid']:.3f}")
+    overlay(axes[1, 1], affine_warp,   f"AFFINE  NCC={nccs['affine']:.3f}")
+    overlay(axes[1, 2], nonrigid_warp, f"NONRIGID  NCC={nccs['nonrigid']:.3f}")
+
+    best_stage = max(keys, key=lambda k: nccs[k])
+    best_warp = {"rigid": rigid_warp, "affine": affine_warp,
+                 "nonrigid": nonrigid_warp}[best_stage]
+    overlay(axes[1, 3], best_warp, f"BEST: {best_stage}  NCC={nccs[best_stage]:.3f}")
+
+    fig.suptitle(f"{sid} — V3 intensity (HCR ch488 0-100 vs CZ-ROI-gated 0-50)")
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=110, bbox_inches="tight")
+    plt.close(fig)
+
+
+# --------------------------------------------------------------
+# Driver
+# --------------------------------------------------------------
+def process_subject(sid: str) -> dict:
+    print(f"\n=== {sid} ===", flush=True)
+    s = load_subject(sid)
+    sxy, sxy_src = get_sxy_with_fallback(sid, s)
+    print(f"  sxy={sxy:.4f}  source={sxy_src}", flush=True)
+
+    hcr_surf = get_hcr_top_surface_iter07(s, level=HCR_LEVEL)
+    cz_surf = get_cz_surface_iter08(s)
+
+    hcr_mip_raw, hcr_xy_um = hcr488_top_mip(s, hcr_surf, *HCR_SLAB)
+    hcr_mip = fillnan_for_corr(hcr_mip_raw)
+    print(f"  HCR ch488 MIP: shape={hcr_mip.shape} xy={hcr_xy_um:.3f}  "
+          f"p50={np.percentile(hcr_mip,50):.1f} p99={np.percentile(hcr_mip,99):.1f}",
+          flush=True)
+
+    cz_proj = cz_intensity_in_roi_top_mip(s, cz_surf, *CZ_SLAB)
+    cz_proj = fillnan_for_corr(cz_proj)
+    cz_warm = warm_start_cz_intensity(
+        cz_proj, cz_xy_um=float(s.cz_xy_um), hcr_xy_um=hcr_xy_um, sxy=sxy,
+    )
+    print(f"  CZ intensity-in-ROI MIP: shape={cz_proj.shape}  "
+          f"warm shape={cz_warm.shape}  warm_p99={np.percentile(cz_warm,99):.1f}  "
+          f"warm_nonzero_frac={(cz_warm>0).mean()*100:.1f}%",
+          flush=True)
+
+    # Mild blur of both for smoother metric (helps Powell + BSpline)
+    sigma_um_hcr = 4.0
+    hcr_blur = gaussian_filter(hcr_mip, sigma=sigma_um_hcr / hcr_xy_um).astype(np.float32)
+    cz_blur = gaussian_filter(cz_warm, sigma=sigma_um_hcr / hcr_xy_um).astype(np.float32)
+
+    # Stage 1 — RIGID
+    rigid = stage1_rigid(cz_blur, hcr_blur)
+    print(f"  RIGID:    θ={rigid['theta']:+.2f}°  (oy,ox)=({rigid['oy']},{rigid['ox']}) px  "
+          f"NCC={rigid['ncc']:.3f}", flush=True)
+
+    H_im, W_im = hcr_blur.shape
+    H_t, W_t = cz_blur.shape
+    th_in = rigid["template_shape"]
+    th = np.deg2rad(rigid["theta"])
+    c, s_ = np.cos(th), np.sin(th)
+    M0 = np.array([[c,  s_], [-s_, c]], dtype=np.float64)
+    cy_out = rigid["oy"] + th_in[0] / 2.0
+    cx_out = rigid["ox"] + th_in[1] / 2.0
+    cy_in = H_t / 2.0; cx_in = W_t / 2.0
+    off0 = np.array([cy_in, cx_in]) - M0 @ np.array([cy_out, cx_out])
+
+    # Stage 2 — AFFINE
+    affine = stage2_affine(cz_blur, hcr_blur, M0, off0)
+    print(f"  AFFINE:   NCC={affine['ncc']:.3f}", flush=True)
+
+    # Stage 3 — NONRIGID
+    nonrigid = stage3_nonrigid(cz_blur, hcr_blur, affine["M"], affine["offset"])
+    print(f"  NONRIGID: NCC={nonrigid['ncc']:.3f} ok={nonrigid.get('ok')}", flush=True)
+    if not nonrigid.get("ok"):
+        print(f"           (note: {nonrigid.get('err','')})", flush=True)
+
+    rigid_warp = affine_transform(
+        cz_blur, M0, offset=off0,
+        output_shape=hcr_blur.shape, order=1, mode="constant", cval=0.0,
+    )
+
+    nccs = {"rigid": float(rigid["ncc"]), "affine": float(affine["ncc"]),
+            "nonrigid": float(nonrigid["ncc"])}
+    best_stage = max(nccs, key=nccs.get)
+
+    out_png = FIG / f"register_intensity_{sid}_V3.png"
+    render_full(
+        sid, hcr_blur, cz_blur, rigid_warp, affine["warped"], nonrigid["warped"],
+        out_png, rigid["theta"], sxy, hcr_xy_um, nccs,
+    )
+
+    out = {
+        "sid": sid, "sxy": sxy, "hcr_xy_um": hcr_xy_um,
+        "rigid": {"theta_deg": rigid["theta"], "oy": rigid["oy"], "ox": rigid["ox"],
+                  "ncc": float(rigid["ncc"])},
+        "affine": {"ncc": float(affine["ncc"]),
+                   "M": affine["M"].tolist(), "offset": affine["offset"].tolist()},
+        "nonrigid": {"ncc": float(nonrigid["ncc"]), "ok": bool(nonrigid.get("ok"))},
+        "best_stage": best_stage, "best_ncc": nccs[best_stage],
+        "wrote": str(out_png.relative_to(HERE)),
+        "params": {"hcr_ch": HCR_CH, "hcr_slab_um": list(HCR_SLAB),
+                   "cz_slab_um": list(CZ_SLAB), "side": "intensity",
+                   "sigma_blur_um": sigma_um_hcr},
+    }
+    print(f"  BEST stage: {best_stage}  NCC={nccs[best_stage]:.3f}", flush=True)
+    return out
+
+
+def main():
+    all_results = {}
+    for sid in SUBJECTS:
+        all_results[sid] = process_subject(sid)
+    summary = HERE / "register_intensity_summary.json"
+    summary.write_text(json.dumps(all_results, indent=2, default=float))
+    print(f"\nwrote {summary.name}")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,49 @@
+"""Per-subject 3-up overlay PNG comparing binary / constellation / MI.
+
+For each subject, build a single PNG with three overlay panels (HCR red
++ warped CZ green) — one per method — at the best stage of each method.
+
+Reads the three method PNGs from `figures/` and crops the lower-row /
+last-column overlay so they can be juxtaposed at the same scale.
+Falls back to placeholder if a method has no result for that subject.
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import matplotlib.image as mpimg
+import json
+
+HERE = Path(__file__).resolve().parent
+FIG = HERE / "figures"
+
+SUBJECTS = ["788406", "790322", "767018", "782149", "755252", "767022"]
+METHODS = [
+    ("binary",        "register_binary_{sid}_V3.png"),
+    ("constellation", "register_constellation_{sid}_V3.png"),
+    ("mi",            "register_mi_{sid}_V3.png"),
+]
+
+
+def main():
+    for sid in SUBJECTS:
+        fig, axes = plt.subplots(1, len(METHODS), figsize=(6 * len(METHODS), 6))
+        for ax, (name, tmpl) in zip(axes, METHODS):
+            p = FIG / tmpl.format(sid=sid)
+            if not p.exists():
+                ax.set_title(f"{name}: missing")
+                ax.axis("off"); continue
+            img = mpimg.imread(p)
+            ax.imshow(img); ax.axis("off")
+            ax.set_title(name)
+        fig.suptitle(f"{sid} — V3 method comparison (full PNGs)")
+        fig.tight_layout()
+        out = FIG / f"compare_methods_{sid}.png"
+        fig.savefig(out, dpi=110, bbox_inches="tight")
+        plt.close(fig)
+        print(f"wrote {out.name}")
+
+
+if __name__ == "__main__":
+    main()

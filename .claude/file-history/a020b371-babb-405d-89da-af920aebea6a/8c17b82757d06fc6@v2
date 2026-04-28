@@ -1,0 +1,252 @@
+# Session 07f — sz from per-cell z-bbox ratio
+
+## Context
+
+Seven prior sz attempts across sessions 06/07/07b/07c/07d/07e failed:
+centroid-count families (06, 07, 07b, 07c) hit a depth-dependent
+detection-bias ceiling (CV 0.30–0.60); 1D pia-normal profiles
+(07d intensity, 07e σ_z) hit shape mismatch or profile-flatness;
+density conservation and simple sigma-ratio (07e) hit CZ/HCR depth-
+coverage mismatches. The thickness-ratio `H_hcr / cz_span` sits at
++28 %, +1 %, −9 %, −45 % on the 4 spot subjects — a noisy prior,
+not a point estimate.
+
+**Unexplored signal:** per-cell tight z-bbox, already tabulated in
+`dev_code/roi_area_sxy.py` for both modalities (`bbox_dz_um` column)
+but never consumed. Its lateral analogue (`xy_area_um2`) delivered
+sxy to ±2 % on 788406/790322. This session asks whether the axial
+analogue holds up.
+
+## Physical caveats (user-provided, 2026-04-24)
+
+1. **HCR bottom is not the WM boundary.** Tissue is targeted to
+   ~400 µm slab thickness *before* expansion. So post-expansion HCR
+   cortex thickness ≈ 400 µm × sz (≈ 900–1400 µm observed), not
+   a biological cortex floor. Experimental cut noise produces the
+   H_hcr variability we see (1008–1252 µm across subjects). This
+   means `H_hcr / cz_span` estimates `sz × (400/cz_span)`, which is
+   only ≈ `sz` if CZ imaging captures the full 400 µm pre-expansion
+   slab — it typically captures ~380–400 µm so this is close, but
+   not exact. Noted for interpreting the thickness-ratio baseline.
+
+2. **2-photon axial resolution is much worse than lightsheet.** The
+   CZ axial PSF z-FWHM is ~3–5 µm (2P optical sectioning); the HCR
+   lightsheet axial resolution is ~1–2 µm per voxel (`s.hcr_z_um`).
+   So a **physically identical** cell body of z-height `h` will
+   appear with bbox z-extent:
+
+       bbox_dz_CZ ≈ h + PSF_z_CZ    (convolution + thresholding bias)
+       bbox_dz_HCR ≈ (h · sz) + PSF_z_HCR
+
+   The ratio is **not** `sz` but something closer to:
+
+       bbox_dz_HCR / bbox_dz_CZ ≈ (h·sz + PSF_HCR) / (h + PSF_CZ)
+
+   For typical h ≈ 12–15 µm, PSF_CZ ≈ 4 µm, PSF_HCR ≈ 1 µm, sz ≈ 3:
+
+       → (15·3 + 1) / (15 + 4) = 46 / 19 ≈ 2.4
+   vs
+       → sz_true = 3.0
+
+   So we expect `sz_bbox` to **underestimate** `sz` by ~20 % on
+   average from PSF anisotropy alone. This is a physics floor, not
+   a fixable bias.
+
+The question for 07f is whether the error is (a) consistent across
+subjects (correctable by a single bias), (b) varies with depth
+(correctable but subject-specific), or (c) unpredictable. The answer
+determines whether the approach is useful as a pinned estimate, a
+prior, or discarded.
+
+## Hypothesis
+
+`sz_bbox = median(bbox_dz_HCR) / median(bbox_dz_CZ)` is a **biased
+but potentially useful** sz estimate on the 4 spot subjects. Bias is
+expected; magnitude and consistency are unknown.
+
+## What to measure
+
+### Primary metric
+
+`sz_bbox` per subject, compared to `sz_GT` from
+`fit_anisotropic_similarity(landmark_pairs_um(s, active_only=True))`.
+Report err_pct and cross-subject std-dev of err_pct.
+
+### Diagnostics (matters more than the point estimate)
+
+1. **Per-cell histograms** of `bbox_dz_um` for CZ and HCR (overlay,
+   log x-axis).
+   - Sanity: both populations unimodal, no bimodality from segmenter
+     failures.
+   - Quantisation check: count unique bbox_dz_um values in CZ.
+     `≥ 10` → quantisation is not the dominant error.
+
+2. **Depth profile of `sz_bbox(d)`** — bin by pia-depth at 50 µm
+   stride, compute median z-bbox per bin for both CZ and HCR, take
+   per-bin ratio.
+   - If ratio is flat vs depth → single bias factor would suffice.
+   - If ratio drifts with depth → cell-size-vs-depth interacts with
+     sampling.
+   - If profile is too noisy (< 20 cells per bin on either side)
+     → sample size insufficient; drop bin.
+
+3. **Aspect-ratio consistency**: `bbox_dz / bbox_dx_geomean` per
+   modality. If segmenters agree on cell shape, this ratio should
+   be near 1 on HCR (which has quasi-isotropic voxels) and >1 on
+   CZ by the PSF-anisotropy factor. Quantifies segmenter bias.
+
+4. **Cross-subject std of err_pct** on sz_bbox. The test question:
+   is bias **a constant** (correctable) or **subject-dependent**
+   (not correctable without GT)?
+
+### Hypothesised outcome table (to be replaced with real results)
+
+| subject | bbox_dz_CZ_med (µm) | bbox_dz_HCR_med (µm) | sz_bbox | sz_GT | err_pct |
+|---------|--------------------:|---------------------:|--------:|------:|--------:|
+| 788406  | ? | ? | ? | 2.82 | ? |
+| 790322  | ? | ? | ? | 3.04 | ? |
+| 767018  | ? | ? | ? | 3.58 | ? |
+| 782149  | ? | ? | ? | 2.93 | ? |
+
+Expected: all errors negative (underestimate). If all four within
+−10 to −30 %, bias is consistent → recoverable with a per-subject-
+independent correction factor. If errors span −50 % to +20 %, bias
+is uncontrolled.
+
+## Stopping criteria
+
+**Accept as a useful signal** if **cross-subject std of err_pct ≤ 5 %**
+on the 4 spot subjects (i.e. bias is consistent enough that a single
+post-hoc factor recovers sz within ±5 %). This is a *different* bar
+than "±5 % without calibration" — we're asking whether a consistent
+multiplicative correction exists.
+
+**Reject as a point estimator** if cross-subject std > 10 % (bias
+too erratic to correct).
+
+**Keep as bound contributor** if std ∈ [5 %, 10 %] — use in the bound
+ensemble from `reassess_with_surfaces/sz_design.md` §Avenue B.
+
+The thickness prior's cross-subject std on err_pct is ~30 % (+28, +1,
+−9, −45), so anything < 20 % is already an improvement.
+
+## Design
+
+### Inputs per subject
+
+- `s = load_subject(sid)` (4 spot subjects — others lack the HCR
+  `cell_body_segmentation/metrics.pickle`).
+- `cz_surf`, `hcr_surf` = cached iter08 surfaces.
+- Strict-GFP+ HCR cell ids via BIC-GMM intersection (per
+  `07b_gfp_intersection_threshold`) — same set the sxy estimator
+  uses, for apples-to-apples.
+
+### Per-cell bbox tables
+
+- `cz_df = roi_area_sxy.cz_cell_tight_bboxes(sid, s, cz_surf)` —
+  all CZ cells with `bbox_dz_um`, `bbox_dx_um`, `bbox_dy_um`,
+  `depth_um`, `x_um`, `y_um`, `z_um`.
+- `hcr_df = roi_area_sxy.hcr_cell_tight_bboxes(sid, s, hcr_surf,
+  hcr_ids_center_fov)` — same for HCR strict-GFP+ cells in the
+  center-¼ FOV (same selection as sxy estimator).
+
+### Filters
+
+- Exclude cells whose z-bbox *touches* the imaging slab top or
+  bottom (partial cells). For CZ: drop if `z_um` is within 1 PSF
+  (~5 µm) of the top/bottom CZ plane. For HCR: drop if `z_um` is
+  within 2 µm of the HCR volume z-limits.
+- Depth band: `d ∈ [100 µm, cortex_p99]` per modality (same as
+  sxy estimator).
+
+### Estimator
+
+```python
+sz_bbox = np.median(hcr_df.bbox_dz_um) / np.median(cz_df.bbox_dz_um)
+```
+
+Plus mean variant (sensitivity check). Plus IQR/p25/p75 for
+interval.
+
+### Depth-binned variant
+
+```python
+bins = np.arange(100, min(cz_span, hcr_span), 50.0)
+for (d_lo, d_hi) in pairs(bins):
+    cz_band = cz_df[(cz_df.depth_um >= d_lo) & (cz_df.depth_um < d_hi)]
+    hcr_band = hcr_df[(hcr_df.depth_um >= d_lo) & (hcr_df.depth_um < d_hi)]
+    if len(cz_band) >= 20 and len(hcr_band) >= 20:
+        sz_bin[d_lo] = hcr_band.bbox_dz_um.median() / cz_band.bbox_dz_um.median()
+```
+
+### GT comparison
+
+Diagnostic only — `fit_anisotropic_similarity(landmark_pairs_um(s,
+active_only=True))[2]`. Never in the estimator path.
+
+## Outputs
+
+- `sessions/07f_sz_from_zbbox/results.json` — per-subject
+  `{sz_bbox_med, sz_bbox_mean, sz_gt, err_pct, n_cz, n_hcr,
+   bbox_stats, sz_bin_dict, aspect_ratio}`.
+- `sessions/07f_sz_from_zbbox/figures/`:
+  - `zbbox_hist_<sid>.png` — dual histogram.
+  - `sz_depth_profile_<sid>.png` — sz_bbox(d) per subject.
+  - `subject_summary.png` — err_pct bar across subjects + sz_bbox
+    vs sz_GT scatter.
+  - `aspect_ratio_<sid>.png` — bbox_dz / bbox_xy_geomean per
+    modality, distribution.
+- `sessions/07f_sz_from_zbbox/log.md` — results + verdict.
+- `sessions/07f_sz_from_zbbox/notebook.ipynb` — rendered summary
+  with plots.
+
+## Driver
+
+`dev_code/07f_sz_from_zbbox.py` — entry point; reuses
+`roi_area_sxy` per-cell table primitives (no new data IO beyond
+what the sxy estimator already reads).
+
+## Self-critique (before running)
+
+1. **PSF anisotropy is a physical floor.** Even if the
+   segmenters are perfectly consistent, CZ bbox z is inflated by
+   the 2P z-PSF. The best achievable with this estimator is `sz
+   × [1 / (1 + PSF_CZ / h_cell)]` — if PSF_CZ = 4 µm and h_cell =
+   15 µm, that's 0.79 × sz. 20 % undershoot is the physics, not
+   the algorithm.
+
+2. **Segmenter boundary bias is an unknown.** The CZ cell
+   segmentation is from multiplane-ophys 2P data, cellpose-based
+   or classical thresholding — I'd need to check. If it threshold-
+   trims at a different intensity level than HCR cellpose, the
+   bbox z will be differentially biased. This is an untestable-
+   without-ground-truth term that rides on top of PSF.
+
+3. **The ±5 % consistency bar may be too tight.** If cross-subject
+   variance is dominated by cell-size distribution (depth mix)
+   rather than by scale, the cross-subject std could be ~10 %
+   regardless of PSF or segmenter. 10 % is still a narrow interval
+   for the bound-ensemble use case.
+
+4. **Filter choices are ablation-sensitive.** d_skin=100, d_p99,
+   and partial-cell exclusion are heuristics. Run with 2–3
+   variants and report how sensitive `sz_bbox` is. If flipping
+   d_skin from 100 to 50 µm moves sz_bbox by > 3 %, the estimator
+   is filter-dependent.
+
+5. **Only 4 subjects.** ±5 % cross-subject std on 4 subjects is
+   barely different from noise — this is a probe, not a
+   production calibration. Note explicitly that any correction
+   factor derived here is 4-subject-calibrated.
+
+## Next actions after this session
+
+- If passes: add `sz_bbox_corrected = sz_bbox · correction_factor`
+  to `roi_area_sxy` (or a new `sz_zbbox.py`), where
+  `correction_factor = mean(sz_GT / sz_bbox)` across the 4 subjects
+  (honest about the 4-subject calibration).
+- If fails: fold sz_bbox into the bound-ensemble as one of four
+  signals (thickness, density, sigma-bandmatched, per-cell-bbox),
+  report intersection interval.
+- Either way: update
+  `reassess_with_surfaces/reassessment.md` with the 07f finding.

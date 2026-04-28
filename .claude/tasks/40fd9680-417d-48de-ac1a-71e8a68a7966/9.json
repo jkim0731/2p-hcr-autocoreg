@@ -1,0 +1,9 @@
+{
+  "id": "9",
+  "subject": "v2-S02: Stage B-Image sz NCC sweep",
+  "description": "Implement 3-D NCC sweep on top of Stage A locked frame. Pass criterion: unimodal peak with peak/median ≥ 1.10, half-width ≤ 0.30. Per-subject result is {passed, sz=x.xx} or {FAILED}. No fallback.",
+  "activeForm": "Re-running v2-S02 with frozen t_z",
+  "status": "in_progress",
+  "blocks": [],
+  "blockedBy": []
+}
