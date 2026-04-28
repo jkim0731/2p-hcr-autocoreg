@@ -1,0 +1,49 @@
+
+=== 755252 ===
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  sz_lp=2.462  sz_peak=2.3500000000000005  sz_gt=2.129  err=+0.221  passed=False  reason=peak_ratio=1.05<1.1; half_width=0.80>0.3
+  ratio=1.047  half_width=0.800  tz_off=-20.0  (106s)
+
+=== 767018 ===
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  sz_lp=3.640  sz_peak=2.750000000000001  sz_gt=3.583  err=-0.833  passed=False  reason=half_width=0.65>0.3
+  ratio=1.126  half_width=0.650  tz_off=-100.0  (95s)
+
+=== 767022 ===
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  sz_lp=2.736  sz_peak=2.800000000000001  sz_gt=2.490  err=+0.310  passed=False  reason=peak_ratio=1.03<1.1; half_width=1.50>0.3
+  ratio=1.027  half_width=1.500  tz_off=88.0  (101s)
+
+=== 782149 ===
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  sz_lp=1.773  sz_peak=1.5  sz_gt=2.926  err=-1.426  passed=False  reason=half_width=0.75>0.3
+  ratio=1.960  half_width=0.750  tz_off=100.0  (83s)
+
+=== 788406 ===
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  sz_lp=3.596  sz_peak=2.8500000000000014  sz_gt=2.820  err=+0.030  passed=False  reason=half_width=0.80>0.3
+  ratio=1.131  half_width=0.800  tz_off=-64.0  (109s)
+
+=== 790322 ===
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  sz_lp=2.896  sz_peak=2.400000000000001  sz_gt=3.042  err=-0.642  passed=False  reason=peak_ratio=1.09<1.1; half_width=1.30>0.3
+  ratio=1.088  half_width=1.300  tz_off=-100.0  (74s)
+
+=== summary ===
+subject_id    sz_gt  sz_peak  sz_err_vs_gt  peak_ratio  half_width  passed                              fail_reason  runtime_s
+    755252 2.129008     2.35      0.220992    1.046653        0.80   False peak_ratio=1.05<1.1; half_width=0.80>0.3      106.4
+    767018 3.582993     2.75     -0.832993    1.126473        0.65   False                      half_width=0.65>0.3       95.4
+    767022 2.489844     2.80      0.310156    1.026962        1.50   False peak_ratio=1.03<1.1; half_width=1.50>0.3      100.9
+    782149 2.926112     1.50     -1.426112    1.960188        0.75   False                      half_width=0.75>0.3       83.1
+    788406 2.820281     2.85      0.029719    1.131214        0.80   False                      half_width=0.80>0.3      109.2
+    790322 3.041691     2.40     -0.641691    1.087826        1.30   False peak_ratio=1.09<1.1; half_width=1.30>0.3       73.6
+
+passed: 0/6
+mean abs err: 0.577
+subjects within ±0.30 of GT: 2/6

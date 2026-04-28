@@ -1,0 +1,48 @@
+
+=== 755252 ===
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  755252: sz_lp=2.462  cz_mean_depth=191.9µm  slab x∈[763,1263]µm
+  sz_lp=2.462  sz_peak=2.10  sz_gt=2.129  err=-0.029  NCC_peak=0.108±0.013  (54s)
+
+=== 767018 ===
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  767018: sz_lp=3.640  cz_mean_depth=156.0µm  slab x∈[867,1367]µm
+  sz_lp=3.640  sz_peak=3.60  sz_gt=3.583  err=+0.017  NCC_peak=0.136±0.005  (50s)
+
+=== 767022 ===
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  767022: sz_lp=2.736  cz_mean_depth=202.6µm  slab x∈[824,1324]µm
+  sz_lp=2.736  sz_peak=2.40  sz_gt=2.490  err=-0.090  NCC_peak=0.127±0.008  (55s)
+
+=== 782149 ===
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  782149: sz_lp=1.773  cz_mean_depth=172.1µm  slab x∈[913,1413]µm
+  sz_lp=1.773  sz_peak=2.90  sz_gt=2.926  err=-0.026  NCC_peak=0.091±0.007  (40s)
+
+=== 788406 ===
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  788406: sz_lp=3.596  cz_mean_depth=175.9µm  slab x∈[958,1458]µm
+  sz_lp=3.596  sz_peak=2.80  sz_gt=2.820  err=-0.020  NCC_peak=0.106±0.003  (56s)
+
+=== 790322 ===
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  790322: sz_lp=2.896  cz_mean_depth=190.5µm  slab x∈[831,1331]µm
+  sz_lp=2.896  sz_peak=3.10  sz_gt=3.042  err=+0.058  NCC_peak=0.133±0.013  (39s)
+
+=== iter 7 (slab-rigid-NCC) summary ===
+subject_id    sz_gt    sz_lp  sz_peak  sz_err_vs_gt  ncc_peak  sem_at_peak  peak_ratio  runtime_s
+    755252 2.129008 2.461936      2.1     -0.029008  0.107930     0.012734    1.694152       54.2
+    767018 3.582993 3.640013      3.6      0.017007  0.135643     0.004925    2.024192       50.3
+    767022 2.489844 2.735989      2.4     -0.089844  0.127479     0.007542    2.072180       54.8
+    782149 2.926112 1.773256      2.9     -0.026112  0.090646     0.006904    1.369401       39.8
+    788406 2.820281 3.595762      2.8     -0.020281  0.106413     0.003272    1.638803       56.1
+    790322 3.041691 2.896201      3.1      0.058309  0.133399     0.013333    1.924381       38.8
+
+mean abs err: 0.040
+within ±0.30 GT: 6/6
