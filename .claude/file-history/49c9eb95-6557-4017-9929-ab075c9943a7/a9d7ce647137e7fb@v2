@@ -1,0 +1,84 @@
+"""v2-S04 Stage D iter 4 — validate the best K=4 constellation per subject
+against `landmarks_qced`."""
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+sys.path.insert(0, "/root/capsule/code/dev_code")
+
+import pandas as pd
+
+from benchmark_data_loader import load_subject
+
+OUT = Path(__file__).resolve().parent
+SUBJECTS_ALL = ["755252", "767018", "767022", "782149", "788406", "790322"]
+TAG = "_wide"
+
+ID_RE = re.compile(r"cz(\d+)-hcr(\d+)$")
+
+
+def _parse(v: str) -> tuple[int, int]:
+    s = str(v)
+    if s.startswith("qced_"):
+        s = s[5:]
+    m = ID_RE.search(s)
+    return (int(m.group(1)), int(m.group(2))) if m else (-1, -1)
+
+
+def main():
+    summary = pd.read_csv(OUT / f"step2_all_subjects_summary{TAG}.csv")
+    rows = []
+    for sid in SUBJECTS_ALL:
+        sub = summary[summary["subject_id"] == int(sid)]
+        if sub.empty:
+            continue
+        best_cz = [int(x) for x in str(sub.iloc[0]["best_cz_ids"]).split(",")]
+        best_hcr = [int(x) for x in str(sub.iloc[0]["best_hcr_ids"]).split(",")]
+
+        s = load_subject(sid)
+        lm = s.landmarks_qced
+        lm = lm[lm["active"]].copy()
+        parsed = [_parse(v) for v in lm["ids"]]
+        lm["cz_id"], lm["hcr_id"] = zip(*parsed)
+        lm_cz_to_hcr = dict(zip(lm["cz_id"], lm["hcr_id"]))
+
+        n_correct = 0
+        per_pair = []
+        for cz, hcr in zip(best_cz, best_hcr):
+            manual = lm_cz_to_hcr.get(cz, None)
+            ok = manual == hcr
+            if ok:
+                n_correct += 1
+            per_pair.append({
+                "cz_id": cz, "predicted_hcr": hcr, "manual_hcr": manual,
+                "correct": ok, "cz_in_lm": (cz in lm_cz_to_hcr),
+            })
+        rows.append({
+            "subject_id": sid,
+            "best_rmse_um": float(sub.iloc[0]["best_rmse_um"]),
+            "n_correct": n_correct,
+            "n_in_lm": sum(1 for p in per_pair if p["cz_in_lm"]),
+            "K": len(best_cz),
+            "details": per_pair,
+        })
+
+    print(f"\n{'sid':<8} {'rmse':>6} {'correct/in_lm/K':>16}  details")
+    for row in rows:
+        details = " ; ".join(
+            f"cz{d['cz_id']}→hcr{d['predicted_hcr']} (manual={d['manual_hcr']}) "
+            f"{'✓' if d['correct'] else '✗' if d['cz_in_lm'] else '?'}"
+            for d in row["details"])
+        print(f"{row['subject_id']:<8} {row['best_rmse_um']:>6.2f} "
+              f"{row['n_correct']:>3d}/{row['n_in_lm']}/{row['K']:<3d}     {details}")
+
+    df = pd.DataFrame([{k: v for k, v in r.items() if k != "details"}
+                       for r in rows])
+    out_csv = OUT / "step2_validation_against_landmarks.csv"
+    df.to_csv(out_csv, index=False)
+    print(f"\n→ {out_csv}")
+
+
+if __name__ == "__main__":
+    main()

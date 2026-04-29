@@ -1,0 +1,298 @@
+"""v2-S04 Stage D iter 5 — clumped K≥5 constellation with LOO drop-lift.
+
+User correction (2026-04-28):
+- Manual landmark constellations are typically CLUMPED in a local volume,
+  not spread.  Drop the prior pairwise-spread + hull-area gates entirely.
+- Validity of each anchor is judged by LOCAL LOO drop-lift (how much
+  removing the anchor degrades the local fit), NOT global aniso-similarity
+  RMSE.
+- Use K≥5 to give the warp enough constraints.
+- All evaluation is done within the local volume of the constellation.
+
+Choice of warp model
+--------------------
+The manual analogue is TPS, but in 3D with K=5 anchors thin-plate-spline
+has 15 DOF / 15 obs / 0 residual DOF and wildly extrapolates outside the
+control hull (a quick test gave mean residuals of 10³–10⁴ µm on test
+cells inside a 200 µm margin).  Aniso-similarity (9 DOF / 15 obs /
+6 residual DOF) is the honest stable model for K=5: it's the v1
+landmark transform, it does not explode in extrapolation, and LOO with
+K-1=4 anchors is still determined (3 residual DOF).
+
+Dedupe rule
+-----------
+Two CZ in the same clump can have the same rank-1 HCR (they're nearby
+and gating is loose).  We dedupe by promoting to the next-rank HCR
+when a collision occurs in clump assembly.
+
+Pipeline
+--------
+1. Per subject, take top-slab candidates from step 1.
+2. Per-CZ ranked HCR list (sorted by rank).  Rank CZ by total
+   candidate score.
+3. Enumerate clumped K constellations: for each seed CZ in the top-T,
+   take its K-1 nearest CZ neighbours (in cz_warp xyz space).  For
+   HCR assignment, walk the per-CZ rank list and skip HCRs already
+   used in this clump.
+4. For each constellation:
+   a. Fit aniso-similarity (R, scales, src_mean, dst_mean) on the K
+      (CZ_xyz → HCR_xyz) anchor pairs.
+   b. Local volume = bbox of CZ anchors + margin (xy 200 µm, z 100 µm).
+   c. Test set = top-slab CZ inside the local volume that are NOT
+      among the K anchors and have at least one candidate.
+   d. d_full = mean NN distance from warped(test_cz_xyz) to nearest
+      HCR_GFP+ centroid (whole-subject HCR pool).
+   e. For each anchor i (LOO):
+        Refit on K-1 anchors;
+        d_loo_i = mean NN distance over the same test set;
+        drop_lift_i = d_loo_i - d_full   [positive = anchor i helps].
+   f. Pass = (drop_lift_i > TAU) for all i; score = min_i drop_lift_i.
+
+Outputs
+-------
+- ``step2c_{sid}{TAG}_clumped.csv``        — per-constellation rows
+- ``step2c_all_subjects_summary{TAG}.csv`` — best per subject
+"""
+from __future__ import annotations
+
+import os
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, "/root/capsule/code/full_automatic_execution_02/lib")
+sys.path.insert(0, "/root/capsule/data/claude_data/full_automatic_execution_01")
+sys.path.insert(0, "/root/capsule/code/dev_code")
+sys.path.insert(0, "/root/capsule/data/claude_data/sessions/03c_onset_features/iterations")
+sys.path.insert(0, "/root/capsule/data/claude_data/sessions/08_surface_vascular_match")
+
+import numpy as np
+import pandas as pd
+from scipy.spatial import cKDTree
+
+from benchmark_data_loader import load_subject
+
+OUT = Path(__file__).resolve().parent
+SUBJECTS_ALL = ["755252", "767018", "767022", "782149", "788406", "790322"]
+TAG = os.environ.get("TAG", "_wide")
+K = int(os.environ.get("K", "5"))
+TOP_T_SEEDS = int(os.environ.get("TOP_T_SEEDS", "50"))
+LOCAL_XY_MARGIN_UM = float(os.environ.get("LOCAL_XY_MARGIN_UM", "200.0"))
+LOCAL_Z_MARGIN_UM = float(os.environ.get("LOCAL_Z_MARGIN_UM", "100.0"))
+TAU_DROP_UM = float(os.environ.get("TAU_DROP_UM", "0.5"))
+
+
+def fit_aniso_predict(src_xyz: np.ndarray, dst_xyz: np.ndarray):
+    """Aniso-similarity (R, scales, t).  src/dst (K, 3) xyz.
+
+    Returns callable predict((M, 3)) → (M, 3) using the row-vector
+    formula from `benchmark_analysis.fit_anisotropic_similarity`:
+        pred = (src - src_mean) @ R * scales + dst_mean
+    (avoiding the column-vector translation-field bug).
+    """
+    src = np.asarray(src_xyz, float)
+    dst = np.asarray(dst_xyz, float)
+    src_mean = src.mean(0); dst_mean = dst.mean(0)
+    src_c = src - src_mean; dst_c = dst - dst_mean
+    H = src_c.T @ dst_c
+    U, _, Vt = np.linalg.svd(H)
+    D = np.eye(3)
+    if np.linalg.det(U) * np.linalg.det(Vt) < 0:
+        D[2, 2] = -1
+    R = U @ D @ Vt
+    src_rot = src_c @ R
+    num = (src_rot * dst_c).sum(0)
+    den = (src_rot ** 2).sum(0)
+    scales = num / np.where(den > 0, den, 1.0)
+
+    def predict(xyz):
+        if len(xyz) == 0:
+            return xyz.copy()
+        return (xyz - src_mean) @ R * scales + dst_mean
+    return predict
+
+
+def _assemble_clump(seed_idx: int, K: int, cz_warp_xyz: np.ndarray,
+                     cz_warp_tree: cKDTree, cz_ids_with_cand: list,
+                     by_cz_ranklist: dict) -> tuple | None:
+    """Pick K-1 nearest CZ + dedupe HCR by walking per-CZ rank.
+
+    Returns (clump_idxs, clump_cz_ids, clump_hcr_ids,
+             clump_hcr_xyz, clump_cz_xyz) or None if dedupe fails.
+    """
+    _d, i_n = cz_warp_tree.query(cz_warp_xyz[seed_idx], k=K)
+    clump_idxs = list(i_n[:K])
+    clump_cz_ids = [int(cz_ids_with_cand[i]) for i in clump_idxs]
+    clump_cz_xyz = cz_warp_xyz[clump_idxs]
+
+    used_hcr = set()
+    clump_hcr_ids = []
+    clump_hcr_xyz = []
+    for cid in clump_cz_ids:
+        rl = by_cz_ranklist[cid]
+        chosen = None
+        for r in range(len(rl)):
+            hid = int(rl.iloc[r]["hcr_id"])
+            if hid in used_hcr:
+                continue
+            chosen = (hid, float(rl.iloc[r]["hcr_x"]),
+                      float(rl.iloc[r]["hcr_y"]),
+                      float(rl.iloc[r]["hcr_z"]))
+            break
+        if chosen is None:
+            return None
+        used_hcr.add(chosen[0])
+        clump_hcr_ids.append(chosen[0])
+        clump_hcr_xyz.append([chosen[1], chosen[2], chosen[3]])
+    return (clump_idxs, clump_cz_ids, clump_hcr_ids,
+            np.asarray(clump_hcr_xyz, float), clump_cz_xyz)
+
+
+def _process_subject(sid: str) -> dict:
+    t0 = time.time()
+    cand_csv = OUT / f"step1_{sid}{TAG}_topslab_candidates.csv"
+    if not cand_csv.exists():
+        return {"subject_id": sid, "error": f"missing {cand_csv.name}"}
+    cand = pd.read_csv(cand_csv)
+
+    s = load_subject(sid)
+    import lib.centroid_helpers as ch
+    hcr_um_zyx, _ = ch.centroids_um(s, "hcr_gfp")
+    hcr_um_xyz = hcr_um_zyx[:, [2, 1, 0]]
+    hcr_tree = cKDTree(hcr_um_xyz)
+    print(f"=== {sid}  cand_pairs={len(cand)}  HCR_gfp={len(hcr_um_xyz)} ===",
+          flush=True)
+
+    by_cz_ranklist = {int(cid): g.sort_values("rank")
+                      for cid, g in cand.groupby("cz_id")}
+    cz_ids_with_cand = list(by_cz_ranklist.keys())
+
+    cz_score = (cand.groupby("cz_id")["score"].sum()
+                    .loc[cz_ids_with_cand]
+                    .sort_values(ascending=False))
+    seed_cz_ids = cz_score.index[:TOP_T_SEEDS].tolist()
+
+    cz_warp_xyz = np.array([
+        [by_cz_ranklist[c].iloc[0]["cz_warp_x"],
+         by_cz_ranklist[c].iloc[0]["cz_warp_y"],
+         by_cz_ranklist[c].iloc[0]["cz_warp_z"]]
+        for c in cz_ids_with_cand
+    ])
+    cz_idx_by_id = {int(c): i for i, c in enumerate(cz_ids_with_cand)}
+    cz_warp_tree = cKDTree(cz_warp_xyz)
+
+    print(f"  K={K}  TOP_T_SEEDS={TOP_T_SEEDS}  "
+          f"margin_xy={LOCAL_XY_MARGIN_UM}  margin_z={LOCAL_Z_MARGIN_UM}  "
+          f"τ={TAU_DROP_UM}", flush=True)
+
+    rows = []
+    n_skipped_dedupe = 0
+    n_skipped_test = 0
+    margin = np.array([LOCAL_XY_MARGIN_UM, LOCAL_XY_MARGIN_UM, LOCAL_Z_MARGIN_UM])
+
+    for seed_cz in seed_cz_ids:
+        seed_idx = cz_idx_by_id[int(seed_cz)]
+        clump = _assemble_clump(seed_idx, K, cz_warp_xyz, cz_warp_tree,
+                                  cz_ids_with_cand, by_cz_ranklist)
+        if clump is None:
+            n_skipped_dedupe += 1
+            continue
+        clump_idxs, clump_cz_ids, clump_hcr_ids, clump_hcr_xyz, clump_cz_xyz = clump
+
+        bb_min = clump_cz_xyz.min(0) - margin
+        bb_max = clump_cz_xyz.max(0) + margin
+        in_box = ((cz_warp_xyz >= bb_min) & (cz_warp_xyz <= bb_max)).all(1)
+        clump_set = set(clump_idxs)
+        not_clump = np.array([i not in clump_set for i in range(len(cz_warp_xyz))])
+        test_idxs = np.flatnonzero(in_box & not_clump)
+        n_test = len(test_idxs)
+        if n_test < 3:
+            n_skipped_test += 1
+            continue
+        test_cz_xyz = cz_warp_xyz[test_idxs]
+
+        warp_full = fit_aniso_predict(clump_cz_xyz, clump_hcr_xyz)
+        pred_full = warp_full(test_cz_xyz)
+        d_full, _ = hcr_tree.query(pred_full, k=1)
+        mean_d_full = float(np.mean(d_full))
+
+        drop_lifts = []
+        for i in range(K):
+            keep = [j for j in range(K) if j != i]
+            warp_loo = fit_aniso_predict(clump_cz_xyz[keep], clump_hcr_xyz[keep])
+            pred_loo = warp_loo(test_cz_xyz)
+            d_loo, _ = hcr_tree.query(pred_loo, k=1)
+            drop_lifts.append(float(np.mean(d_loo)) - mean_d_full)
+
+        d_arr = np.array(drop_lifts)
+        min_drop = float(np.min(d_arr))
+        n_pass = int((d_arr > TAU_DROP_UM).sum())
+        rows.append({
+            "seed_cz_id": int(seed_cz),
+            "cz_ids": ",".join(str(c) for c in clump_cz_ids),
+            "hcr_ids": ",".join(str(h) for h in clump_hcr_ids),
+            "K": K,
+            "n_test_cells": n_test,
+            "mean_d_full_um": mean_d_full,
+            "drop_lifts_um": ",".join(f"{x:.3f}" for x in d_arr),
+            "min_drop_lift_um": min_drop,
+            "mean_drop_lift_um": float(np.mean(d_arr)),
+            "n_pass_anchors": n_pass,
+            "passes_all": bool(n_pass == K),
+            "local_box_xy_um2": float((bb_max[0] - bb_min[0])
+                                       * (bb_max[1] - bb_min[1])),
+            "local_box_z_um": float(bb_max[2] - bb_min[2]),
+        })
+
+    df = pd.DataFrame(rows)
+    if len(df):
+        df = (df.sort_values(
+                ["passes_all", "min_drop_lift_um", "mean_drop_lift_um"],
+                ascending=[False, False, False])
+                .reset_index(drop=True))
+    out_csv = OUT / f"step2c_{sid}{TAG}_clumped.csv"
+    df.to_csv(out_csv, index=False)
+    elapsed = time.time() - t0
+
+    summary = {
+        "subject_id": sid,
+        "K": K,
+        "n_constellations_evaluated": int(len(df)),
+        "n_skipped_dedupe": n_skipped_dedupe,
+        "n_skipped_test_too_small": n_skipped_test,
+        "n_passing": int(df["passes_all"].sum()) if len(df) else 0,
+        "best_min_drop_um": float(df.iloc[0]["min_drop_lift_um"]) if len(df) else float("nan"),
+        "best_mean_drop_um": float(df.iloc[0]["mean_drop_lift_um"]) if len(df) else float("nan"),
+        "best_seed_cz_id": int(df.iloc[0]["seed_cz_id"]) if len(df) else -1,
+        "best_cz_ids": df.iloc[0]["cz_ids"] if len(df) else "",
+        "best_hcr_ids": df.iloc[0]["hcr_ids"] if len(df) else "",
+        "best_n_test_cells": int(df.iloc[0]["n_test_cells"]) if len(df) else 0,
+        "best_mean_d_full_um": float(df.iloc[0]["mean_d_full_um"]) if len(df) else float("nan"),
+        "best_drop_lifts_um": df.iloc[0]["drop_lifts_um"] if len(df) else "",
+        "elapsed_s": round(elapsed, 2),
+    }
+    print(f"  evaluated={summary['n_constellations_evaluated']}  "
+          f"passing={summary['n_passing']}  "
+          f"best_min_drop={summary['best_min_drop_um']:.3f}µm  "
+          f"best_mean_drop={summary['best_mean_drop_um']:.3f}µm  "
+          f"d_full={summary['best_mean_d_full_um']:.2f}µm  "
+          f"({summary['elapsed_s']}s)", flush=True)
+    return summary
+
+
+def main():
+    rows = []
+    for sid in SUBJECTS_ALL:
+        try:
+            rows.append(_process_subject(sid))
+        except Exception as e:  # noqa: BLE001
+            print(f"!! {sid}: {type(e).__name__}: {e}", flush=True)
+            rows.append({"subject_id": sid, "error": str(e)})
+    df = pd.DataFrame(rows)
+    out = OUT / f"step2c_all_subjects_summary{TAG}.csv"
+    df.to_csv(out, index=False)
+    print(f"\n{df.to_string(index=False)}\n→ {out}")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,259 @@
+"""Build summary.ipynb for v2-S05 (E.TPS expansion).
+
+Produces a notebook with plots showing:
+1. r@20 / r@30 comparison: v2-S03 baseline vs E_TPS_aniso vs E_TPS_aniso_icp
+2. Median pairing error per subject and method
+3. Anchor correctness fraction vs r@20 (correlation)
+4. Anchor RMSE vs r@20 (lack of correlation — the key failure)
+5. CZ-warp prediction vs HCR ground-truth overlay (rescue subject)
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+import nbformat as nbf
+
+OUT = Path(__file__).resolve().parent
+NB_PATH = OUT / "summary.ipynb"
+
+nb = nbf.v4.new_notebook()
+cells = []
+
+cells.append(nbf.v4.new_markdown_cell("""# v2-S05 — Stage E.TPS Expansion Summary
+
+**Goal:** apply the K=4 seed-constellation transform from v2-S04 to all CZ
+centroids and NN-match HCR GFP+, testing whether the seed lifts r@20 on
+the rescue targets 755252 / 782149 to v1-parity.
+
+**Method (`bench_e_tps.py`):**
+1. Load best K=4 anchors per subject from
+   `../v2_S04_seed_constellation/step2_all_subjects_summary_wide.csv`.
+2. Re-derive aniso-similarity (R, scales, t) directly on K=4 (CZ_zyx, HCR_zyx)
+   anchor pairs (avoiding the `fit.translation` column-vs-row bug in
+   `benchmark_analysis.fit_anisotropic_similarity`).
+3. Apply transform to all CZ centroids → NN-match each warped CZ to nearest
+   HCR GFP+ within 30 µm.  This is `E_TPS_aniso`.
+4. Variant `E_TPS_aniso_icp`: chain into M3-style locked-scale rigid ICP
+   (residual SE(3), inlier-MAD outlier rejection, max 10 iters).
+
+K=4 thin-plate-spline was rejected — TPS in 3D needs ≥ 4 control points,
+and at exactly K=4 the kernel is degenerate.  Aniso-similarity (9 DOF /
+12 obs / 3 residual DOF) is the honest model for 4 anchors.
+
+Baseline = `v2-S03` gated ensemble (M3-ICP-locked when ICP gate passes,
+else C5_szp; from `bench_g_ensemble_results.csv`).
+"""))
+
+cells.append(nbf.v4.new_code_cell("""\
+%matplotlib inline
+from pathlib import Path
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+
+OUT = Path('.').resolve()
+SUBJECTS = ['755252', '767018', '767022', '782149', '788406', '790322']
+RESCUE = {'755252', '782149'}
+
+tps = pd.read_csv(OUT / 'bench_e_tps_results.csv')
+tps['subject_id'] = tps['subject_id'].astype(str)
+
+bench_g = pd.read_csv(OUT.parent / 'v2_S03_revival_pass' / 'bench_g_ensemble_results.csv')
+bench_g['subject_id'] = bench_g['subject_id'].astype(str)
+step2_val = pd.read_csv(OUT.parent / 'v2_S04_seed_constellation' /
+                         'step2_validation_against_landmarks.csv')
+step2_val['subject_id'] = step2_val['subject_id'].astype(str)
+
+def get(df, sid, method, col):
+    sub = df[df.subject_id == sid]
+    if 'method' in df.columns:
+        sub = sub[sub.method == method]
+    return float(sub[col].iloc[0]) if len(sub) else float('nan')
+
+print('loaded.')
+"""))
+
+cells.append(nbf.v4.new_markdown_cell("""## 1. r@20 / r@30 — baseline vs E.TPS variants
+
+The decisive plot.  Did the seed-constellation transform lift recall on the
+rescue targets?"""))
+
+cells.append(nbf.v4.new_code_cell("""\
+fig, ax = plt.subplots(1, 2, figsize=(13, 4.5))
+x = np.arange(len(SUBJECTS))
+w = 0.27
+
+for axi, metric, title in [
+    (ax[0], 'recall_at_20um', 'r@20'),
+    (ax[1], 'recall_at_30um', 'r@30'),
+]:
+    base = [get(bench_g, s, None, f"ensemble_r{metric.split('_')[-1].rstrip('um')}0")
+            if False else
+            float(bench_g.loc[bench_g.subject_id==s,
+                f"ensemble_r{20 if '20' in metric else 30}"].iloc[0])
+            for s in SUBJECTS]
+    aniso = [get(tps, s, 'E_TPS_aniso', metric) for s in SUBJECTS]
+    aniso_icp = [get(tps, s, 'E_TPS_aniso_icp', metric) for s in SUBJECTS]
+    axi.bar(x - w, base, w, label='v2-S03 ensemble (baseline)', color='gray')
+    axi.bar(x,     aniso, w, label='E_TPS_aniso',      color='steelblue')
+    axi.bar(x + w, aniso_icp, w, label='E_TPS_aniso_icp', color='seagreen')
+    axi.set_xticks(x); axi.set_xticklabels(SUBJECTS)
+    for i, s in enumerate(SUBJECTS):
+        if s in RESCUE:
+            axi.get_xticklabels()[i].set_color('crimson')
+    axi.set_ylabel(title)
+    axi.set_ylim(0, 1.0)
+    axi.set_title(f'{title} per subject (rescue subjects in red)')
+    axi.legend(fontsize=9, loc='upper left')
+
+plt.tight_layout()
+plt.savefig(OUT / 'fig_s05_recall_compare.png', dpi=120)
+plt.show()
+
+base_sum_r20 = sum(float(bench_g.loc[bench_g.subject_id==s, 'ensemble_r20'].iloc[0]) for s in SUBJECTS)
+aniso_sum = sum(get(tps, s, 'E_TPS_aniso', 'recall_at_20um') for s in SUBJECTS)
+aniso_icp_sum = sum(get(tps, s, 'E_TPS_aniso_icp', 'recall_at_20um') for s in SUBJECTS)
+print(f"sum r@20:  baseline={base_sum_r20:.3f}  "
+      f"E_TPS_aniso={aniso_sum:.3f}  E_TPS_aniso_icp={aniso_icp_sum:.3f}")
+"""))
+
+cells.append(nbf.v4.new_markdown_cell("""## 2. Median pairing error per subject
+
+For matched pairs that survived the 30 µm gate, what's the typical CZ→HCR
+distance?  When 0.0, NN-match collapsed to dense identity matches (mostly
+self-pairs)."""))
+
+cells.append(nbf.v4.new_code_cell("""\
+fig, ax = plt.subplots(figsize=(9, 4.5))
+x = np.arange(len(SUBJECTS))
+w = 0.4
+aniso_err = [get(tps, s, 'E_TPS_aniso',     'median_error_um') for s in SUBJECTS]
+icp_err   = [get(tps, s, 'E_TPS_aniso_icp', 'median_error_um') for s in SUBJECTS]
+ax.bar(x - w/2, aniso_err, w, label='E_TPS_aniso',      color='steelblue')
+ax.bar(x + w/2, icp_err,   w, label='E_TPS_aniso_icp',  color='seagreen')
+ax.set_xticks(x); ax.set_xticklabels(SUBJECTS)
+for i, s in enumerate(SUBJECTS):
+    if s in RESCUE:
+        ax.get_xticklabels()[i].set_color('crimson')
+ax.set_ylabel('median pairing error (µm)')
+ax.set_title('Median CZ→HCR distance after expansion')
+ax.legend()
+plt.tight_layout()
+plt.savefig(OUT / 'fig_s05_median_err.png', dpi=120)
+plt.show()
+"""))
+
+cells.append(nbf.v4.new_markdown_cell("""## 3. Anchor correctness vs r@20 (the structural failure)
+
+K=4 has only 3 residual DOF in the 9-DOF aniso fit, so anchor RMSE doesn't
+discriminate "all correct" from "consistently wrong" quadruples.  This plot
+shows that **anchor correctness fraction predicts r@20 lift, but anchor
+RMSE alone does not** — exactly the v1 §11 failure mode."""))
+
+cells.append(nbf.v4.new_code_cell("""\
+fig, ax = plt.subplots(1, 2, figsize=(11, 4.5))
+correctness = [int(step2_val.loc[step2_val.subject_id==s,'n_correct'].iloc[0]) /
+                int(step2_val.loc[step2_val.subject_id==s,'K'].iloc[0])
+               for s in SUBJECTS]
+rmse = [float(step2_val.loc[step2_val.subject_id==s,'best_rmse_um'].iloc[0])
+        for s in SUBJECTS]
+r20_icp = [get(tps, s, 'E_TPS_aniso_icp', 'recall_at_20um') for s in SUBJECTS]
+
+for axi, xs, xlabel, title in [
+    (ax[0], correctness, 'anchor correct fraction (n_correct / K)',
+     'Correctness predicts r@20'),
+    (ax[1], rmse, 'anchor RMSE (µm)',
+     'Anchor RMSE does NOT predict r@20'),
+]:
+    for i, s in enumerate(SUBJECTS):
+        c = 'crimson' if s in RESCUE else 'steelblue'
+        axi.scatter(xs[i], r20_icp[i], s=140, color=c, edgecolor='black', zorder=3)
+        axi.text(xs[i], r20_icp[i] + 0.025, s, fontsize=9, ha='center')
+    axi.set_xlabel(xlabel)
+    axi.set_ylabel('E_TPS_aniso_icp r@20')
+    axi.set_title(title)
+    axi.grid(alpha=0.3)
+    axi.set_ylim(-0.05, 1.0)
+plt.tight_layout()
+plt.savefig(OUT / 'fig_s05_correctness_vs_r20.png', dpi=120)
+plt.show()
+"""))
+
+cells.append(nbf.v4.new_markdown_cell("""## 4. Spatial overlay — where E.TPS sends CZ vs HCR ground truth
+
+For one good subject (790322) and one rescue subject (782149), we plot:
+- HCR GFP+ centroids (gray),
+- the K=4 anchor HCRs (red stars),
+- E_TPS_aniso_icp warped CZ predictions (blue dots).
+
+When the transform is correct, blue dots cluster on the HCR field.  When
+the transform is wrong (rescue case), blue dots wander off.
+"""))
+
+cells.append(nbf.v4.new_code_cell("""\
+import sys
+sys.path.insert(0, '/root/capsule/code/full_automatic_execution_02/lib')
+sys.path.insert(0, '/root/capsule/code/dev_code')
+sys.path.insert(0, '/root/capsule/data/claude_data/full_automatic_execution_01')
+sys.path.insert(0, '/root/capsule/data/claude_data/sessions/03c_onset_features/iterations')
+sys.path.insert(0, '/root/capsule/data/claude_data/sessions/08_surface_vascular_match')
+
+from benchmark_data_loader import load_subject
+import lib.centroid_helpers as ch
+from bench_e_tps import _fit_aniso_with_means, _aniso_apply_explicit, _icp_loop
+
+show = ['790322', '782149']
+fig, axes = plt.subplots(1, len(show), figsize=(11.5, 5))
+for ax, sid in zip(axes, show):
+    s = load_subject(sid)
+    cz_zyx, cz_ids = ch.centroids_um(s, 'cz')
+    hcr_zyx, hcr_ids = ch.centroids_um(s, 'hcr_gfp')
+    cz_id2i = {int(c): i for i,c in enumerate(cz_ids)}
+    hcr_id2i = {int(h): i for i,h in enumerate(hcr_ids)}
+
+    srow = tps[(tps.subject_id == sid) & (tps.method == 'E_TPS_aniso_icp')].iloc[0]
+    cz_anchors = [int(x) for x in str(srow['anchor_cz_ids']).split(',')]
+    hcr_anchors = [int(x) for x in str(srow['anchor_hcr_ids']).split(',')]
+    seed_cz_zyx = np.array([cz_zyx[cz_id2i[c]] for c in cz_anchors])
+    seed_hcr_zyx = np.array([hcr_zyx[hcr_id2i[h]] for h in hcr_anchors])
+    fit = _fit_aniso_with_means(seed_cz_zyx, seed_hcr_zyx)
+    cz_warp = _aniso_apply_explicit(cz_zyx, R=fit['R'], scales=fit['scales'],
+                                     src_mean=fit['src_mean'], dst_mean=fit['dst_mean'])
+    cz_warp_icp, _ = _icp_loop(cz_warp, hcr_zyx)
+    anchor_pts = np.array([hcr_zyx[hcr_id2i[h]] for h in hcr_anchors])
+
+    ax.scatter(hcr_zyx[:, 2], hcr_zyx[:, 1], s=4, color='lightgray', alpha=0.5,
+               label='HCR GFP+')
+    ax.scatter(cz_warp_icp[:, 2], cz_warp_icp[:, 1], s=4, color='steelblue',
+               alpha=0.6, label='E_TPS_aniso_icp warped CZ')
+    ax.scatter(anchor_pts[:, 2], anchor_pts[:, 1], s=180, marker='*',
+               color='crimson', edgecolor='black', linewidth=1.5,
+               label='K=4 anchors', zorder=5)
+    r20 = float(srow['recall_at_20um'])
+    ax.set_title(f"{sid}{' (rescue)' if sid in RESCUE else ''}\\n"
+                 f"E_TPS_aniso_icp  r@20={r20:.3f}")
+    ax.set_xlabel('x (µm)'); ax.set_ylabel('y (µm)')
+    ax.set_aspect('equal')
+    ax.legend(fontsize=8, loc='upper right')
+plt.tight_layout()
+plt.savefig(OUT / 'fig_s05_spatial_overlay.png', dpi=120)
+plt.show()
+"""))
+
+cells.append(nbf.v4.new_markdown_cell("""## 5. Conclusion
+
+- **E.TPS does not rescue 755252 (0.069 → 0.149) or 782149 (0.155 → 0.010)**
+  to v1-parity.
+- **All 6 subjects regress vs the v2-S03 baseline** (sum r@20 = 1.55 vs 2.95);
+  only 790322 matches baseline (0.805 vs 0.763).
+- **Root cause**: K=4 in 3D is structurally under-constrained — anchor RMSE
+  ≤ 1.7 µm on every subject yet half the rescue-target anchors are wrong.
+- This validates the v2 stop rule: no subject is below the 0.05 manual-only
+  threshold, so the rescue path is **Stage F (GUI human-vetted seed)**, not
+  more automatic constellation iterations."""))
+
+nb["cells"] = cells
+
+with open(NB_PATH, "w") as f:
+    nbf.write(nb, f)
+print(f"wrote {NB_PATH}")

@@ -1,0 +1,88 @@
+"""Test foreground-z-profile NCC on 3 subjects, write progress to stdout (line-buffered)."""
+import sys
+sys.path.insert(0, '/root/capsule/code/full_automatic_execution_02/lib')
+sys.path.insert(0, '/root/capsule/code/dev_code')
+sys.path.insert(0, '/root/capsule/code/sessions/03c_onset_features/iterations')
+import time
+import numpy as np
+from benchmark_data_loader import load_subject
+from sz_estimator import _warp_cz_into_hcr_crop, HCR_LEVEL, TZ_PAD_UM, SZ_HI
+from locked_prior_warm import compute_locked_prior_warm_start
+from surface_registration_v2 import get_surface_registration
+from benchmark_analysis import load_hcr_volume
+import iter08_cz_prior as iter08
+
+GT_SZ = {'755252':2.129, '767018':3.583, '767022':2.490,
+         '782149':2.926, '788406':2.820, '790322':3.042}
+
+def fg_z_ncc_score(warped, hcr_target, hcr_fg_zp):
+    """Foreground-fraction-per-z NCC with sub-shift refinement."""
+    nz_mask = warped > 1
+    if nz_mask.sum() < 100:
+        return float('nan')
+    cz_p90 = np.percentile(warped[nz_mask], 90)
+    cz_fg = (warped > cz_p90).astype(np.float32)
+    cz_fg_zp = cz_fg.mean(axis=(1,2))
+    cp = cz_fg_zp - cz_fg_zp.mean()
+    hp = hcr_fg_zp - hcr_fg_zp.mean()
+    N = len(cp)
+    best = -1
+    for sh in range(-25, 26):
+        if sh >= 0:
+            a, b = cp[:N-sh], hp[sh:]
+        else:
+            a, b = cp[-sh:], hp[:N+sh]
+        if a.size < 10: continue
+        den = np.linalg.norm(a)*np.linalg.norm(b)
+        if den < 1e-9: continue
+        v = float(a@b/den)
+        if v > best: best = v
+    return best
+
+for sid in ['788406', '767018', '755252']:
+    print(f'=== {sid}  GT sz={GT_SZ[sid]} ===', flush=True)
+    t0 = time.time()
+    s = load_subject(sid)
+    lp = compute_locked_prior_warm_start(s)
+    reg = get_surface_registration(s)
+    cz_vol = iter08.load_cz_volume(s)
+    hcr_vol, hcr_xy_um, hcr_z_um = load_hcr_volume(s, channel='488', level=HCR_LEVEL)
+    print(f'  loaded in {time.time()-t0:.1f}s', flush=True)
+    y0,y1,x0,x1 = reg['crop_bbox']
+    cz_z_extent_um = cz_vol.shape[0] * s.cz_z_um
+    z_lo_um = max(0.0, lp.translation[0] - TZ_PAD_UM - SZ_HI*cz_z_extent_um/2)
+    z_hi_um = min(hcr_vol.shape[0]*hcr_z_um,
+                  lp.translation[0] + TZ_PAD_UM + SZ_HI*cz_z_extent_um/2)
+    z0i, z1i = int(np.floor(z_lo_um/hcr_z_um)), int(np.ceil(z_hi_um/hcr_z_um))
+    hcr_target = hcr_vol[z0i:z1i, y0:y1, x0:x1].astype(np.float32)
+    hcr_p90 = np.percentile(hcr_target, 90)
+    hcr_fg_zp = (hcr_target > hcr_p90).mean(axis=(1,2)).astype(np.float32)
+
+    sz_grid = np.arange(1.5, 4.01, 0.10)
+    ncc_arr = np.full(sz_grid.shape, np.nan)
+    for i, sz_t in enumerate(sz_grid):
+        warped = _warp_cz_into_hcr_crop(
+            cz_vol, lp, float(sz_t), 0.0,
+            s.cz_xy_um, s.cz_z_um, hcr_xy_um, hcr_z_um,
+            (y0,y1,x0,x1), z_lo_um, z_hi_um,
+        )
+        ncc_arr[i] = fg_z_ncc_score(warped, hcr_target, hcr_fg_zp)
+    pi = int(np.nanargmax(ncc_arr))
+    sz_peak = float(sz_grid[pi]); ncc_peak = float(ncc_arr[pi])
+    ncc_med = float(np.nanmedian(ncc_arr))
+    ratio = ncc_peak/ncc_med if abs(ncc_med)>1e-9 else float('inf')
+    half = ncc_peak/2
+    above = ncc_arr >= half
+    idx = np.where(above)[0]
+    fwhm = float(sz_grid[idx[-1]]-sz_grid[idx[0]]) if len(idx) else float('nan')
+    # Also compute width above (peak+median)/2
+    half2 = (ncc_peak + ncc_med) / 2
+    above2 = ncc_arr >= half2
+    idx2 = np.where(above2)[0]
+    fwhm2 = float(sz_grid[idx2[-1]]-sz_grid[idx2[0]]) if len(idx2) else float('nan')
+    print(f'  sz_peak={sz_peak} ncc_peak={ncc_peak:.3f} median={ncc_med:.3f} '
+          f'ratio={ratio:.2f} fwhm_p2={fwhm:.2f} fwhm_above_(p+m)/2={fwhm2:.2f}', flush=True)
+    print(f'  GT_err = {sz_peak - GT_SZ[sid]:+.3f} um/um', flush=True)
+    print(f'  ncc_arr =', ' '.join(f'{v:.3f}' for v in ncc_arr), flush=True)
+    print(f'  total {time.time()-t0:.1f}s', flush=True)
+print('DONE', flush=True)

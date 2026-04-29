@@ -1,0 +1,113 @@
+"""Prepare comparison data for the failure-analysis notebook.
+
+For each (subject, method), computes pairs and saves to local viz_data/.
+Subjects: 767018 (M3-ICP big winner) + 782149 (M3-ICP catastrophic loser).
+Methods:  M3_ICP_locked, C5, P3.
+Reuses the bench_a_szpinned.patch_warmstart_sz_pinned monkey-patch so
+C5 and P3 see the same locked-prior + sz-pinned warmstart that the
+v2-S03 (a)/(b) runs used.
+"""
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, "/root/capsule/code/full_automatic_execution_02/lib")
+sys.path.insert(0, "/root/capsule/data/claude_data/full_automatic_execution_01")
+sys.path.insert(0, "/root/capsule/code/dev_code")
+sys.path.insert(0, "/root/capsule/data/claude_data/sessions/03c_onset_features/iterations")
+
+import numpy as np
+import pandas as pd
+
+import bench_harness_patch  # noqa: E402
+bench_harness_patch.patch()
+
+from benchmark_data_loader import load_subject  # noqa: E402
+from bench_a_szpinned import _load_sz_pins, patch_warmstart_sz_pinned  # noqa: E402
+from bench_e_m3_icp_szpinned import m3_icp_pairs  # noqa: E402
+
+OUT = Path("/root/capsule/code/full_automatic_execution_02/sessions/v2_S03_revival_pass/viz_data")
+OUT.mkdir(exist_ok=True)
+
+SUBJECTS = ["767018", "782149"]
+
+
+def _save_centroid_data(s, sid: str, lp):
+    """Save raw CZ + HCR-GFP centroids and the LP-warped CZ centroids."""
+    import lib.centroid_helpers as ch
+    from locked_prior_warm import apply_to_cz_um
+
+    cz_um, cz_ids = ch.centroids_um(s, "cz")
+    hcr_um, hcr_ids = ch.centroids_um(s, "hcr_gfp")
+    cz_lp = apply_to_cz_um(lp, cz_um)
+    np.savez(
+        OUT / f"{sid}_centroids.npz",
+        cz_um=cz_um, cz_ids=cz_ids,
+        hcr_um=hcr_um, hcr_ids=hcr_ids,
+        cz_lp=cz_lp,
+    )
+
+
+def _save_gt(s, sid: str):
+    """Save GT landmark pairs for residual scoring."""
+    from benchmark_analysis import landmark_pairs_um, fit_anisotropic_similarity
+    pairs = landmark_pairs_um(s, active_only=True)
+    cz_lm, hcr_lm = pairs
+    fit = fit_anisotropic_similarity(cz_lm, hcr_lm)
+    np.savez(
+        OUT / f"{sid}_gt.npz",
+        cz_lm=cz_lm, hcr_lm=hcr_lm,
+        gt_R=fit.R, gt_scales=fit.scales, gt_translation=fit.translation,
+    )
+
+
+def _save_m3_icp(s, sid: str, sz_pin: float):
+    """Run M3-ICP-locked, save pairs + ICP trace."""
+    pairs_df, diag = m3_icp_pairs(s, sz_pin, verbose=False)
+    pairs_df.to_csv(OUT / f"{sid}_M3_ICP_pairs.csv", index=False)
+    with open(OUT / f"{sid}_M3_ICP_diag.json", "w") as f:
+        json.dump({k: (v if not isinstance(v, np.ndarray) else v.tolist())
+                   for k, v in diag.items()}, f, indent=2, default=str)
+
+
+def _save_candidate(s, sid: str, mid: str):
+    """Run a v1 candidate, save pairs + transform."""
+    import bench.candidates  # noqa: F401  (registers decorators)
+    from bench.harness import CANDIDATES
+    fn = CANDIDATES[mid]
+    res = fn(s)
+    res.pairs_df.to_csv(OUT / f"{sid}_{mid}_pairs.csv", index=False)
+    if res.transform is not None:
+        td = res.transform
+        np.savez(
+            OUT / f"{sid}_{mid}_transform.npz",
+            R=td.R, scales=td.scales, translation=td.translation,
+            kind=str(td.kind),
+        )
+
+
+def main():
+    sz_pins = _load_sz_pins()
+    for sid in SUBJECTS:
+        sz_pin = sz_pins[sid]
+        print(f"\n=== {sid}  sz_pin={sz_pin:.3f} ===", flush=True)
+        s = load_subject(sid)
+        original, lp = patch_warmstart_sz_pinned(s, sz_pin)
+        try:
+            _save_centroid_data(s, sid, lp)
+            _save_gt(s, sid)
+            print("  M3-ICP...", flush=True)
+            _save_m3_icp(s, sid, sz_pin)
+            for mid in ["C5", "P3"]:
+                print(f"  {mid}...", flush=True)
+                _save_candidate(s, sid, mid)
+        finally:
+            import lib.centroid_helpers as ch
+            ch.default_warmstart_zyx = original
+        print(f"  saved → {OUT}", flush=True)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,268 @@
+"""v2-S04 Stage D iter 6 — image-NCC validation of clumped K=5 constellations.
+
+For each subject's best K=5 constellation (from step2c summary):
+  1. Build local bbox in HCR µm = clump CZ-warped XYZ + (200, 200, 100) margin.
+  2. Resample CZ ROI binary map (cz_voronoi_labels > 0) onto a target HCR-µm
+     XYZ isotropic grid covering the local bbox at 4 µm spacing, under:
+       - baseline: LP+sz-pin warmstart only (aniso = identity)
+       - test: LP+sz-pin + constellation aniso correction
+  3. Crop HCR 488 (level-4 raw) onto the same target grid.
+  4. Compute Pearson NCC for both warps.
+  5. Report per-subject baseline_ncc, test_ncc, delta.
+"""
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, "/root/capsule/code/full_automatic_execution_02/lib")
+sys.path.insert(0, "/root/capsule/code/dev_code")
+sys.path.insert(0, "/root/capsule/data/claude_data/full_automatic_execution_01")
+sys.path.insert(0, "/root/capsule/data/claude_data/sessions/03c_onset_features/iterations")
+sys.path.insert(0, "/root/capsule/data/claude_data/sessions/08_surface_vascular_match")
+
+import numpy as np
+import pandas as pd
+from scipy.ndimage import map_coordinates
+
+from benchmark_data_loader import load_subject
+from benchmark_analysis import load_hcr_volume
+import lib.cz_labels as cz_labels_mod
+from locked_prior_warm import compute_locked_prior_warm_start
+
+# 767018 ships only `*_zstack.tif` (no `*reg-dim-swapped.ome.tif`); fall back.
+_orig_load_zstack = cz_labels_mod._load_zstack
+def _patched_load_zstack(s):
+    try:
+        return _orig_load_zstack(s)
+    except StopIteration:
+        import tifffile
+        zs_path = next(Path(s.coreg_dir).glob("*_zstack.tif"))
+        return tifffile.imread(zs_path).astype(np.float32)
+cz_labels_mod._load_zstack = _patched_load_zstack
+
+from seed_constellation_step2c_clumped import (
+    LOCAL_XY_MARGIN_UM, LOCAL_Z_MARGIN_UM,
+)
+
+OUT = Path(__file__).resolve().parent
+SUBJECTS_ALL = ["755252", "767018", "767022", "782149", "788406", "790322"]
+TAG = os.environ.get("TAG", "_wide")
+TARGET_SPACING = 4.0  # µm; matches HCR level-4 nominal
+
+
+def _load_sz_pins() -> dict:
+    df = pd.read_csv(
+        "/root/capsule/code/full_automatic_execution_02/sessions/"
+        "v2_S02_sz_image_sweep/results_iter7_summary.csv"
+    )
+    col = "sz_peak" if "sz_peak" in df.columns else "sz"
+    df["subject_id"] = df["subject_id"].astype(str)
+    return {str(r["subject_id"]): float(r[col]) for _, r in df.iterrows()}
+
+
+def _ncc(a: np.ndarray, b: np.ndarray) -> float:
+    a = a.astype(np.float64).ravel()
+    b = b.astype(np.float64).ravel()
+    a = a - a.mean()
+    b = b - b.mean()
+    den = float(np.sqrt((a * a).sum() * (b * b).sum()))
+    return float((a * b).sum() / den) if den > 0 else 0.0
+
+
+def _fit_aniso_explicit(src_xyz: np.ndarray, dst_xyz: np.ndarray):
+    """Return (R, S, src_mean, dst_mean) for forward y = (x - sm) @ R * S + dm."""
+    src = np.asarray(src_xyz, float)
+    dst = np.asarray(dst_xyz, float)
+    src_mean = src.mean(0)
+    dst_mean = dst.mean(0)
+    src_c = src - src_mean
+    dst_c = dst - dst_mean
+    H = src_c.T @ dst_c
+    U, _, Vt = np.linalg.svd(H)
+    D = np.eye(3)
+    if np.linalg.det(U) * np.linalg.det(Vt) < 0:
+        D[2, 2] = -1
+    R = U @ D @ Vt
+    src_rot = src_c @ R
+    num = (src_rot * dst_c).sum(0)
+    den = (src_rot ** 2).sum(0)
+    S = num / np.where(den > 0, den, 1.0)
+    return R, S, src_mean, dst_mean
+
+
+def _resample_cz_roi_to_grid(
+    cz_bin_zyx: np.ndarray,
+    cz_xy_um: float, cz_z_um: float,
+    R_LP_zyx: np.ndarray, S_LP_zyx: np.ndarray,
+    t_LP_zyx: np.ndarray, src_mean_LP_zyx: np.ndarray,
+    R_AN_xyz: np.ndarray, S_AN_xyz: np.ndarray,
+    src_mean_AN_xyz: np.ndarray, dst_mean_AN_xyz: np.ndarray,
+    bb_min_xyz: np.ndarray, bb_max_xyz: np.ndarray,
+    spacing: float,
+) -> np.ndarray:
+    """Sample CZ ROI binary through inverse(aniso ∘ LP) onto a target grid.
+
+    Target grid is HCR µm XYZ, isotropic.  Output shape (Nz, Ny, Nx).
+    Inverse pipeline (per output voxel):
+      out_xyz = bb_min + spacing * (kx, ky, kz)
+      cz_warp_xyz = ((out_xyz - dst_mean_AN) / S_AN) @ R_AN.T + src_mean_AN
+      cz_warp_zyx = cz_warp_xyz[::-1]   # component flip
+      cz_um_zyx   = (cz_warp_zyx - t_LP) @ R_LP / S_LP + src_mean_LP
+      cz_vox_zyx  = cz_um_zyx / (cz_z_um, cz_xy_um, cz_xy_um)
+    """
+    Nx = int(np.ceil((bb_max_xyz[0] - bb_min_xyz[0]) / spacing))
+    Ny = int(np.ceil((bb_max_xyz[1] - bb_min_xyz[1]) / spacing))
+    Nz = int(np.ceil((bb_max_xyz[2] - bb_min_xyz[2]) / spacing))
+
+    kz, ky, kx = np.indices((Nz, Ny, Nx), dtype=np.float64)
+    out_x = bb_min_xyz[0] + spacing * kx
+    out_y = bb_min_xyz[1] + spacing * ky
+    out_z = bb_min_xyz[2] + spacing * kz
+    out_xyz = np.stack([out_x, out_y, out_z], axis=-1)
+
+    out_centered = out_xyz - dst_mean_AN_xyz
+    cz_warp_xyz = (out_centered / S_AN_xyz) @ R_AN_xyz.T + src_mean_AN_xyz
+    cz_warp_zyx = cz_warp_xyz[..., ::-1]
+
+    cz_um_zyx = (cz_warp_zyx - t_LP_zyx) @ R_LP_zyx / S_LP_zyx + src_mean_LP_zyx
+
+    sampling = np.array([cz_z_um, cz_xy_um, cz_xy_um])
+    cz_vox_zyx = cz_um_zyx / sampling
+    coords = cz_vox_zyx.reshape(-1, 3).T  # (3, Nvox) ZYX
+
+    sampled = map_coordinates(
+        cz_bin_zyx.astype(np.float32),
+        coords, order=0, mode="constant", cval=0.0,
+    )
+    return sampled.reshape(Nz, Ny, Nx)
+
+
+def _crop_hcr_to_grid(
+    hcr_vol_zyx: np.ndarray, hcr_xy_um: float, hcr_z_um: float,
+    bb_min_xyz: np.ndarray, bb_max_xyz: np.ndarray, spacing: float,
+) -> np.ndarray:
+    Nx = int(np.ceil((bb_max_xyz[0] - bb_min_xyz[0]) / spacing))
+    Ny = int(np.ceil((bb_max_xyz[1] - bb_min_xyz[1]) / spacing))
+    Nz = int(np.ceil((bb_max_xyz[2] - bb_min_xyz[2]) / spacing))
+
+    kz, ky, kx = np.indices((Nz, Ny, Nx), dtype=np.float64)
+    out_x = bb_min_xyz[0] + spacing * kx
+    out_y = bb_min_xyz[1] + spacing * ky
+    out_z = bb_min_xyz[2] + spacing * kz
+
+    z_vox = out_z / hcr_z_um
+    y_vox = out_y / hcr_xy_um
+    x_vox = out_x / hcr_xy_um
+
+    coords = np.stack([z_vox.ravel(), y_vox.ravel(), x_vox.ravel()], axis=0)
+    sampled = map_coordinates(
+        hcr_vol_zyx.astype(np.float32),
+        coords, order=1, mode="constant", cval=0.0,
+    )
+    return sampled.reshape(Nz, Ny, Nx)
+
+
+def main():
+    summary = pd.read_csv(OUT / f"step2c_all_subjects_summary{TAG}.csv")
+    summary["subject_id"] = summary["subject_id"].astype(str)
+    sz_pins = _load_sz_pins()
+
+    rows = []
+    for sid in SUBJECTS_ALL:
+        sub = summary[summary.subject_id == sid]
+        if sub.empty:
+            continue
+        srow = sub.iloc[0]
+        cz_ids_anchor = [int(x) for x in str(srow["best_cz_ids"]).split(",")]
+        hcr_ids_anchor = [int(x) for x in str(srow["best_hcr_ids"]).split(",")]
+
+        cand = pd.read_csv(OUT / f"step1_{sid}{TAG}_topslab_candidates.csv")
+        clump_cz_xyz = []
+        clump_hcr_xyz = []
+        for cz, hcr in zip(cz_ids_anchor, hcr_ids_anchor):
+            r = cand[(cand["cz_id"] == cz) & (cand["hcr_id"] == hcr)].iloc[0]
+            clump_cz_xyz.append([r["cz_warp_x"], r["cz_warp_y"], r["cz_warp_z"]])
+            clump_hcr_xyz.append([r["hcr_x"], r["hcr_y"], r["hcr_z"]])
+        clump_cz_xyz = np.asarray(clump_cz_xyz, float)
+        clump_hcr_xyz = np.asarray(clump_hcr_xyz, float)
+
+        margin = np.array([LOCAL_XY_MARGIN_UM, LOCAL_XY_MARGIN_UM, LOCAL_Z_MARGIN_UM])
+        bb_min = clump_cz_xyz.min(0) - margin
+        bb_max = clump_cz_xyz.max(0) + margin
+
+        s = load_subject(sid)
+        sz_pin = sz_pins[sid]
+        lp = compute_locked_prior_warm_start(s, sz_init=sz_pin)
+
+        R_AN, S_AN, src_mean_AN, dst_mean_AN = _fit_aniso_explicit(
+            clump_cz_xyz, clump_hcr_xyz
+        )
+
+        cz_labels_zyx = cz_labels_mod.cz_voronoi_labels(s)
+        cz_bin_zyx = (cz_labels_zyx > 0).astype(np.float32)
+        cz_xy_um = float(s.cz_xy_um); cz_z_um = float(s.cz_z_um)
+
+        try:
+            hcr_vol, hcr_xy_um, hcr_z_um = load_hcr_volume(s, channel="488", level=4)
+        except FileNotFoundError:
+            print(f"{sid}: no 488 channel; skipping")
+            continue
+
+        warped_cz_test = _resample_cz_roi_to_grid(
+            cz_bin_zyx, cz_xy_um, cz_z_um,
+            lp.R, lp.scales, lp.translation, lp.src_mean,
+            R_AN, S_AN, src_mean_AN, dst_mean_AN,
+            bb_min, bb_max, TARGET_SPACING,
+        )
+        I3 = np.eye(3)
+        warped_cz_baseline = _resample_cz_roi_to_grid(
+            cz_bin_zyx, cz_xy_um, cz_z_um,
+            lp.R, lp.scales, lp.translation, lp.src_mean,
+            I3, np.ones(3), src_mean_AN, src_mean_AN,
+            bb_min, bb_max, TARGET_SPACING,
+        )
+        hcr_crop = _crop_hcr_to_grid(
+            hcr_vol, hcr_xy_um, hcr_z_um, bb_min, bb_max, TARGET_SPACING
+        )
+
+        ncc_baseline = _ncc(warped_cz_baseline, hcr_crop)
+        ncc_test = _ncc(warped_cz_test, hcr_crop)
+
+        rows.append({
+            "subject_id": sid,
+            "K": int(srow["K"]),
+            "ncc_baseline_LP": ncc_baseline,
+            "ncc_test_LP_aniso": ncc_test,
+            "delta_ncc": ncc_test - ncc_baseline,
+            "n_voxels": int(warped_cz_test.size),
+            "frac_cz_in_bbox": float(warped_cz_baseline.mean()),
+            "frac_cz_test": float(warped_cz_test.mean()),
+            "bbox_um_x": float(bb_max[0] - bb_min[0]),
+            "bbox_um_y": float(bb_max[1] - bb_min[1]),
+            "bbox_um_z": float(bb_max[2] - bb_min[2]),
+        })
+        print(f"{sid}: NCC baseline={ncc_baseline:.4f}  test={ncc_test:.4f}  "
+              f"Δ={ncc_test - ncc_baseline:+.4f}  "
+              f"bbox=({bb_max[0]-bb_min[0]:.0f},{bb_max[1]-bb_min[1]:.0f},"
+              f"{bb_max[2]-bb_min[2]:.0f})µm")
+
+        np.savez_compressed(
+            OUT / f"step2c_image_ncc_volumes_{sid}.npz",
+            cz_baseline=warped_cz_baseline.astype(np.uint8),
+            cz_test=warped_cz_test.astype(np.uint8),
+            hcr_488=hcr_crop.astype(np.float32),
+            bb_min=bb_min, bb_max=bb_max,
+            spacing=TARGET_SPACING,
+        )
+
+    df = pd.DataFrame(rows)
+    out_csv = OUT / "step2c_image_ncc_validation.csv"
+    df.to_csv(out_csv, index=False)
+    print(f"\n→ {out_csv}")
+    print(df.to_string(index=False))
+
+
+if __name__ == "__main__":
+    main()

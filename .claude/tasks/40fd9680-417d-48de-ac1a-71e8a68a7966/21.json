@@ -1,0 +1,9 @@
+{
+  "id": "21",
+  "subject": "v2-S04 iter 6: image-NCC validation of clumped K=5 constellations",
+  "description": "For each subject's best K=5 constellation, warp the CZ ROI binary map (cz_voronoi_labels) through composed (LP+sz-pin → aniso correction) into a target grid covering the local bbox at 4 µm spacing, crop HCR 488 (level-4 raw) to the same grid, and compute Pearson NCC. Report baseline (LP-only) NCC vs test (LP+aniso) NCC and delta. This tests whether the constellation's correction actually IMPROVES image alignment inside the local volume.",
+  "activeForm": "Building image-NCC validation",
+  "status": "completed",
+  "blocks": [],
+  "blockedBy": []
+}

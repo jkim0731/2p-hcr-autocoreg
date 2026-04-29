@@ -1,0 +1,9 @@
+{
+  "id": "16",
+  "subject": "Investigate v2-S03 r@30 = 0 anomaly",
+  "description": "Both bench_a_results.csv (P1/P4/P6/C5) and bench_bc_results.csv (P3/P5) show recall_at_30um = 0 across all 6 subjects despite r@20 > 0. Structurally impossible — bug in the harness's r@30 computation or in CSV serialisation. Find and fix.",
+  "activeForm": "Investigating r@30 = 0 anomaly",
+  "status": "completed",
+  "blocks": [],
+  "blockedBy": []
+}

@@ -1,0 +1,9 @@
+{
+  "id": "22",
+  "subject": "v2-S04 iter 7: TPS warp + hull-restricted image-NCC",
+  "description": "Replace aniso-similarity with TPS (thin_plate) for the K=5 constellation warp. Evaluation grid restricted to inside the K-anchor convex hull (where TPS interpolates rather than extrapolates). Compute Δ NCC vs LP+sz-pin baseline and vs aniso variant. Mirrors the manual workflow per docs/04 §2.4.",
+  "activeForm": "Building TPS hull-restricted NCC test",
+  "status": "completed",
+  "blocks": [],
+  "blockedBy": []
+}

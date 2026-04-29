@@ -1,0 +1,369 @@
+# v2-S04 — Stage D: surface-based seed constellation + drop-lift vetting
+
+**Date:** 2026-04-28
+**Owner:** automatic
+**Status:** scaffolded; iter 0 plan ready
+**Companion docs:** `/root/capsule/code/docs/09 Full automatic v2 plan.md` §2 Stage D, §5 line 537-543
+
+## Goal
+
+Produce 4–6 high-confidence CZ↔HCR landmark pairs per subject *without
+human input*, mimicking manual workflow steps 2.1–2.3.
+
+The seed constellation has two downstream uses in v2:
+1. **Anchor for E.TPS** (v2-S05) — TPS expansion seeded by the K pairs.
+2. **Rescue path for v2-S03 ICP failures** — on subjects where the
+   gated M3-ICP/C5 ensemble underperforms (755252, 782149 currently),
+   the seed pairs may give E.TPS or even a refined ICP a better basin.
+
+## v2-S03 outcome (consumed by this session)
+
+Per `sessions/v2_S03_revival_pass/log.md` iter 3:
+
+| metric                                | sum r@20 | wins vs C5 |
+|---------------------------------------|----------|------------|
+| v1 baseline (C5 free)                 | 1.050    | (baseline) |
+| C5 sz pinned                          | 2.067    | 6/6        |
+| M3-ICP-locked (new, SE(3)-only)       | 2.729    | 4/6        |
+| **Gated ensemble (M3-ICP gate, else C5)** | **2.950** | **6/6 ≥ best** |
+
+**Per-subject ensemble r@20 today:**
+
+| sid    | ensemble r@20 | source     | gap to "good" (≥ 0.50) |
+|--------|---------------|------------|------------------------|
+| 755252 | 0.069         | C5 (gate F)| **0.43**               |
+| 767018 | 0.861         | M3-ICP     | done                   |
+| 767022 | 0.663         | M3-ICP     | done                   |
+| 782149 | 0.155         | C5 (gate F)| **0.35**               |
+| 788406 | 0.438         | M3-ICP     | 0.06 (close)           |
+| 790322 | 0.763         | M3-ICP     | done                   |
+
+**Stage D's primary target: 755252 and 782149.**  These are the two
+subjects where (a) ICP fails (gate=FAIL: residual not improved) and
+(b) C5 also struggles (free-fitting affine drifts).  Both have a
+working Stage A locked frame (sz pin within ±0.04 µm of GT) and a
+working `surface_registration_v2` PWR4×4 fit — the warm-start *frame*
+is sound, but per-cell matching from rigid alignment alone isn't
+enough.  We need image-anchored landmarks.
+
+## Method (per v2 plan §2 Stage D)
+
+1. **Top-slab projection.** For each CZ cell with centroid depth in
+   `[0, 50] µm` under CZ pia, project its voronoi footprint
+   (`lib/cz_labels.cz_voronoi_labels(s)`, S48) into the
+   `surface_registration_v2` crop bbox via the PWR4×4 warp.
+2. **Candidate generation.** For each CZ footprint, take HCR GFP+ cells
+   whose centroid lies within `R_xy_um(p) = max_displacement_block(p) +
+   1·HCR_xy_um` of the projected centroid.  Score each (CZ, HCR) pair:
+   * footprint IoU (warped voronoi vs F1 mask),
+   * shape similarity `1 − |area_ratio − 1| − |ecc_diff|`,
+   * HCR-quality from `lib/image_quality.hcr_quality(s)` (S47).
+3. **Constellation enumeration.** `K = 4–6` CZ cells with:
+   * wide XY spread (cover ≥ 60 % of CZ-bbox half-extent),
+   * candidates form a non-degenerate hull (no collinear),
+   * each pair in its top-3 candidate list.
+4. **Drop-lift vetting (TPS LOO).** For each constellation, fit
+   per-axis `Rbf(thin_plate)`; for each pair p, drop-refit and measure
+   residual `r_drop(p)`.  Drop-lift = `mean_p r_drop(p) − r_full_residual`.
+   Reject "noisy" (any pair with near-zero drop-lift); investigate
+   "structurally singular" (one pair outsized → drop-it-and-retry).
+5. **Best constellation.** Sort survivors by `min_p r_drop(p)` desc;
+   return the top one.
+
+## Pass criterion
+
+> Stage D seed must have `min_p r_drop(p) > 5 µm`. (§6 stop-rule.)
+> If no constellation reaches this on a subject, route the subject
+> to G1-review (Stage F → E.TPS with human-vetted seed). E.RV still
+> runs unmodified.
+
+Validation: compare Stage D seed pairs to `landmarks_qced.csv`
+(manual landmarks).  Per-subject success metric — number of seed pairs
+within 20 µm (in HCR µm, after Stage A warp) of any active manual
+landmark.
+
+## Cost estimate
+
+- Top-slab CZ cells: ~200 typical (depth ≤ 50 µm filter from S48 voronoi
+  output).
+- HCR GFP+ candidates per CZ: ~5–20 within `R_xy_um < 60 µm` ball.
+- Naive constellation enumeration: `C(N_cz_top, K=4) × top-3 candidate
+  list per cell` ≈ `(200 choose 4) × 3⁴ ≈ 5×10⁹` — *too many*.
+- Mitigations (per §4 risk 2):
+  * Restrict K=4, hull-emptiness pruning.
+  * Cap to top 50 CZ cells by IoU candidate quality.
+  * Parallelise per-constellation TPS.
+  * Effective enumeration: `(50 choose 4) × 3⁴ ≈ 1.6×10⁷` — tractable
+    with a vectorised TPS LOO.
+
+Per subject: ~2–10 min on a single core.  Six subjects: ~30–60 min.
+
+## Inputs (cached / available)
+
+* Stage A locked frame: `compute_locked_prior_warm_start(s, sz_init=...)`
+  from `lib/locked_prior_warm.py`.  ✓
+* sz pin per subject: from
+  `../v2_S02_sz_image_sweep/results_iter7_summary.csv`.  ✓
+* CZ voronoi footprints: `lib/cz_labels.cz_voronoi_labels(s)` (S48).
+  ✓ (need to confirm reachability post-reshuffle)
+* HCR GFP+ masks: `lib/mask_loaders` (F1) + GFP+ filter from
+  v2.2 thresholds.  ✓ (cached in pickle)
+* HCR quality: `lib/image_quality.hcr_quality(s)` (S47).  ✓
+* Surface registration: `dev_code/surface_registration_v2.get_surface_registration(s)`.
+  ✓
+* Ground-truth check: `landmarks_qced.csv` per subject.
+
+## Iteration log
+
+* **2026-04-28 — iter 0 (scaffold).**  Created session dir; wrote this
+  plan.  Confirmed v2-S03 ensemble result and identified 755252 +
+  782149 as Stage D's primary rescue targets.  Next iter: implement
+  the top-slab projection + candidate generation step on 788406 first
+  (the densest, best-aligned subject — sanity check the API plumbing
+  and the IoU scoring).
+
+* **2026-04-28 — iter 1 (top-slab + LP-projected candidate gen).**
+  Implemented `seed_constellation_step1_topslab.py`.  Per-subject:
+  filter CZ to depth ≤ 50 µm under iter08 pia surface; warp via
+  LP+sz-pin; gate HCR GFP+ candidates within (R_xy, R_z) box; score
+  by xy/z distance × HCR quality (placeholder for footprint IoU).
+  Plumbing works on all 6 subjects.  Narrow gate (60, 30) yields
+  median 1-2 candidates per top-slab CZ; 54-92 % of top-slab CZ have
+  at least one candidate.
+
+* **2026-04-28 — iter 2 (validate against `landmarks_qced`).**
+  Implemented `validate_step1_against_landmarks.py`.  For each subject,
+  parse `cz_id`, `hcr_id` from `landmarks_qced.ids`; restrict to
+  top-slab CZ landmarks (depth ≤ 50 µm); check whether the manual
+  HCR id is present in our candidate list and at what rank.
+  **Per-subject recall@K (narrow gate):**
+
+  | sid    | top-slab lm | r@1   | r@3   | recall_any |
+  |--------|-------------|-------|-------|------------|
+  | 755252 |  60         | 0.23  | 0.32  | 0.32       |
+  | 767018 |  87         | 0.28  | 0.36  | 0.36       |
+  | 767022 |  63         | 0.49  | 0.67  | 0.67       |
+  | 782149 | 101         | 0.07  | 0.10  | 0.10       |
+  | 788406 |  77         | 0.60  | 0.84  | 0.87       |
+  | 790322 |  66         | 0.67  | 0.86  | 0.86       |
+
+  Strong correlation with v2-S03 ICP success.  Rescue targets 755252,
+  782149 see only 10–32 % of correct landmarks in their candidate
+  set with the narrow gate — the truth is excluded by the (60 µm,
+  30 µm) box.
+
+* **2026-04-28 — iter 3 (wide gate sweep).**  Re-ran step 1 with
+  (R_xy=120 µm, R_z=80 µm).  Per-subject recall@K (wide gate):
+
+  | sid    | r@1   | r@3   | r@5   | r@10  | r@20  | r_any |
+  |--------|-------|-------|-------|-------|-------|-------|
+  | 755252 | 0.25  | 0.60  | 0.75  | 0.85  | 0.87  | 0.87  |
+  | 767018 | 0.29  | 0.53  | 0.66  | 0.92  | 0.97  | 0.97  |
+  | 767022 | 0.27  | 0.51  | 0.63  | 0.84  | 0.90  | 0.90  |
+  | 782149 | 0.19  | 0.45  | 0.68  | 0.88  | 0.88  | 0.88  |
+  | 788406 | 0.39  | 0.60  | 0.73  | 0.81  | 1.00  | 1.00  |
+  | 790322 | 0.33  | 0.65  | 0.79  | 0.94  | 1.00  | 1.00  |
+
+  **Key takeaway.**  Wide gate has recall@10 ≥ 81 % on every subject
+  and recall_any ≥ 87 %.  The right answer is in the candidate pool;
+  scoring (current: distance × quality, no IoU) is the bottleneck for
+  recall@1/3.  Constellation enumeration on top-10 wide candidates per
+  CZ + TPS LOO drop-lift can recover the truth without depending on
+  per-pair ranking.  Trade-off: wide gate gives 800-1200 (cz, hcr)
+  pairs per subject (K=4 enumeration over top-50 CZ × 10⁴ candidates =
+  ~10⁹ — needs hull pruning to shrink to ~10⁷ tractable).
+
+  Decision: **adopt wide gate (R_xy=120, R_z=80) as default** for
+  step 1; defer footprint IoU to iter 5+ when constellation
+  enumeration plumbing is in.  Next iter (4): implement constellation
+  enumeration with hull pruning on the wide-gate top-10 candidates.
+
+* **2026-04-28 — iter 4 (K=4 constellation enumeration, vectorised).**
+  Implemented `seed_constellation_step2_enum.py`.  For each subject:
+
+  * Top-50 most-confident top-slab CZ cells (by sum of step-1 score).
+  * Pairwise spread: every pair ≥ 0.4 × half-bbox-diagonal apart.
+  * Hull-area gate: convex-hull area ≥ 20 % of half-bbox xy area.
+  * For each surviving K=4 quadruple, enumerate top-3 HCR per CZ
+    (3⁴ = 81 combos) and score with vectorised aniso-similarity RMSE.
+  * Bug found in `benchmark_analysis.fit_anisotropic_similarity`: the
+    `translation` field uses column-vector convention `dst_mean - R @
+    (src_mean * scales)` while the actual prediction in line 128 uses
+    row-vector convention `src_rot * scales + dst_mean`.  These differ
+    when `R` is non-symmetric.  Workaround: use `fit.rms_um` directly
+    (computed correctly inside the fit function); skip `translation`.
+  * Vectorised `_batched_aniso_rmse` runs 3.7M evaluations in ~65 s.
+  * **Per-subject best K=4 constellation vs `landmarks_qced`**
+    (correct = predicted hcr_id matches manual hcr_id for that cz_id;
+    `?` = no manual landmark for that CZ cell):
+
+    | sid    | best RMSE | correct/in_lm/K | notes |
+    |--------|-----------|-----------------|---------|
+    | 755252 | 0.57 µm   | **4/4/4**       | rescue target — Stage D works |
+    | 767018 | 1.69 µm   | 1/3/4           | ICP winner; constellation underperforms |
+    | 767022 | 0.36 µm   | 3/4/4           | one near-miss (cz63→hcr3700 vs manual hcr3688) |
+    | 782149 | 1.40 µm   | 1/2/4           | rescue target — only 1 confirmed correct |
+    | 788406 | 0.99 µm   | 2/3/4           | 2 right, 1 wrong, 1 unknown |
+    | 790322 | 1.05 µm   | 2/2/4           | 2 right, 2 unknown (could be 4/4) |
+
+  **Headline.**  K=4 enumeration with consistency-based aniso-RMSE
+  scoring finds **at least 1 confirmed correct pair** on every subject
+  and **fully-correct constellations** on 755252.  All best-RMSE
+  constellations are ≤ 1.7 µm — well below the 5 µm pass threshold
+  defined in the §2 plan, although note this is the post-fit RMSE
+  (12 obs vs 9 DOF leaves 3 residual DOF) not a TPS drop-lift.
+
+  **Failure mode of consistency-only scoring.**  Aniso-similarity at
+  K=4 is under-constrained.  A "consistently wrong" quadruple — where
+  all 4 picks agree on a wrong but self-consistent affine — also has
+  low RMSE.  This is the §11/v1 problem replayed: 9 DOF on 12
+  observations only constrains the residual to 3 DOF.  Concretely:
+  on 788406, the best-RMSE quadruple has 2/4 wrong picks but RMSE
+  0.99 µm because the wrong picks happen to lie on the same affine
+  as the right ones.
+
+  **Iter 5 directions (open).**
+  1. Real footprint IoU (§2.2 plan) to break ties via image evidence.
+  2. TPS LOO drop-lift on the top-100 enumerated quadruples — picks
+     the constellation where each pair is structurally informative.
+  3. Lock scales to LP+sz-pin (only fit R, t = 6 DOF) to add
+     constraint on top of K=4.
+  4. Report iter-4 result as a milestone and run a quick E.TPS
+     simulation using the best K=4 to see if it lifts r@20 on
+     755252/782149 — even with imperfect seeds, TPS regularisation
+     might be useful.
+
+* **2026-04-28 — iter 5 (clumped K=5 + LOO drop-lift, per user redesign).**
+  User correction: prior iter-4 spread/hull approach is the OPPOSITE
+  of how manual landmarks work — manual seeds are CLUMPED in a local
+  volume and validity is judged by how much each landmark *helps* the
+  local registration.  Rewrote Stage D as
+  `seed_constellation_step2c_clumped.py`:
+
+  * Pick a top-slab CZ as **seed**, take the K-1 nearest top-slab CZs
+    by xy distance to form a **clumped** K=5 quadruple.
+  * HCR dedupe via per-CZ rank-list walking (rank-1 collisions were
+    rampant on densely sampled subjects, e.g. 755252 picked
+    hcr 3433 four times).
+  * Build a local bbox from the K CZ warped positions + (200 µm xy,
+    100 µm z) margin; **test set = top-slab CZs inside the box,
+    excluding the clump**.
+  * Fit aniso-similarity (9 DOF) on the K pairs (NOT TPS — TPS with
+    K=5 in 3D has 0 residual DOF and explodes outside the control
+    hull, tested and verified).  Predict and NN-match each test CZ.
+  * **LOO drop-lift = mean test-cell pred-residual without anchor i
+    minus mean residual with all K anchors.**  Per-anchor pass = drop
+    ≥ τ=0.5 µm.  Constellation passes if all K anchors pass.  Sort
+    survivors by `(passes_all desc, min_drop desc, mean_drop desc)`.
+
+  **Per-subject best clumped K=5 constellation:**
+
+  | sid    | best min-drop | mean-drop | passing/50 | d_full | best cz_ids |
+  |--------|---------------|-----------|------------|--------|-------------|
+  | 755252 | 4.59 µm       | 8.36 µm   | 5          | 46.4   | 36,44,34,26,47 |
+  | 767018 | 2.57 µm       | 5.06 µm   | 3          | 48.6   | 44,35,54,91,59 |
+  | 767022 | 4.42 µm       | 17.93 µm  | 3          | 49.4   | 65,16,75,60,48 |
+  | 782149 | 3.57 µm       | 8.20 µm   | 3          | 44.6   | 180,95,209,87,157 |
+  | 788406 | 2.91 µm       | 9.11 µm   | 1          | 42.1   | 119,110,62,131,54 |
+  | 790322 | 2.44 µm       | 6.10 µm   | 2          | 40.0   | 82,55,39,59,33 |
+
+  Drop-lift pass criterion (≥ 0.5 µm) holds on all subjects.  d_full
+  ≈ 40-50 µm — i.e. the K-anchor aniso warp has ≈ 50 µm mean
+  prediction error on local non-anchor CZ cells.
+
+  **Validation against `landmarks_qced` inside the local bbox**
+  (`validate_step2c_clumped.py`):
+
+  | sid    | anchors_correct/in_lm | local_lm_cells | r@5  | r@10 | r@20 |
+  |--------|-----------------------|----------------|------|------|------|
+  | 755252 | 1/4                   |  31            | 0.00 | 0.00 | 0.06 |
+  | 767018 | 1/5                   |  50            | 0.00 | 0.00 | 0.00 |
+  | 767022 | 1/4                   |  20            | 0.00 | 0.00 | 0.00 |
+  | 782149 | 1/3                   |  28            | 0.00 | 0.00 | 0.07 |
+  | 788406 | 2/5                   |  25            | 0.00 | 0.00 | 0.04 |
+  | 790322 | 1/2                   |  16            | 0.00 | 0.00 | 0.00 |
+
+  **Headline FAILURE.**  Internal-consistency LOO drop-lift survives
+  the gate (min drop 2.4–4.6 µm > τ=0.5 µm), but only **~25-40 % of
+  the K anchors hit the manual landmark** and **local r@20 ≤ 7 %**.
+  Drop-lift measures *internal* coherence of the K picks but cannot
+  detect a globally displaced clump — a self-consistent wrong
+  constellation passes the gate while sitting tens of µm off the
+  truth.  The "clumped + LOO" recipe — exactly what manual workflow
+  uses — does not transfer to automatic mode without an *external*
+  anchor (image-IoU, manual review, or a scale prior).
+
+* **2026-04-28 — iter 6 (image-NCC inside the local volume).**  User
+  request: validate the constellation by **image-NCC** inside the local
+  volume, using the CZ ROI binary map and HCR 488 raw channel — not
+  centroid distances.  Implemented `bench_d_image_ncc.py`:
+
+  * Local bbox in HCR µm = clump CZ-warped XYZ + (200/200/100 µm) margin.
+  * Target isotropic grid at 4 µm spacing covering the bbox.
+  * **CZ ROI**: `lib.cz_labels.cz_voronoi_labels(s) > 0` resampled
+    onto target grid via composed inverse(aniso ∘ LP+sz-pin) using
+    `scipy.ndimage.map_coordinates(order=0)` (binary nearest).
+  * **HCR 488**: `load_hcr_volume(s, channel="488", level=4)` cropped
+    onto target grid via `map_coordinates(order=1)`.
+  * **NCC** = Pearson on flattened arrays for two warps:
+    baseline = LP+sz-pin only (aniso = identity);
+    test = LP+sz-pin + constellation aniso correction.
+
+  | sid    | NCC baseline | NCC test | Δ NCC   | bbox µm        |
+  |--------|--------------|----------|---------|----------------|
+  | 755252 | +0.0063      | +0.0046  | −0.0017 | (521, 494, 216)|
+  | 767018 | −0.0008      | +0.0155  | **+0.0163** | (541, 469, 257)|
+  | 767022 | −0.0017      | +0.0299  | **+0.0315** | (443, 482, 274)|
+  | 782149 | +0.0005      | +0.0142  | **+0.0137** | (467, 685, 336)|
+  | 788406 | +0.0844      | +0.0078  | **−0.0766** | (537, 451, 274)|
+  | 790322 | +0.0577      | +0.0178  | **−0.0399** | (574, 497, 275)|
+
+  **Headline.**  3/6 improve, 3/6 regress (including the two strongest
+  baselines, 788406 and 790322, where LP+sz already gives NCC ≥ 0.06).
+  The constellation correction *moves alignment away from the truth* on
+  half the subjects.  Critically, **all 6 constellations passed the
+  iter-5 LOO drop-lift gate (min drop ≥ 0.5 µm)**, yet the image-NCC
+  gate splits them 3/3 — the centroid-based drop-lift criterion has
+  zero predictive value for image-level alignment quality.
+
+  **Iter 6 conclusion.**  Image-NCC is the right validator.  It gives
+  a **direct, sign-checked** test of whether the constellation helps:
+  Δ NCC > 0 vs Δ NCC ≤ 0.  Two follow-ups become natural:
+  (a) use Δ NCC as the *selection* criterion among the K=5 enumerated
+      clumps — currently we sort by drop-lift, which the data shows is
+      uncorrelated with image alignment;
+  (b) deploy at Stage F: surface the top-N drop-lift candidates and
+      gate them by Δ NCC ≥ τ_NCC (e.g. ≥ 0.005) before E.TPS.
+  Both are work for v2-S06.
+
+  **Iter 5 conclusion.**  Stage D's automatic seed-selection is not
+  reliable on any subject with the current candidate-pool scoring.
+  Future directions (deferred):
+  1. Replace `_score` with footprint IoU on warped CZ voronoi vs HCR
+     F1 mask — image evidence, not just position consistency.
+  2. Constrain scales to LP+sz-pin (locks 3 DOF) so anchor RMSE is
+     above the noise floor for "wrong but consistent" picks.
+  3. Stage F GUI: surface the top-3 K=5 clumps and let the user
+     accept/reject — Stage D becomes seed *suggestion*, not autopilot.
+
+## Files (planned)
+
+```
+v2_S04_seed_constellation/
+├── log.md                            # this file
+├── seed_constellation_step1_topslab.py  # top-slab projection + IoU candidates
+├── seed_constellation_step2_enum.py     # constellation enumeration + hull pruning
+├── seed_constellation_step3_droplift.py # TPS LOO drop-lift vetting
+├── bench_d_seeds.py                  # full Stage D benchmark on 6 subjects
+├── bench_d_seeds_results.csv         # K, drop-lift, GT-match count per subject
+└── summary.ipynb                     # session writeup
+```
+
+## Decision points
+
+1. Whether to promote Stage D into the v2-S03 gated ensemble as a
+   3rd member (alongside M3-ICP and C5).  Likely no — Stage D
+   produces ~4–6 *seed* pairs, not a full pair list; its role is to
+   feed E.TPS (v2-S05), not to compete with C5/M3-ICP directly.
+2. Whether Stage D + E.TPS rescues 755252 and 782149 to r@20 ≥ 0.50.
+   If not, those subjects route to manual review (Stage F).

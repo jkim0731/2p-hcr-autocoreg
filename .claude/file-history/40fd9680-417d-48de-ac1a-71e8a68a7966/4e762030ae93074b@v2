@@ -1,0 +1,231 @@
+"""Build summary.ipynb for v2-S04 (seed constellation).
+
+Produces a notebook with plots showing:
+1. Top-slab candidate generation stats per subject
+2. Recall@k curves (does the truth survive the candidate gate?)
+3. Best K=4 anchor RMSE and validated anchor correctness
+4. Top-down (xy) scatter of K=4 anchors vs HCR GFP+ for selected subjects
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+import nbformat as nbf
+
+OUT = Path(__file__).resolve().parent
+NB_PATH = OUT / "summary.ipynb"
+
+nb = nbf.v4.new_notebook()
+cells = []
+
+cells.append(nbf.v4.new_markdown_cell("""# v2-S04 — Stage D Seed Constellation Summary
+
+**Goal:** produce 4–6 high-confidence CZ↔HCR landmark pairs per subject *without
+human input*, mimicking manual workflow steps 2.1–2.3.
+
+**Method (4 iterations, final = "wide"):**
+1. Top-slab CZ filter — `depth_from_surface ≤ 50 µm` under iter08 CZ pia surface.
+2. Per-CZ candidate HCR generation: warp CZ via Locked-Prior + sz-pin, gate
+   nearby HCR GFP+ centroids by `(R_xy=120 µm, R_z=80 µm)`, score by
+   `(1 − d_xy/R_xy) · (1 − d_z/R_z) · hcr_quality`.
+3. K=4 quadruple enumeration over top-50 most-confident CZ; pairwise spread
+   ≥ 40% half-bbox; hull area ≥ 20% half-bbox area; rank by aniso-similarity
+   RMSE on the 4 (CZ, HCR) anchor pairs (vectorised batch SVD).
+4. Validation: best K=4 vs `landmarks_qced`.
+
+The downstream consumer is v2-S05 (E.TPS) — see `../v2_S05_tps_expansion/`.
+"""))
+
+cells.append(nbf.v4.new_code_cell("""\
+%matplotlib inline
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+
+OUT = Path('.').resolve()
+SUBJECTS = ['755252', '767018', '767022', '782149', '788406', '790322']
+RESCUE = {'755252', '782149'}
+
+step1_summary = pd.read_csv(OUT / 'step1_all_subjects_summary_wide.csv')
+step1_val = pd.read_csv(OUT / 'step1_validation_against_landmarks_wide.csv')
+step2_summary = pd.read_csv(OUT / 'step2_all_subjects_summary_wide.csv')
+step2_val = pd.read_csv(OUT / 'step2_validation_against_landmarks.csv')
+
+step1_summary['subject_id'] = step1_summary['subject_id'].astype(str)
+step1_val['subject_id'] = step1_val['subject_id'].astype(str)
+step2_summary['subject_id'] = step2_summary['subject_id'].astype(str)
+step2_val['subject_id'] = step2_val['subject_id'].astype(str)
+print('loaded.')
+"""))
+
+cells.append(nbf.v4.new_markdown_cell("## 1. Step 1 — top-slab candidate generation\n\n"
+    "How many CZ cells survive the top-slab depth filter, and how many candidate "
+    "(CZ, HCR) pairs result?"))
+
+cells.append(nbf.v4.new_code_cell("""\
+fig, ax = plt.subplots(1, 2, figsize=(11, 4))
+x = np.arange(len(SUBJECTS))
+n_cz = [step1_summary.loc[step1_summary.subject_id==s,'n_cz_total'].iloc[0] for s in SUBJECTS]
+n_top = [step1_summary.loc[step1_summary.subject_id==s,'n_cz_top_slab'].iloc[0] for s in SUBJECTS]
+n_pairs = [step1_summary.loc[step1_summary.subject_id==s,'n_pairs_total'].iloc[0] for s in SUBJECTS]
+
+w = 0.4
+ax[0].bar(x-w/2, n_cz, w, label='all CZ', color='lightgray')
+ax[0].bar(x+w/2, n_top, w, label='top-slab CZ (≤50 µm)', color='steelblue')
+ax[0].set_xticks(x); ax[0].set_xticklabels(SUBJECTS, rotation=0)
+ax[0].set_ylabel('# CZ cells')
+ax[0].set_title('CZ count: total vs top-slab')
+ax[0].legend()
+for i, s in enumerate(SUBJECTS):
+    if s in RESCUE:
+        ax[0].get_xticklabels()[i].set_color('crimson')
+
+ax[1].bar(x, n_pairs, color='steelblue')
+ax[1].set_xticks(x); ax[1].set_xticklabels(SUBJECTS)
+ax[1].set_ylabel('# (CZ, HCR) candidate pairs')
+ax[1].set_title('Candidate pairs (wide gate R_xy=120, R_z=80)')
+for i, s in enumerate(SUBJECTS):
+    if s in RESCUE:
+        ax[1].get_xticklabels()[i].set_color('crimson')
+plt.tight_layout()
+plt.savefig(OUT / 'fig_s04_candidate_counts.png', dpi=120)
+plt.show()
+"""))
+
+cells.append(nbf.v4.new_markdown_cell("## 2. Step 1 — recall against `landmarks_qced` (top-slab restricted)\n\n"
+    "Of all GT landmarks falling in the top-slab, how often does the correct "
+    "HCR appear in the per-CZ candidate ranked list at rank ≤ k? "
+    "**This is the upper bound on what any K-constellation rank-1 picker can achieve.**"))
+
+cells.append(nbf.v4.new_code_cell("""\
+fig, ax = plt.subplots(figsize=(8, 5))
+ks = [1, 3, 5, 10, 20]
+recall_cols = [f'recall@{k}' for k in ks]
+for s in SUBJECTS:
+    row = step1_val[step1_val.subject_id == s].iloc[0]
+    vals = [float(row[c]) for c in recall_cols]
+    ls = '-' if s not in RESCUE else '--'
+    color = 'crimson' if s in RESCUE else 'steelblue'
+    ax.plot(ks, vals, ls, marker='o', label=f"{s}{' (rescue)' if s in RESCUE else ''}",
+            color=color, alpha=0.85)
+ax.set_xlabel('rank k')
+ax.set_ylabel('recall@k (per-CZ HCR rank)')
+ax.set_title('Step 1 — recall@k of correct HCR (top-slab CZ vs landmarks)')
+ax.set_ylim(0, 1.05)
+ax.set_xticks(ks)
+ax.grid(alpha=0.3)
+ax.legend(fontsize=9)
+plt.tight_layout()
+plt.savefig(OUT / 'fig_s04_recall_at_k.png', dpi=120)
+plt.show()
+print('recall@10 ≥ 0.80 on every subject and recall_any ≥ 0.87 — '
+      'truth is in the candidate set.')
+"""))
+
+cells.append(nbf.v4.new_markdown_cell("## 3. Step 2 — best K=4 constellation\n\n"
+    "For each subject, the K=4 quadruple with the lowest aniso-similarity RMSE "
+    "is the seed constellation that goes to E.TPS.  We compare its anchor RMSE "
+    "and how many of the 4 anchors are actually correct vs `landmarks_qced`."))
+
+cells.append(nbf.v4.new_code_cell("""\
+fig, ax = plt.subplots(1, 2, figsize=(12, 4))
+x = np.arange(len(SUBJECTS))
+rmse = [step2_summary.loc[step2_summary.subject_id==s,'best_rmse_um'].iloc[0] for s in SUBJECTS]
+n_correct = [step2_val.loc[step2_val.subject_id==s,'n_correct'].iloc[0] for s in SUBJECTS]
+n_in_lm = [step2_val.loc[step2_val.subject_id==s,'n_in_lm'].iloc[0] for s in SUBJECTS]
+
+colors = ['crimson' if s in RESCUE else 'steelblue' for s in SUBJECTS]
+ax[0].bar(x, rmse, color=colors)
+ax[0].set_xticks(x); ax[0].set_xticklabels(SUBJECTS)
+ax[0].set_ylabel('Anchor RMSE (µm)')
+ax[0].set_title('Best K=4 anchor RMSE')
+for i, v in enumerate(rmse):
+    ax[0].text(i, v + 0.03, f"{v:.2f}", ha='center', fontsize=9)
+
+w = 0.35
+ax[1].bar(x - w/2, n_correct, w, color='seagreen', label='# correct')
+ax[1].bar(x + w/2, n_in_lm,  w, color='lightgray', label='# in landmarks_qced (denom)')
+ax[1].axhline(4, ls=':', color='black', lw=1, label='K=4')
+ax[1].set_xticks(x); ax[1].set_xticklabels(SUBJECTS)
+ax[1].set_ylabel('# anchors')
+ax[1].set_title('Anchor correctness (validated against landmarks_qced)')
+for i, s in enumerate(SUBJECTS):
+    if s in RESCUE:
+        ax[1].get_xticklabels()[i].set_color('crimson')
+        ax[0].get_xticklabels()[i].set_color('crimson')
+ax[1].legend(loc='upper right', fontsize=9)
+plt.tight_layout()
+plt.savefig(OUT / 'fig_s04_anchor_quality.png', dpi=120)
+plt.show()
+"""))
+
+cells.append(nbf.v4.new_markdown_cell("""## 4. Spatial layout of best K=4 anchors
+
+Top-down (xy) scatter of the candidate HCR GFP+ pool (gray) and the K=4
+anchor HCRs (red) for two contrasting subjects.  We expect well-separated
+anchors covering a large hull (gating ≥20% half-bbox area)."""))
+
+cells.append(nbf.v4.new_code_cell("""\
+import sys
+sys.path.insert(0, '/root/capsule/code/dev_code')
+sys.path.insert(0, '/root/capsule/data/claude_data/full_automatic_execution_01')
+sys.path.insert(0, '/root/capsule/data/claude_data/sessions/03c_onset_features/iterations')
+sys.path.insert(0, '/root/capsule/data/claude_data/sessions/08_surface_vascular_match')
+from benchmark_data_loader import load_subject
+import lib.centroid_helpers as ch
+
+show_subjects = ['790322', '782149']  # one good + one rescue
+fig, axes = plt.subplots(1, len(show_subjects), figsize=(11, 5))
+for ax, sid in zip(axes, show_subjects):
+    s = load_subject(sid)
+    hcr_zyx, hcr_ids = ch.centroids_um(s, 'hcr_gfp')
+    # all candidate HCR (from step1)
+    cand = pd.read_csv(OUT / f'step1_{sid}_wide_topslab_candidates.csv')
+    cand_hcr_ids = cand['hcr_id'].unique()
+    # best K=4 anchors
+    srow = step2_summary[step2_summary.subject_id == sid].iloc[0]
+    anchor_hcr = [int(x) for x in str(srow['best_hcr_ids']).split(',')]
+    hcr_id2idx = {int(h): i for i, h in enumerate(hcr_ids)}
+    cand_pts = np.array([hcr_zyx[hcr_id2idx[h]] for h in cand_hcr_ids if int(h) in hcr_id2idx])
+    anchor_pts = np.array([hcr_zyx[hcr_id2idx[int(h)]] for h in anchor_hcr])
+    n_correct = int(step2_val.loc[step2_val.subject_id==sid,'n_correct'].iloc[0])
+
+    ax.scatter(hcr_zyx[:, 2], hcr_zyx[:, 1], s=2, color='lightgray', alpha=0.4,
+               label='all HCR GFP+')
+    ax.scatter(cand_pts[:, 2], cand_pts[:, 1], s=8, color='steelblue', alpha=0.5,
+               label='candidate HCR')
+    ax.scatter(anchor_pts[:, 2], anchor_pts[:, 1], s=200, marker='*',
+               color='crimson', edgecolor='black', linewidth=1.5,
+               label='K=4 anchor', zorder=5)
+    ax.set_title(f"{sid}{' (rescue)' if sid in RESCUE else ''}\\n"
+                 f"anchor RMSE {srow['best_rmse_um']:.2f}µm, "
+                 f"correct {n_correct}/4")
+    ax.set_xlabel('x (µm)'); ax.set_ylabel('y (µm)')
+    ax.set_aspect('equal')
+    ax.legend(fontsize=8, loc='upper right')
+plt.tight_layout()
+plt.savefig(OUT / 'fig_s04_anchor_spatial.png', dpi=120)
+plt.show()
+"""))
+
+cells.append(nbf.v4.new_markdown_cell("""## 5. Conclusion
+
+- **Wide gate works**: the truth is captured in the candidate set on every
+  subject (recall_any ≥ 0.87, recall@10 ≥ 0.80).
+- **K=4 RMSE rank-1 is partially right**: 755252 4/4, 767022 3/4, 790322 2/2;
+  but 767018, 782149 fall to ≤ 1/3 correct.
+- **Anchor RMSE doesn't track correctness**: 767018 has 1/3 correct yet
+  RMSE = 1.69 µm (lower than 782149's 1.40 µm with same correctness ratio).
+- **Why this matters**: K=4 in 3D leaves only 3 residual DOF for a 9-DOF
+  aniso-similarity fit, so RMSE ranking under-discriminates wrong quadruples.
+
+E.TPS validation in v2-S05 (next notebook) shows what this means for
+downstream r@20."""))
+
+nb["cells"] = cells
+
+with open(NB_PATH, "w") as f:
+    nbf.write(nb, f)
+print(f"wrote {NB_PATH}")

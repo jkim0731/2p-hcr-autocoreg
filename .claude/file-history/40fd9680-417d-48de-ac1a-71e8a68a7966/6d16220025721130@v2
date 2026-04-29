@@ -1,0 +1,145 @@
+# v2-S04 — Stage D: surface-based seed constellation + drop-lift vetting
+
+**Date:** 2026-04-28
+**Owner:** automatic
+**Status:** scaffolded; iter 0 plan ready
+**Companion docs:** `/root/capsule/code/docs/09 Full automatic v2 plan.md` §2 Stage D, §5 line 537-543
+
+## Goal
+
+Produce 4–6 high-confidence CZ↔HCR landmark pairs per subject *without
+human input*, mimicking manual workflow steps 2.1–2.3.
+
+The seed constellation has two downstream uses in v2:
+1. **Anchor for E.TPS** (v2-S05) — TPS expansion seeded by the K pairs.
+2. **Rescue path for v2-S03 ICP failures** — on subjects where the
+   gated M3-ICP/C5 ensemble underperforms (755252, 782149 currently),
+   the seed pairs may give E.TPS or even a refined ICP a better basin.
+
+## v2-S03 outcome (consumed by this session)
+
+Per `sessions/v2_S03_revival_pass/log.md` iter 3:
+
+| metric                                | sum r@20 | wins vs C5 |
+|---------------------------------------|----------|------------|
+| v1 baseline (C5 free)                 | 1.050    | (baseline) |
+| C5 sz pinned                          | 2.067    | 6/6        |
+| M3-ICP-locked (new, SE(3)-only)       | 2.729    | 4/6        |
+| **Gated ensemble (M3-ICP gate, else C5)** | **2.950** | **6/6 ≥ best** |
+
+**Per-subject ensemble r@20 today:**
+
+| sid    | ensemble r@20 | source     | gap to "good" (≥ 0.50) |
+|--------|---------------|------------|------------------------|
+| 755252 | 0.069         | C5 (gate F)| **0.43**               |
+| 767018 | 0.861         | M3-ICP     | done                   |
+| 767022 | 0.663         | M3-ICP     | done                   |
+| 782149 | 0.155         | C5 (gate F)| **0.35**               |
+| 788406 | 0.438         | M3-ICP     | 0.06 (close)           |
+| 790322 | 0.763         | M3-ICP     | done                   |
+
+**Stage D's primary target: 755252 and 782149.**  These are the two
+subjects where (a) ICP fails (gate=FAIL: residual not improved) and
+(b) C5 also struggles (free-fitting affine drifts).  Both have a
+working Stage A locked frame (sz pin within ±0.04 µm of GT) and a
+working `surface_registration_v2` PWR4×4 fit — the warm-start *frame*
+is sound, but per-cell matching from rigid alignment alone isn't
+enough.  We need image-anchored landmarks.
+
+## Method (per v2 plan §2 Stage D)
+
+1. **Top-slab projection.** For each CZ cell with centroid depth in
+   `[0, 50] µm` under CZ pia, project its voronoi footprint
+   (`lib/cz_labels.cz_voronoi_labels(s)`, S48) into the
+   `surface_registration_v2` crop bbox via the PWR4×4 warp.
+2. **Candidate generation.** For each CZ footprint, take HCR GFP+ cells
+   whose centroid lies within `R_xy_um(p) = max_displacement_block(p) +
+   1·HCR_xy_um` of the projected centroid.  Score each (CZ, HCR) pair:
+   * footprint IoU (warped voronoi vs F1 mask),
+   * shape similarity `1 − |area_ratio − 1| − |ecc_diff|`,
+   * HCR-quality from `lib/image_quality.hcr_quality(s)` (S47).
+3. **Constellation enumeration.** `K = 4–6` CZ cells with:
+   * wide XY spread (cover ≥ 60 % of CZ-bbox half-extent),
+   * candidates form a non-degenerate hull (no collinear),
+   * each pair in its top-3 candidate list.
+4. **Drop-lift vetting (TPS LOO).** For each constellation, fit
+   per-axis `Rbf(thin_plate)`; for each pair p, drop-refit and measure
+   residual `r_drop(p)`.  Drop-lift = `mean_p r_drop(p) − r_full_residual`.
+   Reject "noisy" (any pair with near-zero drop-lift); investigate
+   "structurally singular" (one pair outsized → drop-it-and-retry).
+5. **Best constellation.** Sort survivors by `min_p r_drop(p)` desc;
+   return the top one.
+
+## Pass criterion
+
+> Stage D seed must have `min_p r_drop(p) > 5 µm`. (§6 stop-rule.)
+> If no constellation reaches this on a subject, route the subject
+> to G1-review (Stage F → E.TPS with human-vetted seed). E.RV still
+> runs unmodified.
+
+Validation: compare Stage D seed pairs to `landmarks_qced.csv`
+(manual landmarks).  Per-subject success metric — number of seed pairs
+within 20 µm (in HCR µm, after Stage A warp) of any active manual
+landmark.
+
+## Cost estimate
+
+- Top-slab CZ cells: ~200 typical (depth ≤ 50 µm filter from S48 voronoi
+  output).
+- HCR GFP+ candidates per CZ: ~5–20 within `R_xy_um < 60 µm` ball.
+- Naive constellation enumeration: `C(N_cz_top, K=4) × top-3 candidate
+  list per cell` ≈ `(200 choose 4) × 3⁴ ≈ 5×10⁹` — *too many*.
+- Mitigations (per §4 risk 2):
+  * Restrict K=4, hull-emptiness pruning.
+  * Cap to top 50 CZ cells by IoU candidate quality.
+  * Parallelise per-constellation TPS.
+  * Effective enumeration: `(50 choose 4) × 3⁴ ≈ 1.6×10⁷` — tractable
+    with a vectorised TPS LOO.
+
+Per subject: ~2–10 min on a single core.  Six subjects: ~30–60 min.
+
+## Inputs (cached / available)
+
+* Stage A locked frame: `compute_locked_prior_warm_start(s, sz_init=...)`
+  from `lib/locked_prior_warm.py`.  ✓
+* sz pin per subject: from
+  `../v2_S02_sz_image_sweep/results_iter7_summary.csv`.  ✓
+* CZ voronoi footprints: `lib/cz_labels.cz_voronoi_labels(s)` (S48).
+  ✓ (need to confirm reachability post-reshuffle)
+* HCR GFP+ masks: `lib/mask_loaders` (F1) + GFP+ filter from
+  v2.2 thresholds.  ✓ (cached in pickle)
+* HCR quality: `lib/image_quality.hcr_quality(s)` (S47).  ✓
+* Surface registration: `dev_code/surface_registration_v2.get_surface_registration(s)`.
+  ✓
+* Ground-truth check: `landmarks_qced.csv` per subject.
+
+## Iteration log
+
+* **2026-04-28 — iter 0 (scaffold).**  Created session dir; wrote this
+  plan.  Confirmed v2-S03 ensemble result and identified 755252 +
+  782149 as Stage D's primary rescue targets.  Next iter: implement
+  the top-slab projection + candidate generation step on 788406 first
+  (the densest, best-aligned subject — sanity check the API plumbing
+  and the IoU scoring).
+
+## Files (planned)
+
+```
+v2_S04_seed_constellation/
+├── log.md                            # this file
+├── seed_constellation_step1_topslab.py  # top-slab projection + IoU candidates
+├── seed_constellation_step2_enum.py     # constellation enumeration + hull pruning
+├── seed_constellation_step3_droplift.py # TPS LOO drop-lift vetting
+├── bench_d_seeds.py                  # full Stage D benchmark on 6 subjects
+├── bench_d_seeds_results.csv         # K, drop-lift, GT-match count per subject
+└── summary.ipynb                     # session writeup
+```
+
+## Decision points
+
+1. Whether to promote Stage D into the v2-S03 gated ensemble as a
+   3rd member (alongside M3-ICP and C5).  Likely no — Stage D
+   produces ~4–6 *seed* pairs, not a full pair list; its role is to
+   feed E.TPS (v2-S05), not to compete with C5/M3-ICP directly.
+2. Whether Stage D + E.TPS rescues 755252 and 782149 to r@20 ≥ 0.50.
+   If not, those subjects route to manual review (Stage F).

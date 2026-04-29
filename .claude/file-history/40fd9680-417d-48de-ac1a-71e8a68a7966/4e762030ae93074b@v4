@@ -1,0 +1,443 @@
+"""Build summary.ipynb for v2-S04 (seed constellation), iter 5 = clumped K=5 + LOO drop-lift.
+
+Produces a notebook with plots showing:
+1. Top-slab candidate generation stats per subject
+2. Recall@k curves (does the truth survive the candidate gate?)
+3. Clumped K=5 LOO drop-lift summary (min, mean, per-anchor)
+4. Validation against landmarks_qced (anchors_correct, local r@5/10/20)
+5. Spatial layout: clumped K=5 anchors inside the local bbox
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+import nbformat as nbf
+
+OUT = Path(__file__).resolve().parent
+NB_PATH = OUT / "summary.ipynb"
+
+nb = nbf.v4.new_notebook()
+cells = []
+
+cells.append(nbf.v4.new_markdown_cell("""# v2-S04 — Stage D Seed Constellation Summary (iter 5: clumped K=5 + LOO)
+
+**Goal:** produce K ≥ 5 high-confidence CZ↔HCR landmark pairs per subject *without
+human input*, mimicking manual workflow steps 2.1–2.3 — landmarks are picked in a
+**clumped** local volume and validated by how each landmark *helps* the local fit.
+
+**Method (iter 5, after user redesign on 2026-04-28):**
+
+1. Top-slab CZ filter — `depth_from_surface ≤ 50 µm` under iter08 CZ pia surface.
+2. Per-CZ candidate HCR generation: warp CZ via Locked-Prior + sz-pin, gate
+   nearby HCR GFP+ centroids by `(R_xy=120 µm, R_z=80 µm)`, score by
+   `(1 − d_xy/R_xy) · (1 − d_z/R_z) · hcr_quality`.
+3. **Clumped enumeration (iter 5).**  Pick a top-slab CZ as seed and
+   take the K-1 nearest top-slab CZs in xy as the **clump** (K=5).
+   HCR dedupe via per-CZ rank-list walking (rank-1 collisions are
+   common on dense subjects).
+4. **LOO drop-lift vetting.**  Build a local bbox = clump bbox +
+   (200 µm xy, 100 µm z) margin.  Test set = top-slab CZs inside
+   the box (excluding the clump).  Fit aniso-similarity (9 DOF) on
+   the K pairs (NOT TPS — TPS with K=5/3D has 0 residual DOF and
+   extrapolates wildly).  **drop_lift_i = mean residual of test set
+   without anchor i  −  mean residual with all K anchors**.
+   Per-anchor pass = drop ≥ τ=0.5 µm.
+5. **Validation** (this notebook) compares anchors and the warped
+   local CZ against `landmarks_qced` *inside the local bbox*.
+
+**Headline.**  All subjects pass the drop-lift gate (min drop 2.4–4.6 µm)
+but **anchors_correct ≤ 2/K** and **local recall@20 ≤ 0.07** on every
+subject.  Internal consistency (drop-lift) is **not sufficient** for
+external correctness — Stage D needs image-IoU evidence or a manual
+review step.
+"""))
+
+cells.append(nbf.v4.new_code_cell("""\
+%matplotlib inline
+from pathlib import Path
+import sys
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+
+sys.path.insert(0, '/root/capsule/code/full_automatic_execution_02/lib')
+sys.path.insert(0, '/root/capsule/code/dev_code')
+sys.path.insert(0, '/root/capsule/data/claude_data/full_automatic_execution_01')
+sys.path.insert(0, '/root/capsule/data/claude_data/sessions/03c_onset_features/iterations')
+sys.path.insert(0, '/root/capsule/data/claude_data/sessions/08_surface_vascular_match')
+
+OUT = Path('.').resolve()
+SUBJECTS = ['755252', '767018', '767022', '782149', '788406', '790322']
+RESCUE = {'755252', '782149'}
+
+step1_summary = pd.read_csv(OUT / 'step1_all_subjects_summary_wide.csv')
+step1_val = pd.read_csv(OUT / 'step1_validation_against_landmarks_wide.csv')
+step2c_summary = pd.read_csv(OUT / 'step2c_all_subjects_summary_wide.csv')
+step2c_val = pd.read_csv(OUT / 'step2c_validation_against_landmarks.csv')
+step2c_ncc = pd.read_csv(OUT / 'step2c_image_ncc_validation.csv')
+
+for d in (step1_summary, step1_val, step2c_summary, step2c_val, step2c_ncc):
+    d['subject_id'] = d['subject_id'].astype(str)
+print('loaded.')
+"""))
+
+cells.append(nbf.v4.new_markdown_cell("## 1. Step 1 — top-slab candidate generation\n\n"
+    "How many CZ cells survive the top-slab depth filter, and how many candidate "
+    "(CZ, HCR) pairs result?"))
+
+cells.append(nbf.v4.new_code_cell("""\
+fig, ax = plt.subplots(1, 2, figsize=(11, 4))
+x = np.arange(len(SUBJECTS))
+n_cz = [step1_summary.loc[step1_summary.subject_id==s,'n_cz_total'].iloc[0] for s in SUBJECTS]
+n_top = [step1_summary.loc[step1_summary.subject_id==s,'n_cz_top_slab'].iloc[0] for s in SUBJECTS]
+n_pairs = [step1_summary.loc[step1_summary.subject_id==s,'n_pairs_total'].iloc[0] for s in SUBJECTS]
+
+w = 0.4
+ax[0].bar(x-w/2, n_cz, w, label='all CZ', color='lightgray')
+ax[0].bar(x+w/2, n_top, w, label='top-slab CZ (≤50 µm)', color='steelblue')
+ax[0].set_xticks(x); ax[0].set_xticklabels(SUBJECTS)
+ax[0].set_ylabel('# CZ cells'); ax[0].set_title('CZ count: total vs top-slab')
+ax[0].legend()
+for i, s in enumerate(SUBJECTS):
+    if s in RESCUE:
+        ax[0].get_xticklabels()[i].set_color('crimson')
+
+ax[1].bar(x, n_pairs, color='steelblue')
+ax[1].set_xticks(x); ax[1].set_xticklabels(SUBJECTS)
+ax[1].set_ylabel('# (CZ, HCR) candidate pairs')
+ax[1].set_title('Candidate pairs (wide gate R_xy=120, R_z=80)')
+for i, s in enumerate(SUBJECTS):
+    if s in RESCUE:
+        ax[1].get_xticklabels()[i].set_color('crimson')
+plt.tight_layout()
+plt.savefig(OUT / 'fig_s04_candidate_counts.png', dpi=120)
+plt.show()
+"""))
+
+cells.append(nbf.v4.new_markdown_cell("## 2. Step 1 — recall against `landmarks_qced` (top-slab restricted)\n\n"
+    "Of all GT landmarks falling in the top-slab, how often does the correct "
+    "HCR appear in the per-CZ candidate ranked list at rank ≤ k?"))
+
+cells.append(nbf.v4.new_code_cell("""\
+fig, ax = plt.subplots(figsize=(8, 5))
+ks = [1, 3, 5, 10, 20]
+recall_cols = [f'recall@{k}' for k in ks]
+for s in SUBJECTS:
+    row = step1_val[step1_val.subject_id == s].iloc[0]
+    vals = [float(row[c]) for c in recall_cols]
+    ls = '-' if s not in RESCUE else '--'
+    color = 'crimson' if s in RESCUE else 'steelblue'
+    ax.plot(ks, vals, ls, marker='o', label=f"{s}{' (rescue)' if s in RESCUE else ''}",
+            color=color, alpha=0.85)
+ax.set_xlabel('rank k'); ax.set_ylabel('recall@k')
+ax.set_title('Step 1 — recall@k of correct HCR (top-slab CZ vs landmarks)')
+ax.set_ylim(0, 1.05); ax.set_xticks(ks); ax.grid(alpha=0.3); ax.legend(fontsize=9)
+plt.tight_layout()
+plt.savefig(OUT / 'fig_s04_recall_at_k.png', dpi=120)
+plt.show()
+"""))
+
+cells.append(nbf.v4.new_markdown_cell("""## 3. Step 2c — clumped K=5 LOO drop-lift
+
+For each subject we ran a top-50 seed enumeration → clumped K=5 →
+aniso-similarity (9 DOF) → LOO drop-lift inside the local bbox + margin.
+The drop-lift values shown are for the **best** (highest min drop_lift)
+constellation per subject; lower-drop anchors indicate weaker
+contribution to the local fit."""))
+
+cells.append(nbf.v4.new_code_cell("""\
+fig, ax = plt.subplots(1, 2, figsize=(12, 4))
+x = np.arange(len(SUBJECTS))
+mind = [step2c_summary.loc[step2c_summary.subject_id==s,'best_min_drop_um'].iloc[0]
+        for s in SUBJECTS]
+meand = [step2c_summary.loc[step2c_summary.subject_id==s,'best_mean_drop_um'].iloc[0]
+         for s in SUBJECTS]
+n_pass = [step2c_summary.loc[step2c_summary.subject_id==s,'n_passing'].iloc[0]
+          for s in SUBJECTS]
+
+colors = ['crimson' if s in RESCUE else 'steelblue' for s in SUBJECTS]
+w = 0.4
+ax[0].bar(x - w/2, mind, w, color=colors, label='min drop_lift')
+ax[0].bar(x + w/2, meand, w, color='lightsteelblue', label='mean drop_lift')
+ax[0].axhline(0.5, ls=':', color='black', lw=1, label='τ=0.5 µm')
+ax[0].set_xticks(x); ax[0].set_xticklabels(SUBJECTS)
+ax[0].set_ylabel('drop-lift (µm)')
+ax[0].set_title('Best K=5 constellation: min/mean drop-lift')
+ax[0].legend(fontsize=9)
+for i, s in enumerate(SUBJECTS):
+    if s in RESCUE:
+        ax[0].get_xticklabels()[i].set_color('crimson')
+
+ax[1].bar(x, n_pass, color=colors)
+ax[1].set_xticks(x); ax[1].set_xticklabels(SUBJECTS)
+ax[1].set_ylabel('# constellations passing all-K drop-lift gate')
+ax[1].set_title('Passing constellations (out of 50 enumerated)')
+for i, v in enumerate(n_pass):
+    ax[1].text(i, v + 0.05, f"{v}", ha='center', fontsize=9)
+for i, s in enumerate(SUBJECTS):
+    if s in RESCUE:
+        ax[1].get_xticklabels()[i].set_color('crimson')
+plt.tight_layout()
+plt.savefig(OUT / 'fig_s04_droplift_summary.png', dpi=120)
+plt.show()
+"""))
+
+cells.append(nbf.v4.new_code_cell("""\
+# Per-anchor drop-lifts for the best constellation of each subject.
+fig, axes = plt.subplots(2, 3, figsize=(13, 7))
+for ax, s in zip(axes.ravel(), SUBJECTS):
+    row = step2c_summary[step2c_summary.subject_id == s].iloc[0]
+    drops = [float(x) for x in str(row['best_drop_lifts_um']).split(',')]
+    cz_ids = [x for x in str(row['best_cz_ids']).split(',')]
+    color = 'crimson' if s in RESCUE else 'steelblue'
+    ax.bar(range(len(drops)), drops, color=color)
+    ax.axhline(0.5, ls=':', color='black', lw=1)
+    ax.set_xticks(range(len(drops)))
+    ax.set_xticklabels([f'cz{c}' for c in cz_ids], rotation=30, fontsize=8)
+    ax.set_ylabel('drop-lift (µm)')
+    ax.set_title(f"{s}{' (rescue)' if s in RESCUE else ''} — d_full={row['best_mean_d_full_um']:.1f} µm")
+    ax.grid(axis='y', alpha=0.3)
+plt.suptitle('Per-anchor LOO drop-lift (best K=5 constellation)', fontsize=12)
+plt.tight_layout()
+plt.savefig(OUT / 'fig_s04_per_anchor_droplift.png', dpi=120)
+plt.show()
+"""))
+
+cells.append(nbf.v4.new_markdown_cell("""## 4. Validation against `landmarks_qced` inside the local volume
+
+For each best K=5 constellation:
+- **anchors_correct** = how many of the K predicted (cz, hcr) pairs match
+  manual landmarks (where a manual landmark exists for that CZ).
+- **local r@5/10/20** = of all manual landmarks whose CZ falls inside the
+  local bbox, what fraction land within 5/10/20 µm of the position
+  predicted by the constellation's aniso-similarity warp."""))
+
+cells.append(nbf.v4.new_code_cell("""\
+fig, ax = plt.subplots(1, 2, figsize=(12, 4))
+x = np.arange(len(SUBJECTS))
+n_correct = [step2c_val.loc[step2c_val.subject_id==s,'n_correct_anchors'].iloc[0]
+             for s in SUBJECTS]
+n_in_lm = [step2c_val.loc[step2c_val.subject_id==s,'n_anchors_in_lm'].iloc[0]
+           for s in SUBJECTS]
+r5 = [step2c_val.loc[step2c_val.subject_id==s,'local_recall_at_5um'].iloc[0]
+      for s in SUBJECTS]
+r10 = [step2c_val.loc[step2c_val.subject_id==s,'local_recall_at_10um'].iloc[0]
+       for s in SUBJECTS]
+r20 = [step2c_val.loc[step2c_val.subject_id==s,'local_recall_at_20um'].iloc[0]
+       for s in SUBJECTS]
+
+w = 0.35
+ax[0].bar(x - w/2, n_correct, w, color='seagreen', label='# correct anchors')
+ax[0].bar(x + w/2, n_in_lm, w, color='lightgray', label='# anchors with manual lm')
+ax[0].axhline(5, ls=':', color='black', lw=1, label='K=5')
+ax[0].set_xticks(x); ax[0].set_xticklabels(SUBJECTS)
+ax[0].set_ylabel('# anchors'); ax[0].set_title('Anchor correctness')
+for i, s in enumerate(SUBJECTS):
+    if s in RESCUE:
+        ax[0].get_xticklabels()[i].set_color('crimson')
+ax[0].legend(fontsize=9)
+
+w = 0.25
+ax[1].bar(x - w, r5, w, color='lightblue', label='r@5 µm')
+ax[1].bar(x, r10, w, color='steelblue', label='r@10 µm')
+ax[1].bar(x + w, r20, w, color='navy', label='r@20 µm')
+ax[1].set_xticks(x); ax[1].set_xticklabels(SUBJECTS)
+ax[1].set_ylabel('local recall'); ax[1].set_title('Local recall vs landmarks_qced')
+ax[1].set_ylim(0, max(0.1, max(r20)*1.2 if r20 else 0.1))
+for i, s in enumerate(SUBJECTS):
+    if s in RESCUE:
+        ax[1].get_xticklabels()[i].set_color('crimson')
+ax[1].legend(fontsize=9)
+plt.tight_layout()
+plt.savefig(OUT / 'fig_s04_validation_local.png', dpi=120)
+plt.show()
+print('All subjects: anchors_correct ≤ 2/K and local r@20 ≤ 0.07.  '
+      'Internal-consistency drop-lift does NOT imply external correctness.')
+"""))
+
+cells.append(nbf.v4.new_markdown_cell("""## 5. Spatial layout — clumped K=5 anchors and local bbox
+
+Top-down (xy) scatter: full HCR GFP+ pool (gray), step-1 candidate HCRs
+(blue), the K=5 anchor HCRs (red stars), and the local bbox (anchors +
+200 µm xy margin) drawn as a dashed rectangle."""))
+
+cells.append(nbf.v4.new_code_cell("""\
+from benchmark_data_loader import load_subject
+import lib.centroid_helpers as ch
+
+LOCAL_XY_MARGIN_UM = 200.0
+
+show_subjects = ['790322', '782149']
+fig, axes = plt.subplots(1, len(show_subjects), figsize=(11, 5))
+for ax, sid in zip(axes, show_subjects):
+    s = load_subject(sid)
+    hcr_zyx, hcr_ids = ch.centroids_um(s, 'hcr_gfp')
+    hcr_id2idx = {int(h): i for i, h in enumerate(hcr_ids)}
+
+    cand = pd.read_csv(OUT / f'step1_{sid}_wide_topslab_candidates.csv')
+    cand_hcr_ids = cand['hcr_id'].unique()
+    cand_pts = np.array([hcr_zyx[hcr_id2idx[int(h)]]
+                         for h in cand_hcr_ids if int(h) in hcr_id2idx])
+
+    srow = step2c_summary[step2c_summary.subject_id == sid].iloc[0]
+    anchor_cz = [int(x) for x in str(srow['best_cz_ids']).split(',')]
+    anchor_hcr = [int(x) for x in str(srow['best_hcr_ids']).split(',')]
+    anchor_pts = np.array([hcr_zyx[hcr_id2idx[int(h)]] for h in anchor_hcr])
+
+    # Local bbox computed on the CZ warped positions
+    by_cz = {int(c): g.sort_values('rank').iloc[0]
+             for c, g in cand.groupby('cz_id')}
+    cz_xyz = np.array([[by_cz[c]['cz_warp_x'], by_cz[c]['cz_warp_y'], by_cz[c]['cz_warp_z']]
+                       for c in anchor_cz])
+    bb_min = cz_xyz.min(0) - np.array([LOCAL_XY_MARGIN_UM, LOCAL_XY_MARGIN_UM, 100])
+    bb_max = cz_xyz.max(0) + np.array([LOCAL_XY_MARGIN_UM, LOCAL_XY_MARGIN_UM, 100])
+
+    n_correct = int(step2c_val.loc[step2c_val.subject_id==sid,'n_correct_anchors'].iloc[0])
+    n_in_lm = int(step2c_val.loc[step2c_val.subject_id==sid,'n_anchors_in_lm'].iloc[0])
+    r20 = float(step2c_val.loc[step2c_val.subject_id==sid,'local_recall_at_20um'].iloc[0])
+
+    ax.scatter(hcr_zyx[:, 2], hcr_zyx[:, 1], s=2, color='lightgray', alpha=0.4,
+               label='all HCR GFP+')
+    ax.scatter(cand_pts[:, 2], cand_pts[:, 1], s=8, color='steelblue', alpha=0.5,
+               label='candidate HCR')
+    ax.scatter(anchor_pts[:, 2], anchor_pts[:, 1], s=200, marker='*',
+               color='crimson', edgecolor='black', linewidth=1.5,
+               label='K=5 anchor', zorder=5)
+    rect = plt.Rectangle((bb_min[0], bb_min[1]),
+                         bb_max[0]-bb_min[0], bb_max[1]-bb_min[1],
+                         fill=False, edgecolor='crimson', ls='--', lw=1.2,
+                         label='local bbox (CZ frame + 200 µm)')
+    ax.add_patch(rect)
+
+    ax.set_title(f"{sid}{' (rescue)' if sid in RESCUE else ''}\\n"
+                 f"min drop {srow['best_min_drop_um']:.2f} µm · "
+                 f"anchors_correct {n_correct}/{n_in_lm} · "
+                 f"local r@20 {r20:.2f}")
+    ax.set_xlabel('x (µm)'); ax.set_ylabel('y (µm)')
+    ax.set_aspect('equal')
+    ax.legend(fontsize=8, loc='upper right')
+plt.tight_layout()
+plt.savefig(OUT / 'fig_s04_anchor_spatial_clumped.png', dpi=120)
+plt.show()
+"""))
+
+cells.append(nbf.v4.new_markdown_cell("""## 6. Image-NCC inside the local volume (iter 6)
+
+The strongest external test: warp the **CZ ROI binary map**
+(`cz_voronoi_labels > 0`) onto an isotropic 4 µm grid covering the
+local bbox under (a) LP+sz-pin only (baseline) and (b) LP+sz-pin +
+constellation aniso correction (test).  Crop **HCR 488 raw (level-4)**
+onto the same grid.  Compute Pearson NCC between the warped binary
+and HCR 488.  Δ NCC > 0 means the constellation correction *improves*
+image alignment inside the local volume; Δ NCC < 0 means it makes
+alignment **worse**."""))
+
+cells.append(nbf.v4.new_code_cell("""\
+fig, ax = plt.subplots(1, 2, figsize=(12, 4))
+x = np.arange(len(SUBJECTS))
+ncc_b = [step2c_ncc.loc[step2c_ncc.subject_id==s,'ncc_baseline_LP'].iloc[0]
+         for s in SUBJECTS]
+ncc_t = [step2c_ncc.loc[step2c_ncc.subject_id==s,'ncc_test_LP_aniso'].iloc[0]
+         for s in SUBJECTS]
+delta = [step2c_ncc.loc[step2c_ncc.subject_id==s,'delta_ncc'].iloc[0]
+         for s in SUBJECTS]
+
+w = 0.4
+ax[0].bar(x - w/2, ncc_b, w, color='lightgray', label='baseline (LP+sz)')
+ax[0].bar(x + w/2, ncc_t, w, color='steelblue', label='test (LP+sz+aniso)')
+ax[0].axhline(0, ls='-', color='black', lw=0.5)
+ax[0].set_xticks(x); ax[0].set_xticklabels(SUBJECTS)
+ax[0].set_ylabel('Pearson NCC'); ax[0].set_title('Image-NCC inside local volume')
+ax[0].legend(fontsize=9)
+for i, s in enumerate(SUBJECTS):
+    if s in RESCUE:
+        ax[0].get_xticklabels()[i].set_color('crimson')
+
+bar_colors = ['seagreen' if d > 0 else 'crimson' for d in delta]
+ax[1].bar(x, delta, color=bar_colors)
+ax[1].axhline(0, ls='-', color='black', lw=0.5)
+ax[1].set_xticks(x); ax[1].set_xticklabels(SUBJECTS)
+ax[1].set_ylabel('Δ NCC (test − baseline)')
+ax[1].set_title('Constellation effect on image alignment')
+for i, d in enumerate(delta):
+    ax[1].text(i, d + (0.003 if d > 0 else -0.005), f"{d:+.3f}",
+               ha='center', fontsize=9,
+               color='seagreen' if d > 0 else 'crimson')
+for i, s in enumerate(SUBJECTS):
+    if s in RESCUE:
+        ax[1].get_xticklabels()[i].set_color('crimson')
+plt.tight_layout()
+plt.savefig(OUT / 'fig_s04_image_ncc.png', dpi=120)
+plt.show()
+print('3/6 improve (Δ +0.014 to +0.032), 3/6 regress (incl. 788406 −0.077, '
+      '790322 −0.040). Centroid drop-lift gate is uncorrelated with image NCC.')
+"""))
+
+cells.append(nbf.v4.new_code_cell("""\
+# Visualise CZ-ROI vs HCR 488 inside the local bbox for one improving and
+# one regressing subject (z-MIP top-down view).
+show_subjects = ['767022', '788406']  # +0.032 vs −0.077
+fig, axes = plt.subplots(2, len(show_subjects), figsize=(11, 9))
+for col, sid in enumerate(show_subjects):
+    npz = np.load(OUT / f'step2c_image_ncc_volumes_{sid}.npz')
+    cz_b = npz['cz_baseline'].astype(float).max(0)
+    cz_t = npz['cz_test'].astype(float).max(0)
+    hcr = npz['hcr_488'].astype(float).max(0)
+    delta = float(step2c_ncc.loc[step2c_ncc.subject_id==sid,'delta_ncc'].iloc[0])
+
+    ax = axes[0, col]
+    ax.imshow(hcr, cmap='gray', origin='lower')
+    ax.contour(cz_b, levels=[0.5], colors='yellow', linewidths=0.6)
+    ax.set_title(f'{sid}: HCR 488 z-MIP + CZ-ROI baseline (yellow)')
+    ax.axis('off')
+
+    ax = axes[1, col]
+    ax.imshow(hcr, cmap='gray', origin='lower')
+    ax.contour(cz_t, levels=[0.5], colors='magenta', linewidths=0.6)
+    ax.set_title(f'{sid}: HCR 488 z-MIP + CZ-ROI test (magenta) · Δ NCC={delta:+.3f}')
+    ax.axis('off')
+plt.tight_layout()
+plt.savefig(OUT / 'fig_s04_image_ncc_overlay.png', dpi=120)
+plt.show()
+"""))
+
+cells.append(nbf.v4.new_markdown_cell("""## 7. Conclusion
+
+- **Step 1 (wide gate) works**: truth is captured in the candidate set on
+  every subject (recall_any ≥ 0.87, recall@10 ≥ 0.80).
+- **Clumped K=5 + LOO drop-lift gate is satisfied** (min drop 2.4–4.6 µm
+  > τ=0.5 µm) on every subject — the picks are *internally consistent*
+  with each other through the aniso-similarity fit.
+- **External correctness fails**: anchors_correct ≤ 2/K and local
+  recall@20 ≤ 0.07.  A self-consistent but globally displaced clump
+  passes the drop-lift gate while sitting tens of µm off the truth.
+- **Why this matters**: drop-lift only measures internal coherence of
+  the K picks. With K=5 / 9 DOF / 6 residual DOF, "wrong but consistent"
+  picks (rank-2/3 HCRs that lie on the same affine) survive the gate.
+  The same failure mode that broke iter-4 K=4 RMSE ranking carries over
+  to iter-5 LOO drop-lift.
+
+- **Image-NCC test (iter 6) is decisive**: 3/6 subjects improve
+  marginally (Δ +0.014 to +0.032), 3/6 regress (788406 −0.077,
+  790322 −0.040, 755252 −0.002).  The drop-lift gate is *uncorrelated*
+  with image alignment.
+
+**Decision.**  Stage D autopilot is **NOT** reliable on any of the
+6 benchmark subjects with the current candidate-pool scoring.
+Stage D outputs are *suggestions*, not autopilot inputs.  Future work:
+(a) **Δ NCC** as the constellation **selection** criterion (image
+evidence directly), replacing centroid drop-lift sorting;
+(b) lock scales to LP+sz-pin (3 fewer DOF) so anchor fits are above
+the "wrong but consistent" noise floor;
+(c) Stage F GUI: surface the top-N K=5 clumps gated by Δ NCC ≥ τ for
+accept/reject.
+
+E.TPS validation in v2-S05 confirmed the iter-4 K=4 anchors do not
+lift r@20 either — see `../v2_S05_tps_expansion/summary.ipynb`."""))
+
+nb["cells"] = cells
+
+with open(NB_PATH, "w") as f:
+    nbf.write(nb, f)
+print(f"wrote {NB_PATH}")

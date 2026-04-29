@@ -1,0 +1,9 @@
+{
+  "id": "23",
+  "subject": "v2-S04 iter 8: protocol rewrite (overlap-matched constellation + TPS NCC search + 4-panel figs)",
+  "description": "New protocol per user 2026-04-29:\n1. After LP, build matched cz↔gfp pairs scored by centroid distance AND ROI IoU.\n2. Constellation = enumerate K∈{4,5,6} subsets of top-N candidates; for each, fit TPS (CZ→HCR), score by registered NCC over local volume = hull + small margin. Two NCC variants: cz binary ROI vs 488 raw, AND cz image vs 488 raw. Pick max.\n3. LOO NCC for chosen constellation = per-landmark validity.\n4. 4-panel figure per subject: (488+GFP white) | (GFP+CZ contours before TPS) | (GFP+CZ contours after TPS) | (488 + CZ after TPS).",
+  "activeForm": "Building overlap-matched constellation pipeline",
+  "status": "completed",
+  "blocks": [],
+  "blockedBy": []
+}

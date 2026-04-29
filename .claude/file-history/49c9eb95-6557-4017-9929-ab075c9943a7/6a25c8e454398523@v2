@@ -1,0 +1,182 @@
+"""v2-S04 Stage D iter 1 — top-slab + LP-projected candidate generation.
+
+Plumbing sanity check on subject 788406 (densest, best-aligned).
+
+Per `log.md` §Method:
+
+1. Identify "top-slab" CZ cells: depth(z - z_pia) in [0, 50] µm.
+2. Project each top-slab CZ centroid into HCR µm via the LP+sz-pin
+   warmstart (Stage A + Stage B-Image).
+3. Generate candidates: HCR GFP+ centroids within R_xy = 60 µm (xy)
+   and within R_z = 30 µm (z) of the projected CZ centroid.
+4. Score each (CZ, HCR) pair: xy distance, z distance, HCR quality
+   (`hcr_quality(s)`).  Iter 1 placeholder for footprint IoU — full
+   PWR4×4-warped voxel IoU lands in iter 2.
+5. Save per-CZ candidate table.
+
+Outputs
+-------
+- `step1_788406_topslab_candidates.csv` — one row per (top-slab CZ, HCR
+  candidate) pair, sorted by score.
+- `step1_788406_summary.json` — counts and timing.
+"""
+from __future__ import annotations
+
+import json
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, "/root/capsule/code/full_automatic_execution_02/lib")
+sys.path.insert(0, "/root/capsule/data/claude_data/full_automatic_execution_01")
+sys.path.insert(0, "/root/capsule/code/dev_code")
+sys.path.insert(0, "/root/capsule/data/claude_data/sessions/03c_onset_features/iterations")
+sys.path.insert(0, "/root/capsule/data/claude_data/sessions/08_surface_vascular_match")
+
+import numpy as np
+import pandas as pd
+
+from benchmark_data_loader import load_subject
+from benchmark_analysis import depth_from_surface
+import lib.centroid_helpers as ch
+from lib.image_quality import hcr_quality
+from locked_prior_warm import compute_locked_prior_warm_start, apply_to_cz_um
+from surfaces_iter08 import get_cz_surface_iter08
+
+OUT = Path(__file__).resolve().parent
+SUBJECTS_ALL = ["755252", "767018", "767022", "782149", "788406", "790322"]
+DEPTH_BAND_UM = (0.0, 50.0)
+R_XY_UM = float(__import__("os").environ.get("R_XY_UM", 60.0))
+R_Z_UM = float(__import__("os").environ.get("R_Z_UM", 30.0))
+TAG = __import__("os").environ.get("TAG", "")
+
+
+def _load_sz_pins() -> dict[str, float]:
+    """sz pin per subject from v2-S02 iter-7 image-NCC sweep."""
+    csv = (Path(__file__).resolve().parents[1]
+           / "v2_S02_sz_image_sweep" / "results_iter7_summary.csv")
+    df = pd.read_csv(csv)
+    return {str(int(r.subject_id)): float(r.sz_peak) for _, r in df.iterrows()}
+
+
+def _run_subject(sid: str, sz_pin: float) -> dict:
+    t0 = time.time()
+    print(f"=== {sid}  sz_pin={sz_pin:.3f} ===", flush=True)
+
+    s = load_subject(sid)
+    lp = compute_locked_prior_warm_start(s, sz_init=sz_pin)
+    print(f"  LP: sxy={lp.sxy_value:.4f}  sz={lp.scales[0]:.4f}  "
+          f"R-θ={lp.rotation_deg_z:.2f}°", flush=True)
+
+    cz_um, cz_ids = ch.centroids_um(s, "cz")     # (N, 3) zyx
+    hcr_um, hcr_ids = ch.centroids_um(s, "hcr_gfp")  # (M, 3) zyx
+    print(f"  CZ cells: {len(cz_ids)}; HCR GFP+ cells: {len(hcr_ids)}",
+          flush=True)
+
+    # CZ depth from iter08 pia surface (depth_from_surface expects (x,y,z)).
+    cz_xyz = cz_um[:, [2, 1, 0]]
+    cz_surf = get_cz_surface_iter08(s)
+    if cz_surf is None:
+        raise SystemExit("CZ iter08 surface unavailable for this subject")
+    cz_depth_um = depth_from_surface(cz_xyz, cz_surf)
+
+    in_slab = (cz_depth_um >= DEPTH_BAND_UM[0]) & (cz_depth_um <= DEPTH_BAND_UM[1])
+    n_slab = int(in_slab.sum())
+    print(f"  top-slab ({DEPTH_BAND_UM[0]:.0f}-{DEPTH_BAND_UM[1]:.0f} µm): "
+          f"{n_slab} CZ cells", flush=True)
+    if n_slab == 0:
+        raise SystemExit("no CZ cells in top slab — check surface fit polarity")
+
+    cz_slab_um = cz_um[in_slab]
+    cz_slab_ids = cz_ids[in_slab]
+    cz_slab_depth = cz_depth_um[in_slab]
+
+    # Warp top-slab CZ centroids → HCR µm via LP.
+    cz_warp = apply_to_cz_um(lp, cz_slab_um)  # (N, 3) zyx
+
+    # HCR quality (aligned to s.hcr_gfp_df["hcr_id"]).
+    quality = hcr_quality(s)
+    gfp_df = s.hcr_gfp_df.set_index("hcr_id")
+    quality_map = dict(zip(gfp_df.index.astype(int), quality))
+    hcr_q = np.array([quality_map.get(int(hid), np.nan) for hid in hcr_ids])
+    finite_q = np.isfinite(hcr_q)
+    if finite_q.sum() < len(hcr_q):
+        hcr_q = np.where(finite_q, hcr_q, np.nanmedian(hcr_q[finite_q]))
+
+    # Per-CZ candidate generation: HCR points inside (R_xy, R_z) box.
+    rows = []
+    for i in range(len(cz_slab_ids)):
+        cz_id = int(cz_slab_ids[i])
+        cz_w = cz_warp[i]                       # (zw, yw, xw) HCR µm
+        depth = float(cz_slab_depth[i])
+        dxy = np.hypot(hcr_um[:, 1] - cz_w[1],
+                       hcr_um[:, 2] - cz_w[2])
+        dz = np.abs(hcr_um[:, 0] - cz_w[0])
+        in_box = (dxy <= R_XY_UM) & (dz <= R_Z_UM)
+        idxs = np.where(in_box)[0]
+        if len(idxs) == 0:
+            continue
+        for j in idxs:
+            d_xy = float(dxy[j])
+            d_z = float(dz[j])
+            d3 = float(np.sqrt(d_xy ** 2 + d_z ** 2))
+            score = (1.0 - d_xy / R_XY_UM) * (1.0 - d_z / R_Z_UM) * float(hcr_q[j])
+            rows.append({
+                "cz_id": cz_id,
+                "cz_depth_um": depth,
+                "cz_warp_z": float(cz_w[0]),
+                "cz_warp_y": float(cz_w[1]),
+                "cz_warp_x": float(cz_w[2]),
+                "hcr_id": int(hcr_ids[j]),
+                "hcr_z": float(hcr_um[j, 0]),
+                "hcr_y": float(hcr_um[j, 1]),
+                "hcr_x": float(hcr_um[j, 2]),
+                "d_xy_um": d_xy,
+                "d_z_um": d_z,
+                "d3_um": d3,
+                "hcr_quality": float(hcr_q[j]),
+                "score": float(score),
+            })
+
+    df = pd.DataFrame(rows)
+    df = df.sort_values(["cz_id", "score"], ascending=[True, False])
+    df["rank"] = df.groupby("cz_id").cumcount() + 1
+    out_csv = OUT / f"step1_{sid}{TAG}_topslab_candidates.csv"
+    df.to_csv(out_csv, index=False)
+
+    summary = {
+        "subject_id": sid,
+        "sz_pin": sz_pin,
+        "depth_band_um": list(DEPTH_BAND_UM),
+        "R_xy_um": R_XY_UM,
+        "R_z_um": R_Z_UM,
+        "n_cz_total": int(len(cz_ids)),
+        "n_cz_top_slab": n_slab,
+        "n_cz_with_candidates": int(df["cz_id"].nunique()) if len(df) else 0,
+        "n_pairs_total": int(len(df)),
+        "median_candidates_per_cz": (
+            float(df.groupby("cz_id").size().median()) if len(df) else 0.0),
+        "elapsed_s": round(time.time() - t0, 2),
+    }
+    out_json = OUT / f"step1_{sid}{TAG}_summary.json"
+    out_json.write_text(json.dumps(summary, indent=2))
+
+    print(f"  pairs: {summary['n_pairs_total']:6d}  "
+          f"CZ-w-cand: {summary['n_cz_with_candidates']:4d}/{n_slab}  "
+          f"median/CZ: {summary['median_candidates_per_cz']:.1f}  "
+          f"({summary['elapsed_s']}s)", flush=True)
+    return summary
+
+
+def main():
+    sz_pins = _load_sz_pins()
+    summaries = []
+    for sid in SUBJECTS_ALL:
+        summaries.append(_run_subject(sid, sz_pins[sid]))
+    out_summary = OUT / f"step1_all_subjects_summary{TAG}.csv"
+    pd.DataFrame(summaries).to_csv(out_summary, index=False)
+    print(f"\n→ {out_summary}", flush=True)
+
+
+if __name__ == "__main__":
+    main()

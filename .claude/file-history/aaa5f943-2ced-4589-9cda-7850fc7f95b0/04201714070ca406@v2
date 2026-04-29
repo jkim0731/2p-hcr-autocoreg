@@ -1,0 +1,84 @@
+"""Iter 4c — explore σ_z(foreground) as sz signal.
+
+Hypothesis: at the right sz, the z-std of foreground voxels in warped CZ
+matches the z-std of foreground voxels in HCR target. This is a scalar,
+should be sharp and tz-invariant (std is translation-invariant).
+"""
+import sys, time
+sys.path.insert(0, '/root/capsule/code/full_automatic_execution_02/lib')
+sys.path.insert(0, '/root/capsule/code/dev_code')
+sys.path.insert(0, '/root/capsule/code/sessions/03c_onset_features/iterations')
+
+import numpy as np
+from benchmark_data_loader import load_subject
+from sz_estimator import _warp_cz_into_hcr_crop, HCR_LEVEL, TZ_PAD_UM, SZ_HI
+from locked_prior_warm import compute_locked_prior_warm_start
+from surface_registration_v2 import get_surface_registration
+from benchmark_analysis import load_hcr_volume
+from iter08_cz_prior import load_cz_volume
+
+GT_SZ = {'755252': 2.129, '767018': 3.583, '767022': 2.490,
+         '782149': 2.926, '788406': 2.820, '790322': 3.042}
+
+SUBS = ['788406', '767022', '782149', '755252', '767018', '790322']
+SZ_GRID = np.arange(1.5, 4.01, 0.10)
+
+def sigma_z_fg(vol, percentile=90, ignore_zero=False):
+    if ignore_zero:
+        nz = vol > 0.5
+        if nz.sum() < 100:
+            return float('nan')
+        thr = float(np.percentile(vol[nz], percentile))
+    else:
+        thr = float(np.percentile(vol, percentile))
+    fg = vol > thr
+    z_idx = np.where(fg)[0]
+    if z_idx.size < 100:
+        return float('nan')
+    return float(z_idx.std())
+
+for sid in SUBS:
+    print(f'\n=== {sid}  GT={GT_SZ[sid]} ===', flush=True)
+    s = load_subject(sid)
+    t0 = time.time()
+    lp = compute_locked_prior_warm_start(s)
+    reg = get_surface_registration(s)
+    cz_vol = load_cz_volume(s).astype(np.float32, copy=False)
+    hcr_vol, hcr_xy_um, hcr_z_um = load_hcr_volume(s, channel='488', level=HCR_LEVEL)
+    hcr_vol = np.asarray(hcr_vol, dtype=np.float32)
+    cz_xy_um = float(s.cz_xy_um); cz_z_um = float(s.cz_z_um)
+    y0, y1, x0, x1 = reg['crop_bbox']
+    cz_z_extent_um = cz_vol.shape[0] * cz_z_um
+    z_lo_um = max(0.0, lp.translation[0] - TZ_PAD_UM - SZ_HI*cz_z_extent_um/2)
+    z_hi_um = min(hcr_vol.shape[0]*hcr_z_um,
+                  lp.translation[0] + TZ_PAD_UM + SZ_HI*cz_z_extent_um/2)
+    z0i, z1i = int(np.floor(z_lo_um/hcr_z_um)), int(np.ceil(z_hi_um/hcr_z_um))
+    hcr_target = hcr_vol[z0i:z1i, y0:y1, x0:x1].astype(np.float32)
+
+    # σ_z of HCR fg in HCR-vox (constant per subject)
+    sigma_hcr_z_vox = sigma_z_fg(hcr_target, 90, ignore_zero=False)
+    sigma_hcr_z_um = sigma_hcr_z_vox * hcr_z_um
+    print(f'  σ_z(HCR @ p90) = {sigma_hcr_z_vox:.2f} vox = {sigma_hcr_z_um:.1f} µm',
+          flush=True)
+
+    # Sweep σ_z(warped CZ at sz)
+    sigmas_um = []
+    for sz_t in SZ_GRID:
+        warped = _warp_cz_into_hcr_crop(
+            cz_vol, lp, float(sz_t), 0.0,
+            cz_xy_um, cz_z_um, hcr_xy_um, hcr_z_um,
+            (y0, y1, x0, x1), z_lo_um, z_hi_um,
+        )
+        s_vox = sigma_z_fg(warped, 90, ignore_zero=True)
+        sigmas_um.append(s_vox * hcr_z_um)
+    sigmas_um = np.array(sigmas_um)
+    diffs = sigmas_um - sigma_hcr_z_um
+    sz_match_i = int(np.argmin(np.abs(diffs)))
+    print(f'  σ_z(CZ@sz) - σ_z(HCR) at each sz:',
+          ' '.join(f'{d:+5.1f}' for d in diffs), flush=True)
+    print(f'  best match: sz={SZ_GRID[sz_match_i]:.2f} '
+          f'(GT={GT_SZ[sid]:.2f}, err={SZ_GRID[sz_match_i]-GT_SZ[sid]:+.3f}) '
+          f'σ_z={sigmas_um[sz_match_i]:.1f} vs HCR {sigma_hcr_z_um:.1f}',
+          flush=True)
+    print(f'  total {time.time()-t0:.0f}s', flush=True)
+print('DONE', flush=True)

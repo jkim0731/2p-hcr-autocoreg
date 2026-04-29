@@ -1,0 +1,57 @@
+"""Iter 4b — compare scoring={fg_z, spot_mask_3d, dog_3d} WITHOUT per-sz tz coupling.
+
+Wide tz search (±400 µm), no coupling. Isolates the metric question.
+"""
+import sys, time
+sys.path.insert(0, '/root/capsule/code/full_automatic_execution_02/lib')
+sys.path.insert(0, '/root/capsule/code/dev_code')
+sys.path.insert(0, '/root/capsule/code/sessions/03c_onset_features/iterations')
+
+import numpy as np
+from benchmark_data_loader import load_subject
+from sz_estimator import estimate_sz_image_ncc
+
+GT_SZ = {'755252': 2.129, '767018': 3.583, '767022': 2.490,
+         '782149': 2.926, '788406': 2.820, '790322': 3.042}
+
+SUBS = ['788406', '767022', '782149']
+SCORINGS = ['fg_z', 'spot_mask_3d', 'dog_3d']
+SZ_GRID = np.arange(1.5, 4.01, 0.10)
+
+results = {}
+for sid in SUBS:
+    print(f'\n=== {sid}  GT={GT_SZ[sid]} ===', flush=True)
+    s = load_subject(sid)
+    for scoring in SCORINGS:
+        t0 = time.time()
+        try:
+            res = estimate_sz_image_ncc(
+                s, sz_grid=SZ_GRID, scoring=scoring, couple_tz=False,
+                tz_search_half_um=400.0, verbose=False,
+            )
+        except Exception as e:
+            print(f'  {scoring:14s}: ERROR {type(e).__name__}: {e}', flush=True)
+            continue
+        elapsed = time.time() - t0
+        err = res.sz_peak - GT_SZ[sid] if res.sz_peak is not None else float('nan')
+        print(f'  {scoring:14s}: sz_peak={res.sz_peak:.2f} '
+              f'err={err:+.3f} ratio={res.peak_ratio:.2f} '
+              f'HW={res.half_width:.2f} tz={res.tz_offset_um:+.0f} '
+              f'NCC={res.ncc_peak:.3f} ({elapsed:.0f}s)', flush=True)
+        print(f'    NCC =', ' '.join(f'{v:.3f}' for v in res.ncc_grid), flush=True)
+        print(f'    tz  =', ' '.join(f'{int(round(d.get("tz_offset_um", 0))):+4d}'
+                                       for d in res.diagnostics['sweep_rows']),
+              flush=True)
+        results[(sid, scoring)] = res
+
+print('\n=== summary ===', flush=True)
+for sid in SUBS:
+    for scoring in SCORINGS:
+        r = results.get((sid, scoring))
+        if r is None: continue
+        err = r.sz_peak - GT_SZ[sid] if r.sz_peak is not None else float('nan')
+        ok = abs(err) <= 0.30
+        print(f'{sid}  {scoring:14s}: peak={r.sz_peak:.2f} err={err:+.3f} '
+              f'HW={r.half_width:.2f} ratio={r.peak_ratio:.2f} '
+              f'{"OK" if ok else "BAD"}', flush=True)
+print('DONE', flush=True)

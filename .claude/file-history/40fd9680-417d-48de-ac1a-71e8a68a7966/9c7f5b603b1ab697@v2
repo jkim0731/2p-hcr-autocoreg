@@ -1,0 +1,214 @@
+"""v2-S04 Stage D iter 7 — per-subject TPS before/after overlays.
+
+For each subject's best K=5 constellation, render a 2-panel figure:
+  LEFT:  HCR 488 z-MIP (LP+sz-pin baseline, no TPS) with CZ ROI outlines
+         (constellation = red, others = yellow)
+  RIGHT: HCR 488 z-MIP after TPS warp with same CZ ROI outlines
+The viewport is the K-anchor source-space bbox + 10 % margin per axis.
+
+Visual interpretation:
+  CZ outlines are FIXED across panels (drawn from CZ labels at the
+  LP-only source frame).  HCR 488 SHIFTS — left shows it sampled at
+  the source positions (i.e. where LP+sz-pin places the CZ); right
+  shows it sampled at TPS-corrected target positions.  If the
+  constellation is right, bright HCR 488 features (cell-bodies) should
+  fall *inside* the red constellation outlines on the right.
+"""
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, "/root/capsule/code/full_automatic_execution_02/lib")
+sys.path.insert(0, "/root/capsule/code/dev_code")
+sys.path.insert(0, "/root/capsule/data/claude_data/full_automatic_execution_01")
+sys.path.insert(0, "/root/capsule/data/claude_data/sessions/03c_onset_features/iterations")
+sys.path.insert(0, "/root/capsule/data/claude_data/sessions/08_surface_vascular_match")
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from scipy.interpolate import RBFInterpolator
+from scipy.ndimage import map_coordinates
+
+from benchmark_data_loader import load_subject
+from benchmark_analysis import load_hcr_volume
+import lib.cz_labels as cz_labels_mod
+from locked_prior_warm import compute_locked_prior_warm_start
+
+OUT = Path(__file__).resolve().parent
+SUBJECTS_ALL = ["755252", "767018", "767022", "782149", "788406", "790322"]
+TAG = os.environ.get("TAG", "_wide")
+GRID_SPACING = 4.0       # µm
+MARGIN_FRAC = 0.10       # 10 % margin per axis
+
+_orig_load_zstack = cz_labels_mod._load_zstack
+def _patched_load_zstack(s):
+    try:
+        return _orig_load_zstack(s)
+    except StopIteration:
+        import tifffile
+        zs_path = next(Path(s.coreg_dir).glob("*_zstack.tif"))
+        return tifffile.imread(zs_path).astype(np.float32)
+cz_labels_mod._load_zstack = _patched_load_zstack
+
+
+def _load_sz_pins() -> dict:
+    df = pd.read_csv(
+        "/root/capsule/code/full_automatic_execution_02/sessions/"
+        "v2_S02_sz_image_sweep/results_iter7_summary.csv"
+    )
+    col = "sz_peak" if "sz_peak" in df.columns else "sz"
+    df["subject_id"] = df["subject_id"].astype(str)
+    return {str(r["subject_id"]): float(r[col]) for _, r in df.iterrows()}
+
+
+def _inverse_lp_zyx(hcr_zyx, lp):
+    return (hcr_zyx - lp.translation) @ lp.R / lp.scales + lp.src_mean
+
+
+def _render_subject(sid, sz_pins, summary, ncc_tps_df):
+    sub = summary[summary.subject_id == sid]
+    if sub.empty:
+        return None
+    srow = sub.iloc[0]
+    cz_ids_anchor = [int(x) for x in str(srow["best_cz_ids"]).split(",")]
+    hcr_ids_anchor = [int(x) for x in str(srow["best_hcr_ids"]).split(",")]
+
+    cand = pd.read_csv(OUT / f"step1_{sid}{TAG}_topslab_candidates.csv")
+    clump_cz_xyz, clump_hcr_xyz = [], []
+    for cz, hcr in zip(cz_ids_anchor, hcr_ids_anchor):
+        r = cand[(cand["cz_id"] == cz) & (cand["hcr_id"] == hcr)].iloc[0]
+        clump_cz_xyz.append([r["cz_warp_x"], r["cz_warp_y"], r["cz_warp_z"]])
+        clump_hcr_xyz.append([r["hcr_x"], r["hcr_y"], r["hcr_z"]])
+    clump_cz_xyz = np.asarray(clump_cz_xyz, float)
+    clump_hcr_xyz = np.asarray(clump_hcr_xyz, float)
+
+    bb_extent = clump_cz_xyz.max(0) - clump_cz_xyz.min(0)
+    bb_min = clump_cz_xyz.min(0) - MARGIN_FRAC * bb_extent
+    bb_max = clump_cz_xyz.max(0) + MARGIN_FRAC * bb_extent
+
+    Nx = int(np.ceil((bb_max[0] - bb_min[0]) / GRID_SPACING)) + 1
+    Ny = int(np.ceil((bb_max[1] - bb_min[1]) / GRID_SPACING)) + 1
+    Nz = int(np.ceil((bb_max[2] - bb_min[2]) / GRID_SPACING)) + 1
+
+    kz, ky, kx = np.indices((Nz, Ny, Nx), dtype=np.float64)
+    src_x = bb_min[0] + GRID_SPACING * kx
+    src_y = bb_min[1] + GRID_SPACING * ky
+    src_z = bb_min[2] + GRID_SPACING * kz
+    src_xyz = np.stack([src_x, src_y, src_z], axis=-1).reshape(-1, 3)
+
+    s = load_subject(sid)
+    sz_pin = sz_pins[sid]
+    lp = compute_locked_prior_warm_start(s, sz_init=sz_pin)
+    tps = RBFInterpolator(clump_cz_xyz, clump_hcr_xyz, kernel="thin_plate_spline")
+
+    # CZ labels (FULL int32 volume; NEAREST-sample onto target grid)
+    cz_labels_zyx = cz_labels_mod.cz_voronoi_labels(s)
+    cz_xy_um = float(s.cz_xy_um); cz_z_um = float(s.cz_z_um)
+    cz_sampling = np.array([cz_z_um, cz_xy_um, cz_xy_um])
+
+    src_zyx = src_xyz[:, ::-1]
+    cz_um_zyx = _inverse_lp_zyx(src_zyx, lp)
+    cz_vox = (cz_um_zyx / cz_sampling).T  # (3, N)
+    cz_labels_grid = map_coordinates(
+        cz_labels_zyx.astype(np.int32), cz_vox,
+        order=0, mode="constant", cval=0,
+    ).reshape(Nz, Ny, Nx)
+
+    # HCR 488 — left (no TPS) and right (TPS)
+    hcr_vol, hcr_xy_um, hcr_z_um = load_hcr_volume(s, channel="488", level=4)
+
+    def _sample_hcr(target_xyz):
+        z = target_xyz[:, 2] / hcr_z_um
+        y = target_xyz[:, 1] / hcr_xy_um
+        x = target_xyz[:, 0] / hcr_xy_um
+        coords = np.stack([z, y, x], axis=0)
+        return map_coordinates(hcr_vol.astype(np.float32), coords,
+                               order=1, mode="constant", cval=0.0).reshape(Nz, Ny, Nx)
+
+    hcr_left = _sample_hcr(src_xyz)
+    hcr_right = _sample_hcr(tps(src_xyz))
+
+    # z-MIPs (axis=0)
+    cz_mip = cz_labels_grid.max(axis=0)         # int label MIP (any-axis-z occupancy)
+    hcr_left_mip = hcr_left.max(axis=0)
+    hcr_right_mip = hcr_right.max(axis=0)
+    # We'll re-derive per-cell occupancy MIPs for outline drawing (label MIP collapses
+    # overlapping cells into the larger id).
+
+    anchor_set = set(cz_ids_anchor)
+    unique_ids = np.unique(cz_labels_grid)
+    unique_ids = [int(c) for c in unique_ids if c > 0]
+
+    # Pre-compute per-cell occupancy MIPs (binary) for outline contours
+    per_cell_mips = {}
+    for cid in unique_ids:
+        m = (cz_labels_grid == cid).max(axis=0)
+        if m.sum() > 0:
+            per_cell_mips[cid] = m
+
+    # Compute view extent in HCR µm (xy)
+    extent = (bb_min[0], bb_max[0], bb_min[1], bb_max[1])
+    ncc_row = ncc_tps_df[ncc_tps_df.subject_id == sid].iloc[0]
+    delta_tps = float(ncc_row["delta_tps"])
+    ncc_base = float(ncc_row["ncc_baseline_LP"])
+    ncc_tps = float(ncc_row["ncc_tps"])
+
+    fig, axes = plt.subplots(1, 2, figsize=(11, 5.5))
+    for ax, hcr_mip, label in (
+        (axes[0], hcr_left_mip, "before TPS (LP+sz-pin only)"),
+        (axes[1], hcr_right_mip, "after TPS"),
+    ):
+        # HCR 488 grayscale, percentile-clipped for contrast
+        lo, hi = np.percentile(hcr_mip, [1, 99])
+        ax.imshow(hcr_mip, cmap="gray", origin="lower",
+                  extent=extent, vmin=lo, vmax=hi, aspect="equal")
+        # CZ ROI outlines: red for constellation, yellow for others.
+        # Draw non-constellation first so red sits on top.
+        for cid, m in per_cell_mips.items():
+            if cid in anchor_set:
+                continue
+            ax.contour(
+                m.astype(float), levels=[0.5], colors="yellow",
+                linewidths=0.6, alpha=0.85,
+                extent=extent, origin="lower",
+            )
+        for cid in cz_ids_anchor:
+            if cid in per_cell_mips:
+                ax.contour(
+                    per_cell_mips[cid].astype(float), levels=[0.5],
+                    colors="red", linewidths=1.2,
+                    extent=extent, origin="lower",
+                )
+        ax.set_xlabel("x (µm)"); ax.set_ylabel("y (µm)")
+        ax.set_title(label)
+
+    fig.suptitle(
+        f"{sid}  K=5 clumped constellation cz={cz_ids_anchor}\n"
+        f"NCC base={ncc_base:+.3f}  →  NCC TPS={ncc_tps:+.3f}  "
+        f"(Δ={delta_tps:+.3f})",
+        fontsize=11,
+    )
+    plt.tight_layout(rect=(0, 0, 1, 0.94))
+    out_path = OUT / f"fig_s04_overlay_{sid}.png"
+    plt.savefig(out_path, dpi=140)
+    plt.close(fig)
+    print(f"{sid}: saved {out_path.name}  cells_in_view={len(per_cell_mips)}  "
+          f"anchors_in_view={sum(c in per_cell_mips for c in cz_ids_anchor)}/5")
+    return out_path
+
+
+def main():
+    summary = pd.read_csv(OUT / f"step2c_all_subjects_summary{TAG}.csv")
+    summary["subject_id"] = summary["subject_id"].astype(str)
+    sz_pins = _load_sz_pins()
+    ncc_tps_df = pd.read_csv(OUT / "step2c_image_ncc_tps_validation.csv")
+    ncc_tps_df["subject_id"] = ncc_tps_df["subject_id"].astype(str)
+    for sid in SUBJECTS_ALL:
+        _render_subject(sid, sz_pins, summary, ncc_tps_df)
+
+
+if __name__ == "__main__":
+    main()

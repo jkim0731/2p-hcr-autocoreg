@@ -1,0 +1,232 @@
+"""v2-S03 sub-stage (e) — M3-ICP-locked: locked-scale rigid ICP on top
+of the sz-pinned LP warm-start.
+
+Design (distinct from C5/P1/P4/P6):
+  - Stage A (LP + sz-pin) fixes all 7 DOF of the affine.  v2-S02 iter-7
+    proves the sz pin matches GT to ±0.04 µm.  P1/P4/P6 each *re-fit*
+    the full affine and may drift away from this prior.
+  - Here: keep S, R^180 anchors fixed; iterate ONLY residual rigid
+    (R_resid, t_resid) ∈ SE(3) on cz_init → hcr_gfp via robust NN
+    matching.  Stops when |Δt| < 0.5 µm and |Δθ| < 0.2°, max 10 iters.
+  - Output cell-cell pairs by NN in the final warped frame (1-NN per CZ;
+    drop pairs with d > match_radius_um; rank by 1/(1 + d/σ_med)).
+
+Goal: per-cell matching that respects the sz-pinned prior, as a
+candidate that may beat C5 on subjects where C5's free-sz ensemble
+drifts.
+
+Outputs:
+  bench_e_m3_icp_szpinned_results.csv
+  bench_e_m3_icp_szpinned.log
+"""
+from __future__ import annotations
+
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, "/root/capsule/code/full_automatic_execution_02/lib")
+sys.path.insert(0, "/root/capsule/data/claude_data/full_automatic_execution_01")
+sys.path.insert(0, "/root/capsule/code/dev_code")
+sys.path.insert(0, "/root/capsule/data/claude_data/sessions/03c_onset_features/iterations")
+
+import numpy as np
+import pandas as pd
+from scipy.spatial import cKDTree
+
+import bench_harness_patch  # noqa: E402
+bench_harness_patch.patch()
+
+from benchmark_data_loader import BENCHMARK_SUBJECTS, load_subject  # noqa: E402
+from bench_a_szpinned import _load_sz_pins  # noqa: E402
+from locked_prior_warm import (  # noqa: E402
+    apply_to_cz_um,
+    compute_locked_prior_warm_start,
+)
+
+OUT = Path("/root/capsule/code/full_automatic_execution_02/sessions/v2_S03_revival_pass")
+
+
+def _rigid_fit_zyx(src: np.ndarray, dst: np.ndarray
+                   ) -> tuple[np.ndarray, np.ndarray]:
+    """Procrustes rigid (R, t) on (N, 3) point pairs in (z, y, x) µm.
+
+    No scale.  Returns (R_3x3, t_3) such that  dst ≈ src @ R.T + t.
+    """
+    src_mu = src.mean(0)
+    dst_mu = dst.mean(0)
+    H = (src - src_mu).T @ (dst - dst_mu)
+    U, _, Vt = np.linalg.svd(H)
+    d = np.sign(np.linalg.det(Vt.T @ U.T))
+    D = np.diag([1.0, 1.0, d])
+    R = Vt.T @ D @ U.T
+    t = dst_mu - src_mu @ R.T
+    return R, t
+
+
+def _rotation_angle_deg(R: np.ndarray) -> float:
+    cos_th = (np.trace(R) - 1.0) / 2.0
+    cos_th = float(np.clip(cos_th, -1.0, 1.0))
+    return float(np.degrees(np.arccos(cos_th)))
+
+
+def m3_icp_pairs(
+    s,
+    sz_pin: float,
+    *,
+    max_iters: int = 10,
+    inlier_mad_k: float = 3.0,
+    match_radius_um: float = 30.0,
+    delta_t_um_tol: float = 0.5,
+    delta_theta_deg_tol: float = 0.2,
+    verbose: bool = False,
+) -> tuple[pd.DataFrame, dict]:
+    """Locked-scale rigid ICP from LP+sz-pin warmstart.
+
+    Returns (pairs_df, diagnostics).  pairs_df columns match v1 harness:
+    cz_id, hcr_id, confidence, cz_*_um, hcr_*_um.
+    """
+    import lib.centroid_helpers as ch
+
+    lp = compute_locked_prior_warm_start(s, sz_init=sz_pin)
+    cz_um, cz_ids = ch.centroids_um(s, "cz")
+    hcr_um, hcr_ids = ch.centroids_um(s, "hcr_gfp")
+
+    cz_warped = apply_to_cz_um(lp, cz_um).astype(np.float64)
+    cz_orig = cz_warped.copy()
+    R_resid = np.eye(3)
+    t_resid = np.zeros(3)
+    tree = cKDTree(hcr_um)
+
+    converged = False
+    history = []
+    for it in range(max_iters):
+        d_nn, idx_nn = tree.query(cz_warped, k=1)
+        med = float(np.median(d_nn))
+        mad = float(np.median(np.abs(d_nn - med))) + 1e-9
+        thr = med + inlier_mad_k * mad
+        inliers = d_nn <= thr
+        n_in = int(inliers.sum())
+        if n_in < 10:
+            history.append(dict(iter=it, n_inliers=n_in,
+                                  d_med=med, status="too_few_inliers"))
+            break
+        # Fit rigid src=cz_warped[in] → dst=hcr_um[idx_nn[in]]
+        R_step, t_step = _rigid_fit_zyx(
+            cz_warped[inliers], hcr_um[idx_nn[inliers]]
+        )
+        cz_warped = cz_warped @ R_step.T + t_step
+        # Compose into cumulative residual transform:
+        # cz_warped(new) = (R_step @ cz_warped(old)) + t_step
+        # cz_warped(old) = cz_orig @ R_resid_old.T + t_resid_old
+        # so cumulative: R_resid_new = R_step @ R_resid_old
+        #                t_resid_new = R_step @ t_resid_old + t_step
+        R_resid = R_step @ R_resid
+        t_resid = R_step @ t_resid + t_step
+        delta_t = float(np.linalg.norm(t_step))
+        delta_th = _rotation_angle_deg(R_step)
+        history.append(dict(iter=it, n_inliers=n_in,
+                            d_med=med, d_thr=thr,
+                            delta_t_um=delta_t, delta_theta_deg=delta_th))
+        if verbose:
+            print(f"  iter{it}: n_in={n_in}/{len(d_nn)} "
+                  f"d_med={med:.1f} d_thr={thr:.1f} "
+                  f"Δt={delta_t:.2f}µm Δθ={delta_th:.3f}°", flush=True)
+        if delta_t < delta_t_um_tol and delta_th < delta_theta_deg_tol:
+            converged = True
+            break
+
+    # Final NN pairs
+    d_nn, idx_nn = tree.query(cz_warped, k=1)
+    sigma_med = float(np.median(d_nn)) + 1e-6
+    keep = d_nn <= match_radius_um
+    rows = []
+    for i in np.flatnonzero(keep):
+        d = float(d_nn[i])
+        j = int(idx_nn[i])
+        rows.append(dict(
+            cz_id=int(cz_ids[i]),
+            hcr_id=int(hcr_ids[j]),
+            confidence=float(1.0 / (1.0 + d / sigma_med)),
+            cz_x_um=float(cz_um[i, 2]),
+            cz_y_um=float(cz_um[i, 1]),
+            cz_z_um=float(cz_um[i, 0]),
+            hcr_x_um=float(hcr_um[j, 2]),
+            hcr_y_um=float(hcr_um[j, 1]),
+            hcr_z_um=float(hcr_um[j, 0]),
+        ))
+    pairs_df = pd.DataFrame(rows)
+    if len(pairs_df):
+        # Best-conf-per-hcr to deduplicate
+        pairs_df = (pairs_df.sort_values("confidence", ascending=False)
+                              .drop_duplicates("hcr_id", keep="first")
+                              .sort_values("cz_id")
+                              .reset_index(drop=True))
+
+    diag = dict(
+        n_iters=len(history),
+        converged=converged,
+        history=history,
+        sigma_med_final=sigma_med,
+        match_radius_um=match_radius_um,
+        sz_pin=sz_pin,
+        sxy_lp=float(lp.sxy_value),
+        residual_R=R_resid.tolist(),
+        residual_t_um=t_resid.tolist(),
+    )
+    return pairs_df, diag
+
+
+def main():
+    from bench.harness import compare_to_gt  # uses patched r@30
+
+    sz_pins = _load_sz_pins()
+    print(f"sz pins (iter-7): {sz_pins}", flush=True)
+
+    rows = []
+    for sid in BENCHMARK_SUBJECTS:
+        sz_pin = sz_pins[sid]
+        print(f"\n=== {sid}  sz_pin={sz_pin:.3f} ===", flush=True)
+        s = load_subject(sid)
+        t0 = time.time()
+        pairs_df, diag = m3_icp_pairs(s, sz_pin, verbose=True)
+        scores = compare_to_gt(pairs_df, s)
+        dt = time.time() - t0
+        row = dict(
+            subject_id=sid,
+            method="M3_ICP_locked",
+            n_pred=int(len(pairs_df)),
+            recall_at_5um=float(scores.get("recall_at_5um", 0)),
+            recall_at_10um=float(scores.get("recall_at_10um", 0)),
+            recall_at_20um=float(scores.get("recall_at_20um", 0)),
+            recall_at_30um=float(scores.get("recall_at_30um", 0)),
+            median_error_um=float(scores.get("median_error_um", float("nan"))),
+            sz_pin=sz_pin,
+            n_iters=diag["n_iters"],
+            converged=diag["converged"],
+            runtime_s=round(dt, 1),
+        )
+        rows.append(row)
+        print(
+            f"  M3-ICP: r@10={row['recall_at_10um']:.3f} "
+            f"r@20={row['recall_at_20um']:.3f} "
+            f"r@30={row['recall_at_30um']:.3f} "
+            f"n={row['n_pred']:4d} "
+            f"med={row['median_error_um']:.1f}µm "
+            f"iters={diag['n_iters']} conv={diag['converged']} "
+            f"({dt:.0f}s)",
+            flush=True,
+        )
+
+    df = pd.DataFrame(rows)
+    df.to_csv(OUT / "bench_e_m3_icp_szpinned_results.csv", index=False)
+    print("\n=== summary (r@20) ===")
+    print(df[["subject_id", "n_pred", "recall_at_20um",
+              "recall_at_30um", "median_error_um", "n_iters", "converged"]]
+          .to_string(index=False))
+    print(f"\nsum r@20: {df['recall_at_20um'].sum():.3f}")
+    print(f"sum r@30: {df['recall_at_30um'].sum():.3f}")
+
+
+if __name__ == "__main__":
+    main()

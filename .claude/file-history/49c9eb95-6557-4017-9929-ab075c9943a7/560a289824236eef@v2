@@ -1,0 +1,316 @@
+"""v2-S05 Stage E.TPS — expand each subject's K=4 seed constellation
+into a per-cell mapping and score against the bench.
+
+Design
+------
+Stage D (v2-S04) produced a best K=4 (CZ, HCR) anchor constellation per
+subject (best aniso-similarity RMSE).  Here we use those four anchors
+to define the global transform — replacing the LP+sz-pin warmstart that
+v2-S03 used — and fall back on standard NN matching for the cell pairs.
+
+Variants:
+- ``E_TPS_aniso``     — fit aniso-similarity (R, scales, t) on K=4
+                         anchors, apply to all CZ → NN-match HCR GFP+.
+- ``E_TPS_aniso_icp`` — same warmstart, then run M3-style locked-scale
+                         rigid ICP (residual SE(3)) on top.
+
+K=4 in 3D constrains a 9-DOF aniso fit with 3 residual DOF; the v2-S04
+RMSE on these anchors (≤ 1.7 µm except 767018 ≈ 1.7) confirms the
+transform is well-specified.  We do NOT use thin-plate-spline because
+K=4 is right at the degeneracy boundary for 3D TPS — keeping the
+anchored model affine is more honest.
+
+Inputs
+------
+- ``v2_S04_seed_constellation/step2_all_subjects_summary_wide.csv``
+- ``v2_S04_seed_constellation/step1_{sid}_wide_topslab_candidates.csv``
+  (used to look up CZ warped positions; the HCR µm comes from
+  ``s.hcr_centroids`` via ``centroid_helpers``).
+
+Outputs
+-------
+- ``bench_e_tps_results.csv``
+- ``bench_e_tps.log``
+"""
+from __future__ import annotations
+
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, "/root/capsule/code/full_automatic_execution_02/lib")
+sys.path.insert(0, "/root/capsule/data/claude_data/full_automatic_execution_01")
+sys.path.insert(0, "/root/capsule/code/dev_code")
+sys.path.insert(0, "/root/capsule/data/claude_data/sessions/03c_onset_features/iterations")
+
+import numpy as np
+import pandas as pd
+from scipy.spatial import cKDTree
+
+import bench_harness_patch  # noqa: E402
+bench_harness_patch.patch()
+
+from benchmark_data_loader import BENCHMARK_SUBJECTS, load_subject  # noqa: E402
+from benchmark_analysis import fit_anisotropic_similarity  # noqa: E402
+
+OUT = Path(__file__).resolve().parent
+S04 = OUT.parent / "v2_S04_seed_constellation"
+SUMMARY_CSV = S04 / "step2_all_subjects_summary_wide.csv"
+
+MATCH_RADIUS_UM = 30.0
+
+
+def _aniso_apply(src_zyx: np.ndarray, fit) -> np.ndarray:
+    """Apply ProcrustesFit using same convention as fit.rms_um.
+
+    Reproduces the prediction formula from ``fit_anisotropic_similarity``
+    (line 128 of benchmark_analysis.py), bypassing the buggy
+    ``fit.translation`` field.
+
+    pred = (src - src_mean) @ R * scales + dst_mean
+    """
+    src = np.asarray(src_zyx, float)
+    R = np.asarray(fit.R, float)
+    scales = np.asarray(fit.scales, float)
+    src_mean = np.asarray(fit.src_mean, float)
+    # dst_mean recovered from (translation_field) using the bug formula:
+    # fit.translation = dst_mean - R @ (src_mean * scales)
+    # which means dst_mean = fit.translation + R @ (src_mean * scales).
+    # However the row-vector formula at line 128 actually uses
+    # pred = (src-src_mean) @ R * scales + dst_mean; we get dst_mean by
+    # reapplying that to the anchors and matching.
+    # Simpler: use fit.dst_mean if exposed, else compute from anchors below.
+    dst_mean = getattr(fit, "dst_mean", None)
+    if dst_mean is None:
+        # Fallback: solve from any single anchor; require fit holds anchors
+        raise AttributeError("ProcrustesFit must expose dst_mean for E.TPS")
+    src_c = src - src_mean
+    return src_c @ R * scales + np.asarray(dst_mean, float)
+
+
+def _aniso_apply_explicit(src_zyx: np.ndarray, *, R, scales,
+                           src_mean, dst_mean) -> np.ndarray:
+    src = np.asarray(src_zyx, float)
+    src_c = src - src_mean
+    return src_c @ R * scales + dst_mean
+
+
+def _fit_aniso_with_means(seed_cz_zyx, seed_hcr_zyx):
+    """Re-derive R, scales, src_mean, dst_mean directly to match line 128."""
+    seed_cz = np.asarray(seed_cz_zyx, float)
+    seed_hcr = np.asarray(seed_hcr_zyx, float)
+    src_mean = seed_cz.mean(0)
+    dst_mean = seed_hcr.mean(0)
+    src_c = seed_cz - src_mean
+    dst_c = seed_hcr - dst_mean
+    H = src_c.T @ dst_c
+    U, _, Vt = np.linalg.svd(H)
+    D = np.eye(3)
+    if np.linalg.det(U) * np.linalg.det(Vt) < 0:
+        D[2, 2] = -1
+    R = U @ D @ Vt
+    src_rot = src_c @ R
+    num = (src_rot * dst_c).sum(0)
+    den = (src_rot ** 2).sum(0)
+    scales = num / np.where(den > 0, den, 1.0)
+    pred = src_rot * scales + dst_mean
+    rms = float(np.sqrt(((pred - seed_hcr) ** 2).sum() / len(seed_hcr)))
+    return dict(R=R, scales=scales, src_mean=src_mean,
+                 dst_mean=dst_mean, rms_um=rms)
+
+
+def _rigid_fit_zyx(src, dst):
+    src_mu = src.mean(0); dst_mu = dst.mean(0)
+    H = (src - src_mu).T @ (dst - dst_mu)
+    U, _, Vt = np.linalg.svd(H)
+    d = np.sign(np.linalg.det(Vt.T @ U.T))
+    D = np.diag([1.0, 1.0, d])
+    R = Vt.T @ D @ U.T
+    t = dst_mu - src_mu @ R.T
+    return R, t
+
+
+def _rotation_angle_deg(R):
+    cos_th = (np.trace(R) - 1.0) / 2.0
+    cos_th = float(np.clip(cos_th, -1.0, 1.0))
+    return float(np.degrees(np.arccos(cos_th)))
+
+
+def _build_pairs(cz_warped, cz_ids, hcr_um, hcr_ids,
+                 cz_um_orig, *, match_radius_um=MATCH_RADIUS_UM):
+    tree = cKDTree(hcr_um)
+    d_nn, idx_nn = tree.query(cz_warped, k=1)
+    sigma_med = float(np.median(d_nn)) + 1e-6
+    keep = d_nn <= match_radius_um
+    rows = []
+    for i in np.flatnonzero(keep):
+        d = float(d_nn[i]); j = int(idx_nn[i])
+        rows.append(dict(
+            cz_id=int(cz_ids[i]), hcr_id=int(hcr_ids[j]),
+            confidence=float(1.0 / (1.0 + d / sigma_med)),
+            cz_x_um=float(cz_um_orig[i, 2]),
+            cz_y_um=float(cz_um_orig[i, 1]),
+            cz_z_um=float(cz_um_orig[i, 0]),
+            hcr_x_um=float(hcr_um[j, 2]),
+            hcr_y_um=float(hcr_um[j, 1]),
+            hcr_z_um=float(hcr_um[j, 0]),
+        ))
+    df = pd.DataFrame(rows)
+    if len(df):
+        df = (df.sort_values("confidence", ascending=False)
+                .drop_duplicates("hcr_id", keep="first")
+                .sort_values("cz_id").reset_index(drop=True))
+    return df
+
+
+def _icp_loop(cz_warped, hcr_um, *, max_iters=10,
+              inlier_mad_k=3.0, delta_t_um_tol=0.5,
+              delta_theta_deg_tol=0.2, verbose=False):
+    cz_warped = cz_warped.astype(float).copy()
+    R_resid = np.eye(3); t_resid = np.zeros(3)
+    tree = cKDTree(hcr_um)
+    history = []
+    converged = False
+    for it in range(max_iters):
+        d_nn, idx_nn = tree.query(cz_warped, k=1)
+        med = float(np.median(d_nn))
+        mad = float(np.median(np.abs(d_nn - med))) + 1e-9
+        thr = med + inlier_mad_k * mad
+        inliers = d_nn <= thr
+        n_in = int(inliers.sum())
+        if n_in < 10:
+            history.append(dict(iter=it, n_inliers=n_in, status="too_few"))
+            break
+        R_step, t_step = _rigid_fit_zyx(
+            cz_warped[inliers], hcr_um[idx_nn[inliers]]
+        )
+        cz_warped = cz_warped @ R_step.T + t_step
+        R_resid = R_step @ R_resid
+        t_resid = R_step @ t_resid + t_step
+        delta_t = float(np.linalg.norm(t_step))
+        delta_th = _rotation_angle_deg(R_step)
+        history.append(dict(iter=it, n_inliers=n_in, d_med=med,
+                            delta_t_um=delta_t, delta_theta_deg=delta_th))
+        if verbose:
+            print(f"    icp{it}: n_in={n_in}/{len(d_nn)} "
+                  f"d_med={med:.1f} Δt={delta_t:.2f}µm "
+                  f"Δθ={delta_th:.3f}°", flush=True)
+        if delta_t < delta_t_um_tol and delta_th < delta_theta_deg_tol:
+            converged = True
+            break
+    return cz_warped, dict(R_resid=R_resid, t_resid=t_resid,
+                            history=history, converged=converged,
+                            n_iters=len(history))
+
+
+def _load_anchors(sid: str, summary_row: pd.Series, s):
+    """Recover (cz_zyx, hcr_zyx) µm for the K anchors of `sid`."""
+    import lib.centroid_helpers as ch
+
+    cz_ids_anchor = [int(x) for x in str(summary_row["best_cz_ids"]).split(",")]
+    hcr_ids_anchor = [int(x) for x in str(summary_row["best_hcr_ids"]).split(",")]
+
+    cz_um_all, cz_ids_all = ch.centroids_um(s, "cz")
+    hcr_um_all, hcr_ids_all = ch.centroids_um(s, "hcr_gfp")
+    cz_id2idx = {int(c): i for i, c in enumerate(cz_ids_all)}
+    hcr_id2idx = {int(h): i for i, h in enumerate(hcr_ids_all)}
+
+    cz_zyx = np.array([cz_um_all[cz_id2idx[c]] for c in cz_ids_anchor], float)
+    hcr_zyx = np.array([hcr_um_all[hcr_id2idx[h]] for h in hcr_ids_anchor], float)
+    return cz_zyx, hcr_zyx, cz_ids_anchor, hcr_ids_anchor
+
+
+def main():
+    from bench.harness import compare_to_gt
+    import lib.centroid_helpers as ch
+
+    summary = pd.read_csv(SUMMARY_CSV)
+    summary["subject_id"] = summary["subject_id"].astype(int).astype(str)
+
+    rows = []
+    for sid in BENCHMARK_SUBJECTS:
+        sub = summary[summary["subject_id"] == sid]
+        if sub.empty:
+            print(f"!! {sid}: no row in summary, skipping", flush=True)
+            continue
+        srow = sub.iloc[0]
+        print(f"\n=== {sid}  K=4 anchors (rmse_anchor={srow['best_rmse_um']:.2f}µm) ===",
+              flush=True)
+        s = load_subject(sid)
+
+        seed_cz_zyx, seed_hcr_zyx, cz_ids_a, hcr_ids_a = _load_anchors(sid, srow, s)
+        fit = _fit_aniso_with_means(seed_cz_zyx, seed_hcr_zyx)
+        print(f"  anchor fit  rms={fit['rms_um']:.2f}µm  "
+              f"sxy=({fit['scales'][1]:.3f},{fit['scales'][2]:.3f}) "
+              f"sz={fit['scales'][0]:.3f}", flush=True)
+
+        cz_um_all, cz_ids_all = ch.centroids_um(s, "cz")
+        hcr_um_all, hcr_ids_all = ch.centroids_um(s, "hcr_gfp")
+        cz_warp = _aniso_apply_explicit(cz_um_all, **{
+            k: fit[k] for k in ["R", "scales", "src_mean", "dst_mean"]})
+
+        # Variant A: aniso only
+        t0 = time.time()
+        pairs_a = _build_pairs(cz_warp, cz_ids_all, hcr_um_all, hcr_ids_all,
+                                cz_um_all)
+        scores_a = compare_to_gt(pairs_a, s)
+        dt_a = time.time() - t0
+
+        # Variant B: aniso + ICP
+        t1 = time.time()
+        cz_warp_icp, diag_icp = _icp_loop(cz_warp, hcr_um_all, verbose=True)
+        pairs_b = _build_pairs(cz_warp_icp, cz_ids_all, hcr_um_all, hcr_ids_all,
+                                cz_um_all)
+        scores_b = compare_to_gt(pairs_b, s)
+        dt_b = time.time() - t1
+
+        for variant, pairs, scores, dt, extra in [
+            ("E_TPS_aniso", pairs_a, scores_a, dt_a, {}),
+            ("E_TPS_aniso_icp", pairs_b, scores_b, dt_b,
+             dict(icp_n_iters=diag_icp["n_iters"],
+                  icp_converged=diag_icp["converged"])),
+        ]:
+            row = dict(
+                subject_id=sid,
+                method=variant,
+                anchor_rmse_um=float(srow["best_rmse_um"]),
+                anchor_cz_ids=",".join(str(x) for x in cz_ids_a),
+                anchor_hcr_ids=",".join(str(x) for x in hcr_ids_a),
+                n_pred=int(len(pairs)),
+                recall_at_5um=float(scores.get("recall_at_5um", 0)),
+                recall_at_10um=float(scores.get("recall_at_10um", 0)),
+                recall_at_20um=float(scores.get("recall_at_20um", 0)),
+                recall_at_30um=float(scores.get("recall_at_30um", 0)),
+                median_error_um=float(scores.get("median_error_um", float("nan"))),
+                runtime_s=round(dt, 2),
+                **extra,
+            )
+            rows.append(row)
+            print(f"  {variant}: r@10={row['recall_at_10um']:.3f} "
+                  f"r@20={row['recall_at_20um']:.3f} "
+                  f"r@30={row['recall_at_30um']:.3f} "
+                  f"n={row['n_pred']:4d} med={row['median_error_um']:.1f}µm "
+                  f"({dt:.1f}s)", flush=True)
+
+    df = pd.DataFrame(rows)
+    df.to_csv(OUT / "bench_e_tps_results.csv", index=False)
+    print("\n=== Summary (E_TPS_aniso) ===")
+    a = df[df["method"] == "E_TPS_aniso"][
+        ["subject_id", "n_pred", "recall_at_20um", "recall_at_30um",
+         "median_error_um", "anchor_rmse_um"]]
+    print(a.to_string(index=False))
+    print(f"\nE_TPS_aniso       sum r@20={a['recall_at_20um'].sum():.3f} "
+          f"sum r@30={a['recall_at_30um'].sum():.3f}")
+
+    print("\n=== Summary (E_TPS_aniso_icp) ===")
+    b = df[df["method"] == "E_TPS_aniso_icp"][
+        ["subject_id", "n_pred", "recall_at_20um", "recall_at_30um",
+         "median_error_um", "anchor_rmse_um", "icp_n_iters",
+         "icp_converged"]]
+    print(b.to_string(index=False))
+    print(f"\nE_TPS_aniso_icp   sum r@20={b['recall_at_20um'].sum():.3f} "
+          f"sum r@30={b['recall_at_30um'].sum():.3f}")
+
+
+if __name__ == "__main__":
+    main()

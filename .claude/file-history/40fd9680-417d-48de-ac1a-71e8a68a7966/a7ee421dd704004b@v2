@@ -1,0 +1,252 @@
+"""v2-S04 Stage D iter 4 — fast K=4 constellation enumeration.
+
+For each subject, enumerate K=4 quadruples over the top-N most-confident
+top-slab CZ cells (by sum of candidate score from step 1), gate by
+pairwise-spread + hull-area, take the rank-1 HCR per CZ, and score each
+quadruple by the residual of an aniso-similarity (R, t, scales) fit to
+the 4 (CZ, HCR) pairs.
+
+This is a "consistency" filter: low residual = the four (CZ, HCR) pairs
+all agree on the same global affine transform.  High residual = at
+least one pair is inconsistent (the rank-1 HCR is wrong for at least
+one CZ in the constellation).
+
+We use `fit_anisotropic_similarity` (which is the GT scoring function)
+to keep the metric comparable to v2 bench scoring.
+
+Outputs
+-------
+- `step2_{sid}{TAG}_constellation.csv` — top-N quadruples by RMSE.
+- `step2_all_subjects_summary{TAG}.csv` — best per subject.
+"""
+from __future__ import annotations
+
+import os
+import sys
+import time
+from itertools import combinations
+from pathlib import Path
+
+sys.path.insert(0, "/root/capsule/code/full_automatic_execution_02/lib")
+sys.path.insert(0, "/root/capsule/data/claude_data/full_automatic_execution_01")
+sys.path.insert(0, "/root/capsule/code/dev_code")
+sys.path.insert(0, "/root/capsule/data/claude_data/sessions/03c_onset_features/iterations")
+sys.path.insert(0, "/root/capsule/data/claude_data/sessions/08_surface_vascular_match")
+
+import numpy as np
+import pandas as pd
+from scipy.spatial import ConvexHull, QhullError
+
+from benchmark_analysis import fit_anisotropic_similarity  # noqa: F401  (kept for reference)
+
+
+def _batched_aniso_rmse(srcs: np.ndarray, dsts: np.ndarray) -> np.ndarray:
+    """Vectorised aniso-similarity RMSE for B quadruples.
+
+    srcs, dsts: (B, K, 3).  Returns rms (B,) using the same prediction
+    formula as `fit_anisotropic_similarity`:
+        pred = (src - src_mean) @ R * scales + dst_mean.
+    """
+    B, K, _ = srcs.shape
+    src_means = srcs.mean(axis=1, keepdims=True)
+    dst_means = dsts.mean(axis=1, keepdims=True)
+    src_c = srcs - src_means
+    dst_c = dsts - dst_means
+    H = np.einsum("bki,bkj->bij", src_c, dst_c)
+    U, _, Vt = np.linalg.svd(H)
+    detU = np.linalg.det(U)
+    detVt = np.linalg.det(Vt)
+    D = np.broadcast_to(np.eye(3), (B, 3, 3)).copy()
+    D[detU * detVt < 0, 2, 2] = -1
+    R = U @ D @ Vt
+    src_rot = np.einsum("bki,bij->bkj", src_c, R)
+    num = (src_rot * dst_c).sum(axis=1)
+    den = (src_rot ** 2).sum(axis=1)
+    scales = num / np.where(den > 0, den, 1.0)
+    pred = src_rot * scales[:, None, :] + dst_means
+    res = pred - dsts
+    return np.sqrt((res ** 2).sum(axis=(1, 2)) / K)
+
+OUT = Path(__file__).resolve().parent
+SUBJECTS_ALL = ["755252", "767018", "767022", "782149", "788406", "790322"]
+TAG = os.environ.get("TAG", "_wide")
+TOP_K_HCR = int(os.environ.get("TOP_K_HCR", "1"))  # how many HCR per CZ to consider
+
+K_CONSTELLATION = 4
+TOP_N_CZ = int(os.environ.get("TOP_N_CZ", "50"))
+PAIRWISE_FRAC = 0.4
+HULL_FRAC = 0.20
+
+
+def _residual(seed_cz_xyz: np.ndarray, seed_hcr_xyz: np.ndarray) -> float:
+    """RMSE of aniso-similarity fit on K=4 (CZ, HCR) pairs.
+
+    `fit.rms_um` is computed by `fit_anisotropic_similarity` using the
+    correct prediction `pred = (src - src_mean) @ R * scales + dst_mean`
+    — we use it directly to avoid the `fit.translation` field's column-
+    vs-row convention bug (the field's value doesn't match the actual
+    prediction formula for non-symmetric R).
+    """
+    fit = fit_anisotropic_similarity(seed_cz_xyz, seed_hcr_xyz)
+    return float(fit.rms_um)
+
+
+def _process_subject(sid: str) -> dict:
+    t0 = time.time()
+    cand_csv = OUT / f"step1_{sid}{TAG}_topslab_candidates.csv"
+    if not cand_csv.exists():
+        return {"subject_id": sid, "error": f"missing {cand_csv.name}"}
+    cand = pd.read_csv(cand_csv)
+    print(f"=== {sid}  cand_pairs={len(cand)} ===", flush=True)
+
+    cz_score = cand.groupby("cz_id")["score"].sum().sort_values(ascending=False)
+    top_cz_ids = cz_score.index[:TOP_N_CZ].tolist()
+
+    # CZ warped positions (from step 1) — one per CZ.
+    cz_pos = (cand[cand["cz_id"].isin(top_cz_ids)]
+              .drop_duplicates("cz_id")
+              [["cz_id", "cz_warp_z", "cz_warp_y", "cz_warp_x"]]
+              .set_index("cz_id")
+              .loc[top_cz_ids])  # preserve top-N order
+    cz_xyz = cz_pos[["cz_warp_x", "cz_warp_y", "cz_warp_z"]].values  # (N,3)
+    cz_xy = cz_xyz[:, :2]
+
+    # Per-CZ ranked HCR candidate list (rank → row).
+    by_cz = {cid: g.sort_values("rank") for cid, g in cand.groupby("cz_id")}
+
+    cz_bbox_half = 0.5 * (cz_xy.max(axis=0) - cz_xy.min(axis=0))
+    pair_thresh = float(PAIRWISE_FRAC * np.linalg.norm(cz_bbox_half))
+    half_area = float(cz_bbox_half[0] * cz_bbox_half[1])
+    area_thresh = float(HULL_FRAC * half_area)
+    print(f"  top-{TOP_N_CZ} CZ; pair_thresh={pair_thresh:.1f} µm; "
+          f"area_thresh={area_thresh:.0f} µm²; TOP_K_HCR={TOP_K_HCR}",
+          flush=True)
+
+    # Pre-collect per-CZ top-K_HCR candidate arrays (xyz, hcr_id, rank).
+    cz_topk = {}
+    for cid in top_cz_ids:
+        sub = by_cz.get(cid)
+        if sub is None or len(sub) == 0:
+            cz_topk[cid] = None
+            continue
+        head = sub.head(TOP_K_HCR)
+        cz_topk[cid] = {
+            "hcr_xyz": head[["hcr_x", "hcr_y", "hcr_z"]].values.astype(float),
+            "hcr_ids": head["hcr_id"].values.astype(int),
+            "ranks": head["rank"].values.astype(int),
+        }
+
+    n_skipped_pair = 0
+    n_skipped_hull = 0
+    n_evaluated = 0
+    rows = []
+    BATCH = 8192
+    src_buf = np.zeros((BATCH, K_CONSTELLATION, 3))
+    dst_buf = np.zeros((BATCH, K_CONSTELLATION, 3))
+    meta_buf = []
+
+    def _flush():
+        nonlocal n_evaluated
+        b = len(meta_buf)
+        if b == 0:
+            return
+        rms = _batched_aniso_rmse(src_buf[:b], dst_buf[:b])
+        n_evaluated += b
+        for i in range(b):
+            cz_ids_sel, hcr_ids_sel, ranks_sel, area = meta_buf[i]
+            rows.append({
+                "cz_ids": cz_ids_sel,
+                "hcr_ids": hcr_ids_sel,
+                "hcr_ranks": ranks_sel,
+                "hull_area_um2": area,
+                "rmse_um": float(rms[i]),
+            })
+        meta_buf.clear()
+
+    from itertools import product
+    for combo in combinations(range(TOP_N_CZ), K_CONSTELLATION):
+        pts = cz_xy[list(combo)]
+        ok = True
+        for a in range(K_CONSTELLATION):
+            for b in range(a + 1, K_CONSTELLATION):
+                if np.linalg.norm(pts[a] - pts[b]) < pair_thresh:
+                    ok = False; break
+            if not ok:
+                break
+        if not ok:
+            n_skipped_pair += 1
+            continue
+        try:
+            hull = ConvexHull(pts)
+            area = float(hull.volume)
+        except QhullError:
+            n_skipped_hull += 1
+            continue
+        if area < area_thresh:
+            n_skipped_hull += 1
+            continue
+
+        cz_ids_sel = [top_cz_ids[c] for c in combo]
+        seed_cz = cz_xyz[list(combo)]
+
+        topks = [cz_topk[c] for c in cz_ids_sel]
+        if any(t is None for t in topks):
+            continue
+        # All combinations of HCR picks
+        for picks in product(*[range(len(t["hcr_ids"])) for t in topks]):
+            seed_hcr = np.array([topks[k]["hcr_xyz"][picks[k]]
+                                  for k in range(K_CONSTELLATION)], dtype=float)
+            i = len(meta_buf)
+            src_buf[i] = seed_cz
+            dst_buf[i] = seed_hcr
+            meta_buf.append((
+                ",".join(str(c) for c in cz_ids_sel),
+                ",".join(str(int(topks[k]["hcr_ids"][picks[k]]))
+                          for k in range(K_CONSTELLATION)),
+                ",".join(str(int(topks[k]["ranks"][picks[k]]))
+                          for k in range(K_CONSTELLATION)),
+                area,
+            ))
+            if len(meta_buf) >= BATCH:
+                _flush()
+    _flush()
+
+    df = pd.DataFrame(rows)
+    if len(df):
+        df = df.sort_values("rmse_um").reset_index(drop=True)
+    out_csv = OUT / f"step2_{sid}{TAG}_constellation.csv"
+    df.head(2000).to_csv(out_csv, index=False)
+    elapsed = time.time() - t0
+
+    summary = {
+        "subject_id": sid,
+        "top_n_cz": TOP_N_CZ,
+        "K": K_CONSTELLATION,
+        "TOP_K_HCR": TOP_K_HCR,
+        "n_skipped_pair": n_skipped_pair,
+        "n_skipped_hull": n_skipped_hull,
+        "n_evaluated": n_evaluated,
+        "best_rmse_um": float(df.iloc[0]["rmse_um"]) if len(df) else float("nan"),
+        "best_cz_ids": df.iloc[0]["cz_ids"] if len(df) else "",
+        "best_hcr_ids": df.iloc[0]["hcr_ids"] if len(df) else "",
+        "best_hcr_ranks": df.iloc[0]["hcr_ranks"] if len(df) else "",
+        "best_hull_area_um2": float(df.iloc[0]["hull_area_um2"]) if len(df) else float("nan"),
+        "elapsed_s": round(elapsed, 2),
+    }
+    print(f"  evaluated={n_evaluated}  best_rmse={summary['best_rmse_um']:.2f}  "
+          f"({summary['elapsed_s']}s)", flush=True)
+    return summary
+
+
+def main():
+    rows = []
+    for sid in SUBJECTS_ALL:
+        rows.append(_process_subject(sid))
+    df = pd.DataFrame(rows)
+    out = OUT / f"step2_all_subjects_summary{TAG}.csv"
+    df.to_csv(out, index=False)
+    print(f"\n{df.to_string(index=False)}\n→ {out}")
+
+
+if __name__ == "__main__":
+    main()

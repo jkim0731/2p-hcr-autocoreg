@@ -1,0 +1,250 @@
+"""v2-S04 Stage D iter 7 — TPS-based image-NCC validation, hull-restricted.
+
+Mirrors the manual workflow from `docs/04 Current protocol.md` §2.4-2.5:
+the seed constellation defines a thin-plate-spline warp; alignment quality
+is judged by image correlation **within the landmark region** (i.e. inside
+the convex hull of the K anchor points) — TPS extrapolation outside the
+hull is intentionally ignored.
+
+Pipeline:
+  1. Local source-space grid at 4 µm spacing covering bbox of the K
+     anchor (CZ-warped) XYZ positions in HCR µm.
+  2. Hull mask: Delaunay(clump_cz_xyz).find_simplex(grid_xyz) >= 0.
+  3. For each grid voxel inside the hull, forward warp (3 variants):
+       - baseline:   tgt_xyz = src_xyz                (LP+sz-pin only)
+       - aniso:      tgt_xyz = aniso_predict(src_xyz)
+       - tps:        tgt_xyz = tps_predict(src_xyz)
+     Sample HCR 488 (level-4) at tgt_xyz.
+  4. Sample CZ ROI binary (`cz_voronoi_labels > 0`) at inverse_LP(src_xyz)
+     — same source for all variants.
+  5. NCC between CZ ROI samples and HCR 488 samples over hull voxels.
+
+Reports per-subject baseline / aniso / tps NCC and deltas.
+"""
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, "/root/capsule/code/full_automatic_execution_02/lib")
+sys.path.insert(0, "/root/capsule/code/dev_code")
+sys.path.insert(0, "/root/capsule/data/claude_data/full_automatic_execution_01")
+sys.path.insert(0, "/root/capsule/data/claude_data/sessions/03c_onset_features/iterations")
+sys.path.insert(0, "/root/capsule/data/claude_data/sessions/08_surface_vascular_match")
+
+import numpy as np
+import pandas as pd
+from scipy.ndimage import map_coordinates
+from scipy.spatial import Delaunay
+from scipy.interpolate import RBFInterpolator
+
+from benchmark_data_loader import load_subject
+from benchmark_analysis import load_hcr_volume
+import lib.cz_labels as cz_labels_mod
+from locked_prior_warm import compute_locked_prior_warm_start
+
+OUT = Path(__file__).resolve().parent
+SUBJECTS_ALL = ["755252", "767018", "767022", "782149", "788406", "790322"]
+TAG = os.environ.get("TAG", "_wide")
+TARGET_SPACING = 4.0  # µm; matches HCR level-4 nominal
+
+
+# 767018 ships only `*_zstack.tif` (no `*reg-dim-swapped.ome.tif`); fall back.
+_orig_load_zstack = cz_labels_mod._load_zstack
+def _patched_load_zstack(s):
+    try:
+        return _orig_load_zstack(s)
+    except StopIteration:
+        import tifffile
+        zs_path = next(Path(s.coreg_dir).glob("*_zstack.tif"))
+        return tifffile.imread(zs_path).astype(np.float32)
+cz_labels_mod._load_zstack = _patched_load_zstack
+
+
+def _load_sz_pins() -> dict:
+    df = pd.read_csv(
+        "/root/capsule/code/full_automatic_execution_02/sessions/"
+        "v2_S02_sz_image_sweep/results_iter7_summary.csv"
+    )
+    col = "sz_peak" if "sz_peak" in df.columns else "sz"
+    df["subject_id"] = df["subject_id"].astype(str)
+    return {str(r["subject_id"]): float(r[col]) for _, r in df.iterrows()}
+
+
+def _ncc(a: np.ndarray, b: np.ndarray) -> float:
+    a = a.astype(np.float64).ravel()
+    b = b.astype(np.float64).ravel()
+    a = a - a.mean()
+    b = b - b.mean()
+    den = float(np.sqrt((a * a).sum() * (b * b).sum()))
+    return float((a * b).sum() / den) if den > 0 else 0.0
+
+
+def _fit_aniso(src_xyz, dst_xyz):
+    src_mean = src_xyz.mean(0); dst_mean = dst_xyz.mean(0)
+    src_c = src_xyz - src_mean; dst_c = dst_xyz - dst_mean
+    H = src_c.T @ dst_c
+    U, _, Vt = np.linalg.svd(H)
+    D = np.eye(3)
+    if np.linalg.det(U) * np.linalg.det(Vt) < 0:
+        D[2, 2] = -1
+    R = U @ D @ Vt
+    src_rot = src_c @ R
+    num = (src_rot * dst_c).sum(0)
+    den = (src_rot ** 2).sum(0)
+    S = num / np.where(den > 0, den, 1.0)
+    def predict(xyz):
+        return (xyz - src_mean) @ R * S + dst_mean
+    return predict
+
+
+def _fit_tps(src_xyz, dst_xyz):
+    """Thin-plate-spline forward map: src_xyz (N,3) -> dst_xyz (N,3) per axis."""
+    rbf = RBFInterpolator(src_xyz, dst_xyz, kernel="thin_plate_spline")
+    def predict(xyz):
+        flat = xyz.reshape(-1, 3)
+        out = rbf(flat)
+        return out.reshape(xyz.shape)
+    return predict
+
+
+def _inverse_lp_zyx(hcr_zyx, lp):
+    """Inverse of forward LP: hcr = ((cz - sm)*S) @ R.T + t  =>  cz = (hcr - t) @ R / S + sm."""
+    return (hcr_zyx - lp.translation) @ lp.R / lp.scales + lp.src_mean
+
+
+def _run_subject(sid, sz_pins, summary):
+    sub = summary[summary.subject_id == sid]
+    if sub.empty:
+        return None
+    srow = sub.iloc[0]
+    cz_ids_anchor = [int(x) for x in str(srow["best_cz_ids"]).split(",")]
+    hcr_ids_anchor = [int(x) for x in str(srow["best_hcr_ids"]).split(",")]
+
+    cand = pd.read_csv(OUT / f"step1_{sid}{TAG}_topslab_candidates.csv")
+    clump_cz_xyz, clump_hcr_xyz = [], []
+    for cz, hcr in zip(cz_ids_anchor, hcr_ids_anchor):
+        r = cand[(cand["cz_id"] == cz) & (cand["hcr_id"] == hcr)].iloc[0]
+        clump_cz_xyz.append([r["cz_warp_x"], r["cz_warp_y"], r["cz_warp_z"]])
+        clump_hcr_xyz.append([r["hcr_x"], r["hcr_y"], r["hcr_z"]])
+    clump_cz_xyz = np.asarray(clump_cz_xyz, float)
+    clump_hcr_xyz = np.asarray(clump_hcr_xyz, float)
+
+    # Source-space grid covering the K-anchor bbox (no margin — hull mask
+    # restricts further). Spacing 4 µm.
+    bb_min = clump_cz_xyz.min(0)
+    bb_max = clump_cz_xyz.max(0)
+    Nx = int(np.ceil((bb_max[0] - bb_min[0]) / TARGET_SPACING)) + 1
+    Ny = int(np.ceil((bb_max[1] - bb_min[1]) / TARGET_SPACING)) + 1
+    Nz = int(np.ceil((bb_max[2] - bb_min[2]) / TARGET_SPACING)) + 1
+    if Nz < 2 or Ny < 2 or Nx < 2:
+        return None
+
+    kz, ky, kx = np.indices((Nz, Ny, Nx), dtype=np.float64)
+    src_x = bb_min[0] + TARGET_SPACING * kx
+    src_y = bb_min[1] + TARGET_SPACING * ky
+    src_z = bb_min[2] + TARGET_SPACING * kz
+    src_xyz = np.stack([src_x, src_y, src_z], axis=-1).reshape(-1, 3)
+
+    # Hull mask
+    hull = Delaunay(clump_cz_xyz)
+    inside = hull.find_simplex(src_xyz) >= 0
+    if inside.sum() < 100:
+        return None
+
+    src_inside = src_xyz[inside]
+
+    # Subject + warps
+    s = load_subject(sid)
+    sz_pin = sz_pins[sid]
+    lp = compute_locked_prior_warm_start(s, sz_init=sz_pin)
+    aniso = _fit_aniso(clump_cz_xyz, clump_hcr_xyz)
+    tps = _fit_tps(clump_cz_xyz, clump_hcr_xyz)
+
+    # CZ ROI binary in CZ vox
+    cz_labels_zyx = cz_labels_mod.cz_voronoi_labels(s)
+    cz_bin_zyx = (cz_labels_zyx > 0).astype(np.float32)
+    cz_xy_um = float(s.cz_xy_um); cz_z_um = float(s.cz_z_um)
+    cz_sampling = np.array([cz_z_um, cz_xy_um, cz_xy_um])
+
+    # HCR 488 raw (level-4)
+    try:
+        hcr_vol, hcr_xy_um, hcr_z_um = load_hcr_volume(s, channel="488", level=4)
+    except FileNotFoundError:
+        return None
+
+    # CZ ROI sample at each hull voxel: src_xyz -> ZYX -> inverse LP -> CZ vox
+    src_zyx = src_inside[:, ::-1]
+    cz_um_zyx = _inverse_lp_zyx(src_zyx, lp)
+    cz_vox = (cz_um_zyx / cz_sampling).T  # (3, Ninside) ZYX
+    cz_roi_samples = map_coordinates(cz_bin_zyx, cz_vox,
+                                     order=0, mode="constant", cval=0.0)
+
+    # HCR 488 samples for each warp variant
+    def _sample_hcr(target_xyz):
+        z = target_xyz[:, 2] / hcr_z_um
+        y = target_xyz[:, 1] / hcr_xy_um
+        x = target_xyz[:, 0] / hcr_xy_um
+        coords = np.stack([z, y, x], axis=0)
+        return map_coordinates(hcr_vol.astype(np.float32), coords,
+                               order=1, mode="constant", cval=0.0)
+
+    hcr_baseline = _sample_hcr(src_inside)             # tgt = src
+    hcr_aniso = _sample_hcr(aniso(src_inside))
+    hcr_tps = _sample_hcr(tps(src_inside))
+
+    return {
+        "subject_id": sid,
+        "K": int(srow["K"]),
+        "n_hull_voxels": int(inside.sum()),
+        "hull_volume_um3": float(inside.sum() * TARGET_SPACING ** 3),
+        "frac_cz_in_hull": float(cz_roi_samples.mean()),
+        "ncc_baseline_LP": _ncc(cz_roi_samples, hcr_baseline),
+        "ncc_aniso": _ncc(cz_roi_samples, hcr_aniso),
+        "ncc_tps": _ncc(cz_roi_samples, hcr_tps),
+        # Save per-subject npz for visualisation
+        "_npz": dict(
+            src_inside=src_inside,
+            cz_roi=cz_roi_samples.astype(np.uint8),
+            hcr_baseline=hcr_baseline.astype(np.float32),
+            hcr_aniso=hcr_aniso.astype(np.float32),
+            hcr_tps=hcr_tps.astype(np.float32),
+            grid_shape=np.array([Nz, Ny, Nx]),
+            inside_mask=inside.astype(np.uint8),
+            bb_min=bb_min, bb_max=bb_max,
+            spacing=TARGET_SPACING,
+        ),
+    }
+
+
+def main():
+    summary = pd.read_csv(OUT / f"step2c_all_subjects_summary{TAG}.csv")
+    summary["subject_id"] = summary["subject_id"].astype(str)
+    sz_pins = _load_sz_pins()
+
+    rows = []
+    for sid in SUBJECTS_ALL:
+        res = _run_subject(sid, sz_pins, summary)
+        if res is None:
+            print(f"{sid}: skipping")
+            continue
+        npz = res.pop("_npz")
+        np.savez_compressed(OUT / f"step2c_image_ncc_tps_volumes_{sid}.npz", **npz)
+        rows.append({**res,
+                     "delta_aniso": res["ncc_aniso"] - res["ncc_baseline_LP"],
+                     "delta_tps": res["ncc_tps"] - res["ncc_baseline_LP"]})
+        print(f"{sid}: hull_vox={res['n_hull_voxels']:>5}  "
+              f"NCC base={res['ncc_baseline_LP']:+.4f}  "
+              f"aniso={res['ncc_aniso']:+.4f} (Δ {res['ncc_aniso']-res['ncc_baseline_LP']:+.4f})  "
+              f"tps={res['ncc_tps']:+.4f} (Δ {res['ncc_tps']-res['ncc_baseline_LP']:+.4f})")
+
+    df = pd.DataFrame(rows)
+    out_csv = OUT / "step2c_image_ncc_tps_validation.csv"
+    df.to_csv(out_csv, index=False)
+    print(f"\n→ {out_csv}")
+    print(df.to_string(index=False))
+
+
+if __name__ == "__main__":
+    main()

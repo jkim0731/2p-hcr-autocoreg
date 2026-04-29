@@ -3,7 +3,7 @@
   "subject": "v2-S03: E.RV revival of v1 candidates",
   "description": "Re-bench P1/P4/P6/C5, then P3, P5, M1, M3 with Stage A locked frame and (when v2-S02 passed) sz pinned. Emit per-subject r@20 / r@30 / median residual table. Anything beating C5 r@20 on ≥4/6 enters production.",
   "activeForm": "Scaffolding v2-S03 E.RV revival",
-  "status": "in_progress",
+  "status": "completed",
   "blocks": [],
   "blockedBy": []
 }

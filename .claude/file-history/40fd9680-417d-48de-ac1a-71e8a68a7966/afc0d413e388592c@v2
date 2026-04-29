@@ -1,0 +1,190 @@
+"""v2-S04 Stage D iter 5 — validate the best clumped K=5 constellation
+per subject against `landmarks_qced` *within the local volume*.
+
+Local validation:
+- Reconstruct the local bbox from the K CZ anchor warped positions
+  + (200 µm xy, 100 µm z) margin.
+- Of GT landmarks whose CZ falls inside this local volume, count
+  - direct K-anchor correctness (predicted hcr_id == manual hcr_id),
+  - and the local NN-pair recall when the constellation's
+    aniso-similarity is applied to all candidate CZ in the local
+    volume.
+"""
+from __future__ import annotations
+
+import os
+import re
+import sys
+from pathlib import Path
+
+sys.path.insert(0, "/root/capsule/code/full_automatic_execution_02/lib")
+sys.path.insert(0, "/root/capsule/data/claude_data/full_automatic_execution_01")
+sys.path.insert(0, "/root/capsule/code/dev_code")
+sys.path.insert(0, "/root/capsule/data/claude_data/sessions/03c_onset_features/iterations")
+sys.path.insert(0, "/root/capsule/data/claude_data/sessions/08_surface_vascular_match")
+
+import numpy as np
+import pandas as pd
+from scipy.spatial import cKDTree
+
+from benchmark_data_loader import load_subject
+
+from seed_constellation_step2c_clumped import (
+    fit_aniso_predict,
+    LOCAL_XY_MARGIN_UM,
+    LOCAL_Z_MARGIN_UM,
+)
+
+OUT = Path(__file__).resolve().parent
+SUBJECTS_ALL = ["755252", "767018", "767022", "782149", "788406", "790322"]
+TAG = os.environ.get("TAG", "_wide")
+
+ID_RE = re.compile(r"cz(\d+)-hcr(\d+)$")
+
+
+def _parse(v: str) -> tuple[int, int]:
+    s = str(v)
+    if s.startswith("qced_"):
+        s = s[5:]
+    m = ID_RE.search(s)
+    return (int(m.group(1)), int(m.group(2))) if m else (-1, -1)
+
+
+def main():
+    summary = pd.read_csv(OUT / f"step2c_all_subjects_summary{TAG}.csv")
+    summary["subject_id"] = summary["subject_id"].astype(str)
+
+    rows = []
+    for sid in SUBJECTS_ALL:
+        sub = summary[summary.subject_id == sid]
+        if sub.empty:
+            continue
+        srow = sub.iloc[0]
+        cz_ids_anchor = [int(x) for x in str(srow["best_cz_ids"]).split(",")]
+        hcr_ids_anchor = [int(x) for x in str(srow["best_hcr_ids"]).split(",")]
+        K = int(srow["K"])
+
+        cand = pd.read_csv(OUT / f"step1_{sid}{TAG}_topslab_candidates.csv")
+        by_cz = {int(c): g.sort_values("rank").iloc[0]
+                 for c, g in cand.groupby("cz_id")}
+        clump_cz_xyz = np.array([
+            [by_cz[c]["cz_warp_x"], by_cz[c]["cz_warp_y"], by_cz[c]["cz_warp_z"]]
+            for c in cz_ids_anchor
+        ])
+        clump_hcr_xyz = []
+        # use the actual hcr_x/y/z attached to (cz_id, hcr_id) row
+        for cz, hcr in zip(cz_ids_anchor, hcr_ids_anchor):
+            mask = (cand["cz_id"] == cz) & (cand["hcr_id"] == hcr)
+            r = cand[mask].iloc[0]
+            clump_hcr_xyz.append([r["hcr_x"], r["hcr_y"], r["hcr_z"]])
+        clump_hcr_xyz = np.asarray(clump_hcr_xyz, float)
+
+        margin = np.array([LOCAL_XY_MARGIN_UM, LOCAL_XY_MARGIN_UM, LOCAL_Z_MARGIN_UM])
+        bb_min = clump_cz_xyz.min(0) - margin
+        bb_max = clump_cz_xyz.max(0) + margin
+
+        s = load_subject(sid)
+        import lib.centroid_helpers as ch
+        hcr_um_zyx, hcr_ids_all = ch.centroids_um(s, "hcr_gfp")
+        hcr_um_xyz = hcr_um_zyx[:, [2, 1, 0]]
+        hcr_id2idx = {int(h): i for i, h in enumerate(hcr_ids_all)}
+        hcr_tree = cKDTree(hcr_um_xyz)
+
+        # All landmarks (active)
+        lm = s.landmarks_qced
+        lm = lm[lm["active"]].copy()
+        parsed = [_parse(v) for v in lm["ids"]]
+        lm["cz_id"], lm["hcr_id"] = zip(*parsed)
+        lm = lm[lm["cz_id"] >= 0]
+        lm_cz_to_hcr = dict(zip(lm["cz_id"].astype(int),
+                                lm["hcr_id"].astype(int)))
+
+        # Direct K-anchor correctness
+        n_correct_anchors = 0
+        per_anchor = []
+        for cz, hcr in zip(cz_ids_anchor, hcr_ids_anchor):
+            manual = lm_cz_to_hcr.get(int(cz))
+            ok = manual == hcr if manual is not None else None
+            per_anchor.append({"cz_id": cz, "predicted_hcr": hcr,
+                                "manual_hcr": manual, "correct": ok})
+            if ok:
+                n_correct_anchors += 1
+        n_anchors_in_lm = sum(1 for p in per_anchor if p["manual_hcr"] is not None)
+
+        # CZ centroids in HCR µm space (warped via LP+sz-pin from step1)
+        cz_warp_by_id = {int(c): np.array([by_cz[c]["cz_warp_x"],
+                                            by_cz[c]["cz_warp_y"],
+                                            by_cz[c]["cz_warp_z"]])
+                         for c in by_cz}
+        # local CZ ids (top-slab) inside local volume
+        local_cz = []
+        for cz, pt in cz_warp_by_id.items():
+            if (pt >= bb_min).all() and (pt <= bb_max).all():
+                local_cz.append(int(cz))
+        local_cz_xyz = np.array([cz_warp_by_id[c] for c in local_cz])
+
+        # Apply constellation aniso warp to local CZ; NN to HCR pool
+        warp = fit_aniso_predict(clump_cz_xyz, clump_hcr_xyz)
+        pred = warp(local_cz_xyz) if len(local_cz_xyz) else np.empty((0, 3))
+        d_pred, idx_pred = (hcr_tree.query(pred, k=1)
+                              if len(pred) else (np.array([]), np.array([])))
+        # Match (cz, predicted_hcr_id) against landmarks for cells in local box
+        n_local_lm_cells = 0
+        n_local_correct = 0
+        n_local_within_5 = 0
+        n_local_within_10 = 0
+        n_local_within_20 = 0
+        for ci, cz in enumerate(local_cz):
+            manual = lm_cz_to_hcr.get(int(cz))
+            if manual is None:
+                continue
+            n_local_lm_cells += 1
+            pred_hcr_id = int(hcr_ids_all[idx_pred[ci]])
+            if pred_hcr_id == manual:
+                n_local_correct += 1
+            # Distance to manual hcr position (manual may be outside GFP+ pool)
+            if manual not in hcr_id2idx:
+                continue
+            manual_xyz = hcr_um_xyz[hcr_id2idx[manual]]
+            d_manual = float(np.linalg.norm(pred[ci] - manual_xyz))
+            if d_manual <= 5: n_local_within_5 += 1
+            if d_manual <= 10: n_local_within_10 += 1
+            if d_manual <= 20: n_local_within_20 += 1
+
+        rows.append({
+            "subject_id": sid,
+            "K": K,
+            "min_drop_lift_um": float(srow["best_min_drop_um"]),
+            "mean_drop_lift_um": float(srow["best_mean_drop_um"]),
+            "n_correct_anchors": n_correct_anchors,
+            "n_anchors_in_lm": n_anchors_in_lm,
+            "n_local_lm_cells": n_local_lm_cells,
+            "n_local_correct_match": n_local_correct,
+            "local_recall_at_5um": (n_local_within_5 / n_local_lm_cells
+                                     if n_local_lm_cells else 0.0),
+            "local_recall_at_10um": (n_local_within_10 / n_local_lm_cells
+                                     if n_local_lm_cells else 0.0),
+            "local_recall_at_20um": (n_local_within_20 / n_local_lm_cells
+                                     if n_local_lm_cells else 0.0),
+            "details_per_anchor": per_anchor,
+        })
+
+    print(f"\n{'sid':<8} {'K':>3} {'min_drop':>9} {'anchors_corr':>13} "
+          f"{'lm_cells':>9} {'r@5':>6} {'r@10':>6} {'r@20':>6}")
+    for r in rows:
+        print(f"{r['subject_id']:<8} {r['K']:>3} {r['min_drop_lift_um']:>8.2f}µm "
+              f"{r['n_correct_anchors']:>3}/{r['n_anchors_in_lm']:<3} "
+              f"{r['n_local_lm_cells']:>9} "
+              f"{r['local_recall_at_5um']:>6.2f} "
+              f"{r['local_recall_at_10um']:>6.2f} "
+              f"{r['local_recall_at_20um']:>6.2f}")
+
+    df = pd.DataFrame([{k: v for k, v in r.items() if k != "details_per_anchor"}
+                       for r in rows])
+    out_csv = OUT / "step2c_validation_against_landmarks.csv"
+    df.to_csv(out_csv, index=False)
+    print(f"\n→ {out_csv}")
+
+
+if __name__ == "__main__":
+    main()

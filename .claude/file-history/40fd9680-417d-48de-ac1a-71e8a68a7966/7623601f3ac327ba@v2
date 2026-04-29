@@ -1,0 +1,74 @@
+"""Wrap the v1 bench harness so `recall_at_30um` is reported.
+
+The v1 harness (`bench.harness.compare_to_gt`) computes r@5/10/20 only.
+v2-S03 bench scripts read `r.get("recall_at_30um", 0)` and silently get
+0, which masks real recall above 20 µm. This module patches the harness
+to compute r@30 alongside the existing thresholds. Idempotent.
+
+Usage:
+    import bench_harness_patch
+    bench_harness_patch.patch()  # before any run_candidate call
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+_V1 = Path("/root/capsule/data/claude_data/full_automatic_execution_01")
+if str(_V1) not in sys.path:
+    sys.path.insert(0, str(_V1))
+
+import bench.harness as _h  # noqa: E402
+
+_orig_compare_to_gt = _h.compare_to_gt
+_PATCHED_FLAG = "_v2_r30_patched"
+
+
+def _compare_to_gt_with_r30(pairs_df: pd.DataFrame, s) -> dict:
+    base = _orig_compare_to_gt(pairs_df, s)
+
+    gt = s.coreg_table
+    if gt.empty or pairs_df.empty:
+        base["recall_at_30um"] = 0.0
+        return base
+
+    hcr_cent = _h._hcr_centroids_um(s).set_index("hcr_id")
+    pred = (
+        pairs_df.copy()
+        .drop_duplicates(subset=["cz_id"], keep="first")
+        .set_index("cz_id")
+    )
+    gt_rows = gt.set_index("cz_id")
+    pred_r = pred.rename(columns={
+        "hcr_x_um": "pred_hcr_x_um",
+        "hcr_y_um": "pred_hcr_y_um",
+        "hcr_z_um": "pred_hcr_z_um",
+    })[["pred_hcr_x_um", "pred_hcr_y_um", "pred_hcr_z_um"]]
+    joined = gt_rows.join(pred_r, how="left")
+    n_gt = len(gt_rows)
+    gt_hcr = hcr_cent.reindex(joined["hcr_id"])
+    pred_xyz = joined[
+        ["pred_hcr_x_um", "pred_hcr_y_um", "pred_hcr_z_um"]
+    ].values.astype(float)
+    gt_xyz = gt_hcr[["hcr_x_um", "hcr_y_um", "hcr_z_um"]].values.astype(float)
+    valid = np.isfinite(pred_xyz).all(1) & np.isfinite(gt_xyz).all(1)
+    if valid.any():
+        dist = np.linalg.norm(pred_xyz[valid] - gt_xyz[valid], axis=1)
+        base["recall_at_30um"] = float((dist <= 30.0).sum() / max(1, n_gt))
+    else:
+        base["recall_at_30um"] = 0.0
+    return base
+
+
+def patch() -> None:
+    if getattr(_h, _PATCHED_FLAG, False):
+        return
+    _h.compare_to_gt = _compare_to_gt_with_r30
+    setattr(_h, _PATCHED_FLAG, True)
+
+
+def is_patched() -> bool:
+    return bool(getattr(_h, _PATCHED_FLAG, False))

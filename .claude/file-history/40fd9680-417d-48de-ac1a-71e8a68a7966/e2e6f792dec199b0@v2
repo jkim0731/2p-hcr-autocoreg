@@ -1,0 +1,436 @@
+"""v2-S04 iter 8 step 3 — 4-panel before/after TPS overlays per subject.
+
+Per the new protocol (2026-04-29):
+  Panel 1: HCR 488 raw (z-MIP, green colormap) + GFP+ ROI contours (white).
+  Panel 2: GFP+ landmark contours (green) + GFP+ other contours (white)
+           + CZ landmark contours (red) + CZ other contours (yellow), BEFORE TPS.
+  Panel 3: same color scheme as Panel 2 but CZ ROIs AFTER TPS transformation.
+  Panel 4: HCR 488 (green) + CZ ROIs after TPS overlaid (red landmarks, yellow others).
+
+Coordinate frame: HCR µm dst-space grid at 2 µm, viewport = bbox(landmark
+src + dst) + 10 % margin. CZ ROIs in src-space are sampled via inverse-LP;
+post-TPS CZ ROIs use inverse-TPS (fit from gfp→cz_warp anchors) ∘ inverse-LP.
+"""
+from __future__ import annotations
+
+import glob
+import json
+import pickle
+import sys
+from pathlib import Path
+
+sys.path.insert(0, "/root/capsule/code/full_automatic_execution_02/lib")
+sys.path.insert(0, "/root/capsule/code/dev_code")
+sys.path.insert(0, "/root/capsule/data/claude_data/full_automatic_execution_01")
+sys.path.insert(0, "/root/capsule/data/claude_data/sessions/03c_onset_features/iterations")
+sys.path.insert(0, "/root/capsule/data/claude_data/sessions/08_surface_vascular_match")
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import zarr
+from matplotlib.colors import LinearSegmentedColormap
+from scipy.interpolate import RBFInterpolator
+from scipy.ndimage import map_coordinates
+
+from benchmark_data_loader import load_subject, HCR_SEG_XY_DOWNSAMPLE
+import lib.centroid_helpers as ch
+import lib.cz_labels as cz_labels_mod
+from benchmark_analysis import load_hcr_volume
+from locked_prior_warm import compute_locked_prior_warm_start
+
+OUT = Path(__file__).resolve().parent
+SUBJECTS_ALL = ["755252", "767018", "767022", "782149", "788406", "790322"]
+GRID_SPACING = 2.0
+MARGIN_FRAC = 0.10
+
+
+# 767018 zstack fallback
+_orig_load_zstack = cz_labels_mod._load_zstack
+def _patched_load_zstack(s):
+    try:
+        return _orig_load_zstack(s)
+    except StopIteration:
+        import tifffile
+        zs_path = next(Path(s.coreg_dir).glob("*_zstack.tif"))
+        return tifffile.imread(zs_path).astype(np.float32)
+cz_labels_mod._load_zstack = _patched_load_zstack
+
+
+def _load_sz_pins() -> dict:
+    df = pd.read_csv(
+        "/root/capsule/code/full_automatic_execution_02/sessions/"
+        "v2_S02_sz_image_sweep/results_iter7_summary.csv"
+    )
+    col = "sz_peak" if "sz_peak" in df.columns else "sz"
+    df["subject_id"] = df["subject_id"].astype(str)
+    return {str(r["subject_id"]): float(r[col]) for _, r in df.iterrows()}
+
+
+def _hcr_metrics_path(sid: str) -> Path | None:
+    hits = sorted(glob.glob(
+        f"/root/capsule/data/HCR_{sid}_*/cell_body_segmentation/metrics.pickle"
+    ))
+    return Path(hits[-1]) if hits else None
+
+
+def _hcr_seg_zarr_path(sid: str) -> Path:
+    hits = sorted(glob.glob(
+        f"/root/capsule/data/HCR_{sid}_*/cell_body_segmentation/segmentation_mask.zarr"
+    ))
+    if not hits:
+        raise FileNotFoundError(f"HCR seg zarr for {sid}")
+    return Path(hits[-1])
+
+
+def _inverse_lp_zyx(hcr_zyx, lp):
+    return (hcr_zyx - lp.translation) @ lp.R / lp.scales + lp.src_mean
+
+
+def _gfp_label_volume_in_grid(sid, s, gfp_ids_visible, grid_origin_um, grid_shape, spacing):
+    """Build a per-grid-voxel GFP label volume by reading the seg-mask zarr.
+
+    Returns int32 (Nz, Ny, Nx) with cell ids for visible gfp cells; 0 = background.
+    """
+    Nz, Ny, Nx = grid_shape
+    seg_xy_um = float(s.hcr_seg_xy_um); seg_z_um = float(s.hcr_seg_z_um)
+    z = zarr.open(str(_hcr_seg_zarr_path(sid)))["0"]
+    Z, Y, X = z.shape[-3:]
+
+    # Determine bbox in level-0 vox covering the grid
+    xmin_um = grid_origin_um[2]; xmax_um = grid_origin_um[2] + (Nx - 1) * spacing
+    ymin_um = grid_origin_um[1]; ymax_um = grid_origin_um[1] + (Ny - 1) * spacing
+    zmin_um = grid_origin_um[0]; zmax_um = grid_origin_um[0] + (Nz - 1) * spacing
+    z0 = max(int(np.floor(zmin_um / seg_z_um)) - 1, 0)
+    z1 = min(int(np.ceil(zmax_um / seg_z_um)) + 2, Z)
+    y0 = max(int(np.floor(ymin_um / seg_xy_um)) - 1, 0)
+    y1 = min(int(np.ceil(ymax_um / seg_xy_um)) + 2, Y)
+    x0 = max(int(np.floor(xmin_um / seg_xy_um)) - 1, 0)
+    x1 = min(int(np.ceil(xmax_um / seg_xy_um)) + 2, X)
+    if z1 <= z0 or y1 <= y0 or x1 <= x0:
+        return np.zeros(grid_shape, np.int32)
+    crop = np.asarray(z[0, 0, z0:z1, y0:y1, x0:x1])
+
+    # Filter to only visible GFP+ ids (zero out everything else)
+    visible_set = set(int(i) for i in gfp_ids_visible)
+    keep_mask = np.isin(crop, list(visible_set))
+    crop_filt = np.where(keep_mask, crop, 0).astype(np.int32)
+
+    # Resample crop onto the grid (nearest)
+    kz, ky, kx = np.indices((Nz, Ny, Nx), dtype=np.float64)
+    z_um = grid_origin_um[0] + spacing * kz
+    y_um = grid_origin_um[1] + spacing * ky
+    x_um = grid_origin_um[2] + spacing * kx
+    src_z = z_um / seg_z_um - z0
+    src_y = y_um / seg_xy_um - y0
+    src_x = x_um / seg_xy_um - x0
+    coords = np.stack([src_z.ravel(), src_y.ravel(), src_x.ravel()], axis=0)
+    out = map_coordinates(crop_filt, coords, order=0, mode="constant", cval=0)
+    return out.reshape(grid_shape).astype(np.int32)
+
+
+def _cz_label_volume_in_grid(s, lp, grid_origin_um, grid_shape, spacing,
+                              transform_dst_to_src=None, return_intensity=False,
+                              cz_img_zyx=None):
+    """Sample cz_voronoi_labels onto an HCR-µm dst grid.
+    transform_dst_to_src: callable (M,3) HCR-µm-dst zyx → HCR-µm-src zyx, else identity.
+    """
+    Nz, Ny, Nx = grid_shape
+    cz_xy_um = float(s.cz_xy_um); cz_z_um = float(s.cz_z_um)
+    cz_labels_zyx = cz_labels_mod.cz_voronoi_labels(s)
+
+    kz, ky, kx = np.indices((Nz, Ny, Nx), dtype=np.float64)
+    dst_z = grid_origin_um[0] + spacing * kz
+    dst_y = grid_origin_um[1] + spacing * ky
+    dst_x = grid_origin_um[2] + spacing * kx
+    dst_zyx = np.stack([dst_z.ravel(), dst_y.ravel(), dst_x.ravel()], axis=1)
+    if transform_dst_to_src is not None:
+        src_zyx = transform_dst_to_src(dst_zyx)
+    else:
+        src_zyx = dst_zyx
+    cz_um_zyx = _inverse_lp_zyx(src_zyx, lp)
+    cz_vox = (cz_um_zyx / np.array([cz_z_um, cz_xy_um, cz_xy_um])).T
+    labels = map_coordinates(cz_labels_zyx.astype(np.int32), cz_vox,
+                             order=0, mode="constant", cval=0).reshape(grid_shape)
+    if return_intensity and cz_img_zyx is not None:
+        intens = map_coordinates(cz_img_zyx.astype(np.float32), cz_vox,
+                                 order=1, mode="constant", cval=0.0).reshape(grid_shape)
+        return labels.astype(np.int32), intens
+    return labels.astype(np.int32)
+
+
+def _per_cell_mips(label_vol, cell_ids):
+    """Per-cell binary z-MIPs, indexed by cell id."""
+    out = {}
+    for cid in cell_ids:
+        cid = int(cid)
+        m = (label_vol == cid).max(axis=0)
+        if m.any():
+            out[cid] = m
+    return out
+
+
+def _forward_lp_zyx(cz_um_zyx, lp):
+    """Forward LP: cz_um_zyx (M,3) → HCR-µm src zyx."""
+    return (cz_um_zyx - lp.src_mean) * lp.scales @ lp.R.T + lp.translation
+
+
+def _cz_per_cell_mips_after_tps(s, lp, tps_fwd, cz_ids,
+                                 grid_origin_um, grid_shape, spacing):
+    """Centroid-translate per-cell xy MIPs for the AFTER-TPS panel.
+
+    With K=4 near-coplanar anchors scipy's TPS reduces to a singular affine
+    that hugely amplifies any out-of-plane (z) variation.  A cell mask spans
+    ~33µm in src.z; raw forward-warp inflates dst.x to ~322µm.  Instead we
+    forward-warp each cell's CENTROID through (LP, TPS), translate the cell's
+    LP-warped voxel cloud by `dst_centroid - src_centroid`, and rasterize.
+    Cell shape is preserved; only its location changes by the TPS map at the
+    centroid — which is what we want to visualise.
+    """
+    Nz, Ny, Nx = grid_shape
+    cz_xy_um = float(s.cz_xy_um); cz_z_um = float(s.cz_z_um)
+    cz_labels_zyx = cz_labels_mod.cz_voronoi_labels(s)
+    out = {}
+    for cid in cz_ids:
+        cid = int(cid)
+        loc = np.where(cz_labels_zyx == cid)
+        if len(loc[0]) == 0:
+            continue
+        z_vox, y_vox, x_vox = loc
+        cz_um_zyx = np.stack(
+            [z_vox * cz_z_um, y_vox * cz_xy_um, x_vox * cz_xy_um], axis=1)
+        src_zyx = _forward_lp_zyx(cz_um_zyx, lp)
+        src_xyz = src_zyx[:, ::-1]
+        src_centroid_xyz = src_xyz.mean(0)
+        dst_centroid_xyz = tps_fwd(src_centroid_xyz[None, :])[0]
+        shift = dst_centroid_xyz - src_centroid_xyz
+        dst_xyz = src_xyz + shift
+        ix = np.floor((dst_xyz[:, 0] - grid_origin_um[2]) / spacing).astype(int)
+        iy = np.floor((dst_xyz[:, 1] - grid_origin_um[1]) / spacing).astype(int)
+        iz = np.floor((dst_xyz[:, 2] - grid_origin_um[0]) / spacing).astype(int)
+        valid = ((ix >= 0) & (ix < Nx)
+                 & (iy >= 0) & (iy < Ny)
+                 & (iz >= 0) & (iz < Nz))
+        if valid.sum() == 0:
+            continue
+        m = np.zeros((Ny, Nx), bool)
+        m[iy[valid], ix[valid]] = True
+        out[cid] = m
+    return out
+
+
+def _hcr_488_mip(s, hcr_vol, hcr_xy_um, hcr_z_um, grid_origin_um, grid_shape, spacing):
+    Nz, Ny, Nx = grid_shape
+    kz, ky, kx = np.indices((Nz, Ny, Nx), dtype=np.float64)
+    z_um = grid_origin_um[0] + spacing * kz
+    y_um = grid_origin_um[1] + spacing * ky
+    x_um = grid_origin_um[2] + spacing * kx
+    coords = np.stack([z_um.ravel() / hcr_z_um,
+                        y_um.ravel() / hcr_xy_um,
+                        x_um.ravel() / hcr_xy_um], axis=0)
+    vol = map_coordinates(hcr_vol.astype(np.float32), coords,
+                          order=1, mode="constant", cval=0.0).reshape(grid_shape)
+    return vol.max(axis=0)
+
+
+def _draw_panel_image(ax, mip, extent, lo, hi, cmap):
+    ax.imshow(mip, cmap=cmap, origin="lower", extent=extent,
+              vmin=lo, vmax=hi, aspect="equal", interpolation="nearest")
+
+
+def _draw_panel_blank(ax, extent):
+    Ny = 0; Nx = 0
+    ax.imshow(np.zeros((1, 1)), cmap="gray", origin="lower", extent=extent,
+              vmin=0, vmax=1, aspect="equal")
+
+
+def _draw_contours(ax, per_cell_mips, cell_ids_subset, color, lw, extent, alpha=0.95):
+    for cid in cell_ids_subset:
+        m = per_cell_mips.get(int(cid))
+        if m is None:
+            continue
+        ax.contour(m.astype(float), levels=[0.5], colors=color,
+                   linewidths=lw, alpha=alpha,
+                   extent=extent, origin="lower")
+
+
+def _render_subject(sid, sz_pin):
+    cfg_path = OUT / f"iter8_constellation_{sid}.json"
+    if not cfg_path.exists():
+        print(f"{sid}: no constellation json; skipping")
+        return None
+    cfg = json.loads(cfg_path.read_text())
+    cz_anchor = cfg["cz_ids"]; gfp_anchor = cfg["gfp_ids"]
+    K = cfg["K"]
+    print(f"\n=== {sid}  K={K}  cz={cz_anchor}  gfp={gfp_anchor} ===", flush=True)
+
+    pairs = pd.read_csv(OUT / f"iter8_pairs_{sid}.csv")
+    s = load_subject(sid)
+    lp = compute_locked_prior_warm_start(s, sz_init=sz_pin)
+
+    # Anchor src/dst (HCR µm zyx-order src for LP-warped cz; zyx-order dst for gfp)
+    rows_anchor = pd.merge(
+        pd.DataFrame({"cz_id": cz_anchor, "gfp_id": gfp_anchor, "ord": range(K)}),
+        pairs, on=["cz_id", "gfp_id"], how="left",
+    ).sort_values("ord")
+    src_xyz_anchor = rows_anchor[
+        ["cz_warp_x_um", "cz_warp_y_um", "cz_warp_z_um"]].to_numpy()
+    dst_xyz_anchor = rows_anchor[
+        ["gfp_x_um", "gfp_y_um", "gfp_z_um"]].to_numpy()
+    src_zyx_anchor = src_xyz_anchor[:, [2, 1, 0]]
+    dst_zyx_anchor = dst_xyz_anchor[:, [2, 1, 0]]
+
+    # Forward TPS: src_xyz → dst_xyz (cz_warp → gfp).  Use this for the
+    # NCC search and to forward-warp src points to dst.
+    tps_fwd = RBFInterpolator(src_xyz_anchor, dst_xyz_anchor,
+                               kernel="thin_plate_spline")
+    # "Inverse" TPS for visualization: refit with swapped anchors.
+    tps_inv = RBFInterpolator(dst_zyx_anchor, src_zyx_anchor,
+                               kernel="thin_plate_spline")
+
+    # Viewport bbox = union of src and dst anchor xyz (HCR µm) + margin.
+    pts = np.vstack([src_xyz_anchor, dst_xyz_anchor])  # (2K, 3) xyz
+    bb_min_xyz = pts.min(0); bb_max_xyz = pts.max(0)
+    extent_xyz = bb_max_xyz - bb_min_xyz
+    bb_min_xyz = bb_min_xyz - MARGIN_FRAC * extent_xyz
+    bb_max_xyz = bb_max_xyz + MARGIN_FRAC * extent_xyz
+    Nx = int(np.ceil((bb_max_xyz[0] - bb_min_xyz[0]) / GRID_SPACING)) + 1
+    Ny = int(np.ceil((bb_max_xyz[1] - bb_min_xyz[1]) / GRID_SPACING)) + 1
+    Nz = int(np.ceil((bb_max_xyz[2] - bb_min_xyz[2]) / GRID_SPACING)) + 1
+    grid_origin_um = (bb_min_xyz[2], bb_min_xyz[1], bb_min_xyz[0])  # (z, y, x) µm
+    grid_shape = (Nz, Ny, Nx)
+    extent = (bb_min_xyz[0], bb_max_xyz[0], bb_min_xyz[1], bb_max_xyz[1])
+    print(f"  viewport xyz: x={bb_min_xyz[0]:.0f}-{bb_max_xyz[0]:.0f} "
+          f"y={bb_min_xyz[1]:.0f}-{bb_max_xyz[1]:.0f} "
+          f"z={bb_min_xyz[2]:.0f}-{bb_max_xyz[2]:.0f}  shape={grid_shape}",
+          flush=True)
+
+    # Volumes
+    print("  loading hcr 488 ...", flush=True)
+    hcr_vol, hcr_xy_um, hcr_z_um = load_hcr_volume(s, channel="488", level=4)
+
+    print("  sampling 488 onto grid ...", flush=True)
+    mip488 = _hcr_488_mip(s, hcr_vol, hcr_xy_um, hcr_z_um,
+                          grid_origin_um, grid_shape, GRID_SPACING)
+
+    # GFP+ centroids → which gfp_ids are inside viewport
+    gfp_um_zyx, gfp_ids_all = ch.centroids_um(s, "hcr_gfp")
+    in_view = ((gfp_um_zyx[:, 2] >= bb_min_xyz[0])
+               & (gfp_um_zyx[:, 2] <= bb_max_xyz[0])
+               & (gfp_um_zyx[:, 1] >= bb_min_xyz[1])
+               & (gfp_um_zyx[:, 1] <= bb_max_xyz[1])
+               & (gfp_um_zyx[:, 0] >= bb_min_xyz[2])
+               & (gfp_um_zyx[:, 0] <= bb_max_xyz[2]))
+    gfp_visible = gfp_ids_all[in_view].astype(int).tolist()
+    print(f"  gfp visible: {len(gfp_visible)}  (of {len(gfp_ids_all)})", flush=True)
+
+    # GFP label vol on grid (small — read crop from level-0 zarr, restrict to visible ids)
+    print("  sampling gfp seg-mask ...", flush=True)
+    gfp_label_grid = _gfp_label_volume_in_grid(
+        sid, s, gfp_visible, grid_origin_um, grid_shape, GRID_SPACING)
+    gfp_present_ids = sorted(int(c) for c in np.unique(gfp_label_grid) if c > 0)
+    gfp_per_cell_mips = _per_cell_mips(gfp_label_grid, gfp_present_ids)
+    print(f"  gfp per-cell mips: {len(gfp_per_cell_mips)}  "
+          f"(landmarks present: {sum(c in gfp_per_cell_mips for c in gfp_anchor)}/{K})",
+          flush=True)
+
+    # CZ label vol BEFORE TPS (panel 2): inverse-LP only
+    print("  sampling cz labels (before TPS) ...", flush=True)
+    cz_label_before = _cz_label_volume_in_grid(
+        s, lp, grid_origin_um, grid_shape, GRID_SPACING,
+        transform_dst_to_src=None,
+    )
+    cz_present_before = sorted(int(c) for c in np.unique(cz_label_before) if c > 0)
+    cz_mips_before = _per_cell_mips(cz_label_before, cz_present_before)
+    print(f"  cz before-TPS per-cell mips: {len(cz_mips_before)}  "
+          f"(landmarks: {sum(c in cz_mips_before for c in cz_anchor)}/{K})",
+          flush=True)
+
+    # CZ AFTER TPS via forward-splat: forward LP+TPS each cz mask voxel
+    # then rasterize per-cell xy histogram. More robust than inverse TPS
+    # (no extrapolation streaks).
+    print("  centroid-translate cz cells through (LP, TPS) ...", flush=True)
+    cz_candidates_for_after = sorted(set(cz_present_before) | set(cz_anchor))
+    cz_mips_after = _cz_per_cell_mips_after_tps(
+        s, lp, tps_fwd, cz_candidates_for_after,
+        grid_origin_um, grid_shape, GRID_SPACING,
+    )
+    cz_present_after = sorted(cz_mips_after.keys())
+    print(f"  cz after-TPS per-cell mips: {len(cz_mips_after)}  "
+          f"(landmarks: {sum(c in cz_mips_after for c in cz_anchor)}/{K})",
+          flush=True)
+
+    # ---- Build figure ---------------------------------------------------
+    p_lo, p_hi = np.percentile(mip488, [1.0, 99.0])
+    fig, axes = plt.subplots(1, 4, figsize=(22, 6.5), sharex=True, sharey=True)
+
+    # Green colormap for 488 raw
+    green_cmap = LinearSegmentedColormap.from_list(
+        "green", [(0, 0, 0), (0, 1, 0)])
+
+    # Panel 1: 488 raw + GFP+ ROI contours (white)
+    ax = axes[0]
+    _draw_panel_image(ax, mip488, extent, p_lo, p_hi, green_cmap)
+    _draw_contours(ax, gfp_per_cell_mips, gfp_present_ids, "white", 0.6, extent)
+    ax.set_title("488 raw + GFP+ ROI (white)")
+
+    # Panel 2: BEFORE TPS — gfp landmarks=green, others=white; cz lm=red, others=yellow
+    ax = axes[1]
+    ax.imshow(np.zeros_like(mip488), cmap="gray", origin="lower",
+              extent=extent, vmin=0, vmax=1, aspect="equal")
+    others_gfp = [c for c in gfp_present_ids if c not in gfp_anchor]
+    _draw_contours(ax, gfp_per_cell_mips, others_gfp, "white", 0.6, extent)
+    _draw_contours(ax, gfp_per_cell_mips, gfp_anchor, "lime", 1.4, extent)
+    others_cz_b = [c for c in cz_present_before if c not in cz_anchor]
+    _draw_contours(ax, cz_mips_before, others_cz_b, "yellow", 0.6, extent)
+    _draw_contours(ax, cz_mips_before, cz_anchor, "red", 1.4, extent)
+    ax.set_title("BEFORE TPS")
+
+    # Panel 3: AFTER TPS — same scheme but cz from after-TPS sampling
+    ax = axes[2]
+    ax.imshow(np.zeros_like(mip488), cmap="gray", origin="lower",
+              extent=extent, vmin=0, vmax=1, aspect="equal")
+    _draw_contours(ax, gfp_per_cell_mips, others_gfp, "white", 0.6, extent)
+    _draw_contours(ax, gfp_per_cell_mips, gfp_anchor, "lime", 1.4, extent)
+    others_cz_a = [c for c in cz_present_after if c not in cz_anchor]
+    _draw_contours(ax, cz_mips_after, others_cz_a, "yellow", 0.6, extent)
+    _draw_contours(ax, cz_mips_after, cz_anchor, "red", 1.4, extent)
+    ax.set_title("AFTER TPS")
+
+    # Panel 4: 488 raw + CZ ROIs after TPS overlaid
+    ax = axes[3]
+    _draw_panel_image(ax, mip488, extent, p_lo, p_hi, green_cmap)
+    _draw_contours(ax, cz_mips_after, others_cz_a, "yellow", 0.6, extent)
+    _draw_contours(ax, cz_mips_after, cz_anchor, "red", 1.4, extent)
+    ax.set_title("488 + CZ ROI (post-TPS)")
+
+    for ax in axes:
+        ax.set_xlabel("x (µm)"); ax.set_ylabel("y (µm)")
+
+    fig.suptitle(
+        f"{sid}  K={K}  cz={cz_anchor}  gfp={gfp_anchor}\n"
+        f"NCC bin: base={cfg['ncc_bin_base']:+.3f} → tps={cfg['ncc_bin_tps']:+.3f}  "
+        f"(Δ={cfg['ncc_bin_tps']-cfg['ncc_bin_base']:+.3f})   "
+        f"NCC img: base={cfg['ncc_img_base']:+.3f} → tps={cfg['ncc_img_tps']:+.3f}  "
+        f"(Δ={cfg['ncc_img_tps']-cfg['ncc_img_base']:+.3f})",
+        fontsize=10,
+    )
+    plt.tight_layout(rect=(0, 0, 1, 0.93))
+    out_path = OUT / f"iter8_4panel_{sid}.png"
+    plt.savefig(out_path, dpi=130)
+    plt.close(fig)
+    print(f"  → {out_path.name}", flush=True)
+    return out_path
+
+
+def main():
+    sz_pins = _load_sz_pins()
+    for sid in SUBJECTS_ALL:
+        if sid not in sz_pins:
+            print(f"{sid}: no sz pin; skipping")
+            continue
+        _render_subject(sid, sz_pins[sid])
+
+
+if __name__ == "__main__":
+    main()

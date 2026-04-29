@@ -8,6 +8,22 @@
   },
   "plugins": [
     {
+      "name": "42crunch-api-security-testing",
+      "description": "Automate API security directly in Claude Code with 42Crunch - automatically audit OpenAPI specs, detect vulnerabilities aligned with OWASP API Security risks (including BOLA/BFLA), and apply AI-powered fixes. Designed for AI-assisted development workflows, it provides continuous guardrails through an audit->scan->remediate->validate loop, ensuring APIs meet enterprise security standards before deployment.",
+      "author": {
+        "name": "42Crunch"
+      },
+      "category": "security",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/42Crunch-AI/claude-plugins.git",
+        "path": "plugins/api-security-testing",
+        "ref": "v1.0.1",
+        "sha": "56273e0e20762d76640838300a7431c4260cad32"
+      },
+      "homepage": "https://42crunch.com"
+    },
+    {
       "name": "adlc",
       "description": "Agentforce Agent Development Life Cycle — author, discover, scaffold, deploy, test, and optimize .agent files",
       "category": "development",
@@ -16,6 +32,21 @@
         "url": "https://github.com/SalesforceAIResearch/agentforce-adlc.git"
       },
       "homepage": "https://github.com/SalesforceAIResearch/agentforce-adlc"
+    },
+    {
+      "name": "adobe-for-creativity",
+      "description": "Harness Adobe's creative AI-powered tools to edit images, automate design workflows, and bring creative visions to life — from background removal to vectorization and professional retouching.",
+      "author": {
+        "name": "Adobe"
+      },
+      "category": "design",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/adobe/skills.git",
+        "path": "plugins/creative-cloud/adobe-for-creativity",
+        "ref": "main"
+      },
+      "homepage": "https://github.com/adobe/skills/tree/main/plugins/creative-cloud/adobe-for-creativity"
     },
     {
       "name": "adspirer-ads-agent",
@@ -70,6 +101,20 @@
         "sha": "5d9c13d367218e9b43a11d4502f623ab98859225"
       },
       "homepage": "https://github.com/AikidoSec/aikido-claude-plugin"
+    },
+    {
+      "name": "aiven",
+      "description": "Easily deploy managed PostgreSQL, Kafka, OpenSearch, Clickhouse, and other databases, streaming, and apps through Aiven. Free tier available, up and running in minutes.",
+      "author": {
+        "name": "Aiven"
+      },
+      "category": "database",
+      "source": {
+        "source": "github",
+        "repo": "aiven/aiven-ai-plugins",
+        "commit": "d2a7697b53826588d0faf795f39d2aa2362330da"
+      },
+      "homepage": "https://aiven.io"
     },
     {
       "name": "alloydb",
@@ -222,6 +267,22 @@
         "ref": "main"
       },
       "homepage": "https://github.com/awslabs/agent-plugins"
+    },
+    {
+      "name": "aws-dev-toolkit",
+      "description": "AWS development toolkit — 34 skills, 11 agents, and 3 MCP servers for building, migrating, and performing architecture reviews on AWS.",
+      "author": {
+        "name": "aws-samples"
+      },
+      "category": "development",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/aws-samples/sample-claude-code-plugins-for-startups.git",
+        "path": "plugins/aws-dev-toolkit",
+        "ref": "main",
+        "sha": "ddea7fdd605b42ed3900374815f358a2d4600db5"
+      },
+      "homepage": "https://github.com/aws-samples/sample-claude-code-plugins-for-startups"
     },
     {
       "name": "aws-serverless",
@@ -436,6 +497,17 @@
       "homepage": "https://github.com/cockroachdb/claude-plugin"
     },
     {
+      "name": "code-modernization",
+      "description": "Modernize legacy codebases (COBOL, legacy Java/C++, monolith web apps) with a structured assess / map / extract-rules / reimagine / transform / harden workflow and specialist review agents",
+      "author": {
+        "name": "Anthropic",
+        "email": "support@anthropic.com"
+      },
+      "source": "./plugins/code-modernization",
+      "category": "development",
+      "homepage": "https://github.com/anthropics/claude-plugins-official/tree/main/plugins/code-modernization"
+    },
+    {
       "name": "code-review",
       "description": "Automated code review for pull requests using multiple specialized agents with confidence-based scoring to filter false positives",
       "author": {
@@ -487,6 +559,19 @@
       "tags": [
         "community-managed"
       ]
+    },
+    {
+      "name": "crowdstrike-falcon-foundry",
+      "description": "CrowdStrike Falcon Foundry development skills for building cybersecurity applications on the Falcon platform. Includes UI development, collections, functions, workflows, API integration, security patterns, and debugging workflows.",
+      "author": {
+        "name": "CrowdStrike"
+      },
+      "category": "security",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/CrowdStrike/foundry-skills.git"
+      },
+      "homepage": "https://github.com/CrowdStrike/foundry-skills"
     },
     {
       "name": "csharp-lsp",
@@ -566,6 +651,20 @@
         "url": "https://github.com/datadog-labs/claude-code-plugin.git"
       },
       "homepage": "https://www.datadoghq.com/"
+    },
+    {
+      "name": "datarobot-agent-skills",
+      "description": "DataRobot skills for AI/ML workflows — model training, deployment, predictions, feature engineering, monitoring, explainability, data preparation, App Framework CI/CD, and external agent monitoring.",
+      "author": {
+        "name": "DataRobot"
+      },
+      "category": "development",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/datarobot-oss/datarobot-agent-skills.git",
+        "sha": "b3e8fd33d7c36592c802359026c15f3e067a0646"
+      },
+      "homepage": "https://datarobot.com"
     },
     {
       "name": "dataverse",
@@ -750,6 +849,20 @@
       "homepage": "https://github.com/anthropics/claude-plugins-public/tree/main/plugins/frontend-design"
     },
     {
+      "name": "fullstory",
+      "description": "Connect Claude to Fullstory to query behavioral analytics, session replays, and customer experience insights.",
+      "author": {
+        "name": "Fullstory"
+      },
+      "category": "monitoring",
+      "source": {
+        "source": "github",
+        "repo": "fullstorydev/fullstory-skills",
+        "commit": "1ec5865e7ab1449f9a0859d164c4b6a8c53b6e2f"
+      },
+      "homepage": "https://www.fullstory.com"
+    },
+    {
       "name": "github",
       "description": "Official GitHub MCP server for repository management. Create issues, manage pull requests, review code, search repositories, and interact with GitHub's full API directly from Claude Code.",
       "category": "productivity",
@@ -872,6 +985,21 @@
       }
     },
     {
+      "name": "jfrog",
+      "description": "Use the JFrog Platform from Claude Code: Artifactory repos and artifacts, security findings and exposures, Catalog package safety and downloads, workflows across the SDLC, and platform administration.",
+      "author": {
+        "name": "JFrog Ltd.",
+        "url": "https://jfrog.com"
+      },
+      "category": "security",
+      "source": {
+        "source": "github",
+        "repo": "jfrog/claude-plugin",
+        "commit": "761921eaa12b845beba1688d699a2d45091dfe83"
+      },
+      "homepage": "https://jfrog.com"
+    },
+    {
       "name": "kotlin-lsp",
       "description": "Kotlin language server for code intelligence",
       "version": "1.0.0",
@@ -965,6 +1093,21 @@
         "sha": "bf7a7aa9f9809b0dcd80cb5f7fd2795a7208a7a3"
       },
       "homepage": "https://github.com/Shopify/liquid-skills/tree/main/plugins/liquid-skills"
+    },
+    {
+      "name": "logfire",
+      "description": "Add Logfire observability to Python applications with auto-instrumentation for FastAPI, httpx, asyncpg, SQLAlchemy, and more",
+      "author": {
+        "name": "Pydantic"
+      },
+      "category": "monitoring",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/pydantic/skills.git",
+        "path": "plugins/logfire",
+        "ref": "main"
+      },
+      "homepage": "https://github.com/pydantic/skills/tree/main/plugins/logfire"
     },
     {
       "name": "lua-lsp",
@@ -1367,6 +1510,21 @@
         "url": "https://github.com/quarkusio/quarkus-agent-mcp.git"
       },
       "homepage": "https://quarkus.io"
+    },
+    {
+      "name": "rails-query",
+      "description": "Run read-only database queries against a Ruby on Rails 8.2+ app's database via `rails query` — ActiveRecord or SQL, schema/model introspection, EXPLAIN, pagination, and remote execution via Kamal.",
+      "author": {
+        "name": "Lewis Buckley",
+        "url": "https://github.com/lewispb"
+      },
+      "category": "development",
+      "source": {
+        "source": "github",
+        "repo": "lewispb/rails-query-skill",
+        "commit": "0f53fa861089e1f46097db9a92aea311f340c355"
+      },
+      "homepage": "https://github.com/lewispb/rails-query-skill"
     },
     {
       "name": "railway",
@@ -1818,8 +1976,7 @@
       "category": "security",
       "source": {
         "source": "url",
-        "url": "https://github.com/VantaInc/vanta-mcp-plugin.git",
-        "sha": "46e5bebf0484f08fc4a3c4054437cf5ec06298c9"
+        "url": "https://github.com/VantaInc/vanta-mcp-plugin.git"
       },
       "homepage": "https://help.vanta.com/en/articles/14094979-connecting-to-vanta-mcp#h_887ce3f337"
     },

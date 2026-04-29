@@ -1,0 +1,133 @@
+"""v2-S03 sub-stage (g) — gated ensemble of M3-ICP-locked + C5_szp.
+
+Per-subject decision rule:
+    Δd_med = final ICP d_med − iter0 ICP d_med
+    If Δd_med < −5 µm  → ICP improved residual → use M3-ICP-locked pairs.
+    Else                → fall back to C5_szp pairs.
+
+Validates the iter-3 hypothesis (oracle gate sum r@20 = 2.949 on 6
+subjects) by re-running M3-ICP-locked for the gate signal and reading
+C5_szp r@20 from `bench_a_szpinned_results.csv`.
+
+Outputs:
+  bench_g_ensemble_results.csv      per-subject decision + chosen r@20
+  bench_g_ensemble.log              per-row console output
+"""
+from __future__ import annotations
+
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, "/root/capsule/code/full_automatic_execution_02/lib")
+sys.path.insert(0, "/root/capsule/data/claude_data/full_automatic_execution_01")
+sys.path.insert(0, "/root/capsule/code/dev_code")
+sys.path.insert(0, "/root/capsule/data/claude_data/sessions/03c_onset_features/iterations")
+
+import pandas as pd
+
+import bench_harness_patch  # noqa: E402
+bench_harness_patch.patch()
+
+from benchmark_data_loader import BENCHMARK_SUBJECTS, load_subject  # noqa: E402
+from bench_a_szpinned import _load_sz_pins  # noqa: E402
+from bench_e_m3_icp_szpinned import m3_icp_pairs  # noqa: E402
+
+OUT = Path("/root/capsule/code/full_automatic_execution_02/sessions/v2_S03_revival_pass")
+GATE_DELTA_UM = -5.0  # ICP must reduce d_med by > 5 µm to be trusted
+
+
+def _c5_lookup() -> pd.DataFrame:
+    df = pd.read_csv(OUT / "bench_a_szpinned_results.csv")
+    return df[df.method == "C5"].set_index("subject_id")
+
+
+def main():
+    sz_pins = _load_sz_pins()
+    c5 = _c5_lookup()
+    print(f"sz pins (iter-7): {sz_pins}", flush=True)
+    print(f"gate threshold: Δd_med < {GATE_DELTA_UM:.1f} µm → use M3-ICP",
+          flush=True)
+
+    rows = []
+    for sid in BENCHMARK_SUBJECTS:
+        sz_pin = sz_pins[sid]
+        print(f"\n=== {sid}  sz_pin={sz_pin:.3f} ===", flush=True)
+        s = load_subject(sid)
+        t0 = time.time()
+        pairs_df, diag = m3_icp_pairs(s, sz_pin, verbose=False)
+        dt = time.time() - t0
+
+        # Score M3-ICP via the patched harness compare_to_gt
+        from bench.harness import compare_to_gt
+        m3_scores = compare_to_gt(pairs_df, s)
+        m3_r20 = float(m3_scores.get("recall_at_20um", 0.0))
+        m3_r30 = float(m3_scores.get("recall_at_30um", 0.0))
+
+        # Gate signal
+        hist = diag["history"]
+        if not hist:
+            d0 = d_final = float("nan")
+            delta = float("nan")
+        else:
+            d0 = float(hist[0]["d_med"])
+            d_final = float(hist[-1]["d_med"])
+            delta = d_final - d0
+        gate_pass = (not pd.isna(delta)) and (delta < GATE_DELTA_UM)
+
+        # C5 lookup
+        c5_row = c5.loc[int(sid)] if int(sid) in c5.index else c5.loc[sid]
+        c5_r20 = float(c5_row["recall_at_20um"])
+        c5_r30 = float(c5_row["recall_at_30um"])
+
+        chosen_method = "M3_ICP_locked" if gate_pass else "C5_szp"
+        chosen_r20 = m3_r20 if gate_pass else c5_r20
+        chosen_r30 = m3_r30 if gate_pass else c5_r30
+
+        row = dict(
+            subject_id=sid,
+            sz_pin=sz_pin,
+            d_med_iter0=d0,
+            d_med_final=d_final,
+            delta_d_med=delta,
+            n_iters=diag["n_iters"],
+            icp_converged=diag["converged"],
+            gate_pass=gate_pass,
+            chosen_method=chosen_method,
+            ensemble_r20=chosen_r20,
+            ensemble_r30=chosen_r30,
+            m3_icp_r20=m3_r20,
+            m3_icp_r30=m3_r30,
+            c5_szp_r20=c5_r20,
+            c5_szp_r30=c5_r30,
+            runtime_s=round(dt, 2),
+        )
+        rows.append(row)
+        print(
+            f"  d_med {d0:.1f} → {d_final:.1f}  Δ={delta:+.1f}µm  "
+            f"gate={'PASS' if gate_pass else 'FAIL'}  → {chosen_method}",
+            flush=True,
+        )
+        print(
+            f"  M3-ICP r@20={m3_r20:.3f}  C5_szp r@20={c5_r20:.3f}  "
+            f"ensemble r@20={chosen_r20:.3f}",
+            flush=True,
+        )
+
+    df = pd.DataFrame(rows)
+    df.to_csv(OUT / "bench_g_ensemble_results.csv", index=False)
+
+    print("\n=== ensemble summary ===")
+    cols = ["subject_id", "delta_d_med", "gate_pass", "chosen_method",
+            "ensemble_r20", "m3_icp_r20", "c5_szp_r20"]
+    print(df[cols].round(3).to_string(index=False))
+    print(f"\nsum ensemble r@20: {df['ensemble_r20'].sum():.3f}")
+    print(f"sum ensemble r@30: {df['ensemble_r30'].sum():.3f}")
+    print(f"sum M3-ICP r@20:   {df['m3_icp_r20'].sum():.3f}")
+    print(f"sum C5_szp r@20:   {df['c5_szp_r20'].sum():.3f}")
+    print(f"oracle (max per subj) r@20: "
+          f"{df[['m3_icp_r20', 'c5_szp_r20']].max(axis=1).sum():.3f}")
+
+
+if __name__ == "__main__":
+    main()

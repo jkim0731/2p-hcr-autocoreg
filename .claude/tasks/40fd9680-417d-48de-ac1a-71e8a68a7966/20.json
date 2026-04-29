@@ -1,0 +1,9 @@
+{
+  "id": "20",
+  "subject": "Implement gated ensemble M3-ICP + C5_szp",
+  "description": "Build bench_g_ensemble.py: run M3-ICP-locked and C5_szp per subject; gate on (final d_med - iter0 d_med < -5 µm); fall back to C5 when gate fails. Validate that the gate reproduces the oracle 2.949 sum r@20 on the 6-subject benchmark. Pre-requisite: user direction on whether to commit before pushing to v2-S04.",
+  "activeForm": "Implementing gated ensemble",
+  "status": "completed",
+  "blocks": [],
+  "blockedBy": []
+}

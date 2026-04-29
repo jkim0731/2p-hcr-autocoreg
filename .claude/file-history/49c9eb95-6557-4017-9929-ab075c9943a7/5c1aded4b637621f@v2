@@ -1,0 +1,103 @@
+# v2-S05 Stage E.TPS — seed-constellation expansion
+
+## Goal
+
+Validate whether the K=4 seed constellation produced by Stage D
+(v2-S04 iter 4) yields a per-cell mapping that **lifts r@20 on the
+rescue targets 755252 and 782149** to v1-parity — without manual
+landmarks.
+
+## Inputs
+
+- Best K=4 anchors per subject from
+  `v2_S04_seed_constellation/step2_all_subjects_summary_wide.csv`
+  (TOP_K_HCR=3, TOP_N_CZ=50, gated by pairwise spread + hull area,
+  scored by aniso-similarity RMSE on the 4 anchor pairs).
+
+## Method (`bench_e_tps.py`)
+
+For each subject:
+
+1. Recover the (cz_um, hcr_um) for the 4 anchor (cz_id, hcr_id) pairs
+   in (z, y, x) µm via `centroid_helpers.centroids_um`.
+2. Fit aniso-similarity (R, scales, t) on the 4 anchors directly,
+   re-deriving src_mean and dst_mean to match the row-vector formula
+   `pred = (src - src_mean) @ R * scales + dst_mean`.  We do not call
+   `fit_anisotropic_similarity().translation` due to the column-vs-row
+   convention bug.
+3. Apply the transform to all CZ centroids (E_TPS_aniso) → NN-match
+   each warped CZ to nearest HCR GFP+ within 30 µm.
+4. Variant E_TPS_aniso_icp: chain into M3-style locked-scale rigid
+   ICP (residual SE(3), inlier-MAD outlier rejection, max 10 iters).
+
+K=4 thin-plate-spline was rejected — TPS in 3D needs ≥ 4 control
+points to be solvable, and at exactly K=4 the kernel is degenerate.
+The aniso-similarity (9 DOF / 12 obs / 3 residual DOF) is the
+honest model for 4 anchor points.
+
+## Results (vs v2-S03 gated-ensemble baseline, r@20)
+
+| subj    | baseline | E_TPS_aniso | E_TPS_aniso_icp | anchor_rmse | anchor_validation |
+|---------|---------:|------------:|----------------:|------------:|:------------------|
+| 755252  |   0.069  |       0.102 |           0.149 |        0.57 | 4/4 correct       |
+| 767018  |   0.861  |       0.077 |           0.150 |        1.69 | 1/3 correct       |
+| 767022  |   0.663  |       0.182 |           0.291 |        0.36 | 3/4 correct       |
+| 782149  |   0.155  |       0.046 |           0.010 |        1.40 | 1/2 correct       |
+| 788406  |   0.438  |       0.111 |           0.145 |        0.99 | 2/3 correct       |
+| 790322  |   0.763  |       0.387 |           0.805 |        1.05 | 2/2 correct       |
+| **sum** | **2.949**|   **0.904** |       **1.550** |             |                   |
+
+## Conclusion: **E.TPS fails on the rescue targets**
+
+- **755252** (4/4 correct anchors, anchor_rmse 0.57 µm) lifts only to
+  r@20 = 0.149 — far short of v1-parity (~0.65).
+- **782149** (1/2 correct anchors, anchor_rmse 1.40 µm) drops from
+  0.155 to 0.010 — anchors are wrong, transform is wrong.
+- Even on subjects with good ensemble baseline (767018: 0.861), the
+  seed-constellation transform is far worse (0.150).
+- Only **790322** (2/2 correct anchors, well-distributed) actually
+  matches baseline (0.805 vs 0.763) — modest lift.
+
+## Root cause
+
+K=4 in 3D is **structurally under-constrained** for global affine
+inference:
+- 9-DOF aniso-similarity on 12 observations leaves only 3 residual DOF.
+- Low anchor RMSE (≤ 1.7 µm here) ≠ correct global transform.
+- The fit may match anchors well but **extrapolate poorly** to cells
+  far from the K=4 hull, especially at the depth-extreme tails (where
+  most cells live).
+- This is the failure mode predicted by v1 §11.
+
+The validation pattern confirms it: subjects where 50–100 % of the
+K=4 anchors are correct (790322, 755252) get either modest lift or
+match baseline.  Subjects with ≤ 50 % anchor correctness (767018,
+782149) get catastrophically wrong transforms — yet anchor RMSE is
+still ≤ 1.7 µm, so RMSE-based ranking did not catch it.
+
+## Implication for the v2 plan
+
+Stage D's K=4 + 1-RMSE-rank approach has reached its ceiling.  The
+"automatic constellation that lifts r@20 to v1-parity on rescue
+targets" objective is **not met** by K=4 from 50 top-slab CZ.  Two
+possible directions:
+
+A. **Escalate K** — try K∈{6, 8, 10} so the aniso fit has more
+   residual DOF and incorrect quadruples are penalised more.  Cost:
+   combinatorial blow-up (6 of 50 = 16M; 8 of 50 = 537M).  Need
+   smarter pruning.
+
+B. **Stop Stage D and accept the C5+M3-ICP gated ensemble as v2's
+   automatic ceiling**, then route 755252 / 782149 to manual landmark
+   collection in Stage F (GUI).
+
+Per the project's "automatic Stage D ceiling reached" branch in
+docs/09 §6, **option B is the principled exit** — we have shown that
+no automatic seed-constellation derived purely from candidate
+geometry can rescue the failure subjects with K=4 anchors.
+
+## Outputs
+
+- `bench_e_tps.py`            — bench script
+- `bench_e_tps_results.csv`   — per-subject scores
+- `bench_e_tps.log`           — full ICP trace

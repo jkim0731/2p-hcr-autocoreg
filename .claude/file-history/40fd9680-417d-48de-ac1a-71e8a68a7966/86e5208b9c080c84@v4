@@ -1,0 +1,300 @@
+# v2-S03 — Stage E.RV: revival of v1 candidates with locked priors
+
+**Date:** 2026-04-27
+**Owner:** automatic
+**Status:** in-progress
+**Companion docs:** `/root/capsule/code/docs/09 Full automatic v2 plan.md` §5 line 448-462
+
+## Goal
+
+Re-bench v1 candidates with the Stage A locked-prior warm-start (instead
+of `default_warmstart_zyx`'s session-07 ICP, which was REVOKED for being
+GT-tuned).  Per v2 plan §5 the order is:
+
+(a) **P1 / P4 / P6 / C5** with the Stage A frame (sz pinned when v2-S02
+    passed; otherwise sz left free).
+(b) **P3 RANSAC** with sxy + t_xy locked.
+(c) **P5 FGW** with sxy-rescaled CZ centroids.
+(d) **M1 image NCC** on the surface_registration_v2 crop using PWR4×4
+    warped CZ binary.
+(e) **M3 mask + ICP** with M1 → Stage A as warm-start.
+
+## v2-S02 outcome (consumed by this session)
+
+`sz_s = FAILED` for **all 6 subjects** (smoothed_voxel best image-NCC
+metric: 4/6 within ±0.30 of GT but 0/6 pass strict HW≤0.30 criterion).
+Per v2 plan §6 stop-rule: sz-locked variants are skipped on these
+subjects; sxy-only branches still run.  In practice this means P1/P4/P6/
+C5 here run with `sz` left free (the candidate fits its own sz inside
+the anisotropic-affine).
+
+## Pass criterion (per method, across 6 subjects)
+
+> Anything beating C5 r@20 on ≥ 4/6 subjects enters production. (§5)
+
+v1 baseline (S56 `three_way_results.csv`, "auto3" column = C5 with auto
+strategy selection):
+
+| sid    | n_hcr | C5 r@20 |
+|--------|-------|---------|
+| 788406 | 17427 | 0.263   |
+| 790322 | 10131 | 0.289   |
+| 755252 | 30804 | 0.066   |
+| 767022 | 14239 | 0.117   |
+| 767018 |  9161 | 0.315   |
+| 782149 |  3831 | 0.000   |
+|  sum   |       | **1.050** |
+
+## Method (a — P1/P4/P6/C5 with locked prior)
+
+1. For each subject, compute `compute_locked_prior_warm_start(s)`.
+2. Warp CZ centroids in HCR µm using the locked frame:
+   `cz_init_zyx = (cz_zyx − src_mean_zyx) · diag(scales) · R^T + t`.
+3. Replace v1's `default_warmstart_zyx` output by monkey-patching the
+   helper, so P1/P4/P6 (and therefore C5) all consume the locked
+   `cz_init`.
+4. Run each candidate via `bench.harness.run_candidate(...)` and capture
+   `r@5/10/20/30`, `n_pred`, `median_error_um`.
+5. Compare to v1 baseline column-for-column.
+
+## Cost estimate
+
+Per subject, P1+P4+P6 ≈ 5 min (S56 records).  C5 = sum.  All four ×
+6 subjects ≈ 30 min for sub-stage (a).
+
+## Inputs (cached)
+
+* Stage A: `compute_locked_prior_warm_start(s)` from
+  `full_automatic_execution_02/lib/locked_prior_warm.py`.
+* v1 candidate registry: `full_automatic_execution_01/bench/candidate_impls/`.
+
+## Iteration log
+
+* **2026-04-27 — iter 0.**  Scaffolding session.  About to write the
+  monkey-patched warm-start helper and the (a) runner.
+
+* **2026-04-27 — iter 1.**  Implemented `bench_a_p1_p4_p6_c5.py` (monkey-
+  patches `lib.centroid_helpers.default_warmstart_zyx` to return locked-
+  prior-warped CZ centroids).  Ran on all 6 subjects (~22 min).
+  Results, **r@20 per method × subject** (LP warm-start in v2 vs v1
+  baseline `three_way_results.csv`):
+
+  | sid    | C5_v2 | C5_v1 | Δ     | P4_v2 | P4_v1 | P1_v2 | P1_v1 | P6_v2 | P6_v1 |
+  |--------|-------|-------|-------|-------|-------|-------|-------|-------|-------|
+  | 755252 | 0.066 | 0.066 | 0.000 | 0.061 | 0.091 | 0.006 | 0.044 | 0.052 | 0.052 |
+  | 767018 | 0.582 | 0.315 | +0.267| 0.575 | 0.308 | 0.147 | 0.143 | 0.264 | 0.264 |
+  | 767022 | 0.223 | 0.117 | +0.106| 0.213 | 0.048 | 0.166 | 0.103 | 0.053 | 0.053 |
+  | 782149 | 0.020 | 0.000 | +0.020| 0.010 | 0.000 | 0.023 | 0.000 | 0.000 | 0.000 |
+  | 788406 | 0.098 | 0.263 | −0.165| 0.112 | 0.173 | 0.062 | 0.234 | 0.175 | 0.175 |
+  | 790322 | 0.479 | 0.289 | +0.190| 0.420 | 0.177 | 0.401 | 0.251 | 0.224 | 0.224 |
+  | sum    | **1.468** | 1.050 | **+0.418** | **1.391** | 0.797 | 0.806 | 0.775 | 0.767 | 0.768 |
+
+  **C5 with LP warm-start beats v1 C5 on 4/6 subjects strictly**
+  (767018, 767022, 782149*, 790322; 755252 ties), satisfying the v2
+  plan §5 production threshold.  Sum r@20 = 1.468 vs v1 1.050 (+40 %).
+  P4 sees the biggest individual gain (sum 1.391 vs 0.797).  P6 is
+  unchanged across all subjects (its CPD step ignores the warm-start
+  rigid_scale; only P1's TLS and P4's spectral matching consume it).
+
+  Loser: 788406 (C5 0.098 vs v1 0.263).  v2-S02 found `sz_peak ≈ 2.90`
+  ≈ GT, but FAILED the strict HW criterion → LP's depth-ratio
+  `sz_init = 3.596` (28 % high) drives this regression.  Per v2 plan,
+  we accept this — no fallback.
+
+  *782149's "win" is trivial (0.020 vs 0.000) — both within noise.
+
+  **Decision:** sub-stage (a) goal met.  Move to (b) P3 RANSAC and (c)
+  P5 FGW with the same LP scaffold; defer (d) M1 image-NCC and (e) M3
+  mask+ICP to a follow-up iteration (different code path).
+
+* **2026-04-28 — iter 2 (sz pinned per subject).**  v2-S02 iter-7
+  (slab-rigid NCC) PASSED 6/6 with mean |err|=0.040 µm (see
+  `sessions/v2_S02_sz_image_sweep/log.md` iter-7).  Re-ran sub-stage (a)
+  with `compute_locked_prior_warm_start(s, sz_init=sz_peak_iter7)`,
+  installed `bench_harness_patch` so r@30 is reported alongside r@5/10/20.
+  Two infrastructure fixes were needed during this iter:
+    1. Stale paths in `surface_registration_v2.py` (still pointed to the
+       moved `code/sessions/08_surface_vascular_match`); fixed to
+       `data/claude_data/sessions/08_…`.
+    2. `probreg` and `SimpleITK` were missing in the post-reshuffle env;
+       installed both.  P6 + C5 had silently returned `n_pred=0` (the
+       harness `run_candidate` swallows import errors; bench script now
+       surfaces `result["error"]`).
+  Runner: `bench_a_szpinned.py` (~22 min on 6 subjects).
+  CSV:    `bench_a_szpinned_results.csv` (24 rows; P1/P4/P6/C5 × 6).
+
+  **r@20 per method × subject (sz pinned vs sz free):**
+
+  | sid    | sz_pin | C5_szp | C5_free | Δ     | P4_szp | P4_free | P1_szp | P1_free | P6_szp | P6_free |
+  |--------|--------|--------|---------|-------|--------|---------|--------|---------|--------|---------|
+  | 755252 | 2.10   | 0.069  | 0.066   | +0.003| 0.066  | 0.061   | 0.009  | 0.006   | 0.052  | 0.052   |
+  | 767018 | 3.60   | 0.553  | 0.582   | −0.029| 0.542  | 0.575   | 0.147  | 0.147   | 0.264  | 0.264   |
+  | 767022 | 2.40   | 0.284  | 0.223   | +0.061| 0.308  | 0.213   | 0.206  | 0.166   | 0.053  | 0.053   |
+  | 782149 | 2.90   | 0.155  | 0.020   | +0.135| 0.155  | 0.010   | 0.000  | 0.023   | 0.000  | 0.000   |
+  | 788406 | 2.80   | 0.375  | 0.098   |**+0.277**| 0.342| 0.112  | 0.319  | 0.062   | 0.175  | 0.175   |
+  | 790322 | 3.10   | 0.631  | 0.479   | +0.152| 0.600  | 0.420   | 0.530  | 0.401   | 0.224  | 0.224   |
+  | sum    |        |**2.067**|**1.468**|**+0.599**|**2.013**|**1.391**|**1.211**|**0.806**|**0.767**|**0.767**|
+
+  **Outcome:** sz pin lifts sum r@20 by +0.60 on C5, +0.62 on P4, +0.41
+  on P1.  P6 is unchanged across all subjects — its CPD-nonrigid step
+  re-fits all 7 DOF independently of the warm-start scale.
+
+  788406 — the iter-1 regression target — recovers cleanly: C5 0.098 →
+  0.375 (+0.28), P4 0.112 → 0.342 (+0.23), P1 0.062 → 0.319 (+0.26).
+  This validates the v2-S02 sz-pin recipe end-to-end.
+
+  C5 (sz pinned) vs v1 baseline `three_way_results.csv` (sum 1.050) →
+  **+0.97 sum r@20 (~2× the v1 baseline)**.  C5 (sz pinned) beats C5
+  (sz free) on 5/6 subjects (only 767018 regresses by 0.029).
+
+  **Decision:** sz-pin recipe accepted.  Move to (b) P3 RANSAC and (c)
+  P5 FGW with the same warm-start.
+
+* **2026-04-28 — iter 2b/c (P3 + P5 with sz pinned).**  Runner:
+  `bench_bc_szpinned.py`.  Installed `pot` (POT Python OT) — P5's only
+  optional dep, missing from the post-reshuffle env (this is the same
+  silent `n_pred=0` failure mode as P6/C5 with `probreg`).  Total runtime
+  ≈ 22 min.  CSV: `bench_bc_szpinned_results.csv`.
+
+  **r@20 per method × subject (sz pinned vs sz free):**
+
+  | sid    | sz_pin | P3_szp | P3_free | Δ      | P5_szp | P5_free |
+  |--------|--------|--------|---------|--------|--------|---------|
+  | 755252 | 2.10   | 0.013  | 0.000   | +0.013 | 0.000  | 0.000   |
+  | 767018 | 3.60   | 0.070  | 0.172   | −0.103 | 0.000  | 0.000   |
+  | 767022 | 2.40   | 0.221  | 0.206   | +0.015 | 0.000  | 0.000   |
+  | 782149 | 2.90   | 0.053  | 0.000   | +0.053 | 0.000  | 0.000   |
+  | 788406 | 2.80   | 0.182  | 0.038   | +0.143 | 0.000  | 0.000   |
+  | 790322 | 3.10   | 0.333  | 0.167   | +0.166 | 0.001  | 0.000   |
+  | sum    |        |**0.870**|**0.583**|**+0.287**|**0.001**|**0.000**|
+
+  **P3:** sz pin lifts sum r@20 by +0.29 (788406 +0.14, 790322 +0.17 are
+  the biggest gains; 767018 regresses by 0.10 — a curious outlier).  P3
+  still trails C5 (sum 0.870 vs 2.067), so it does not enter production.
+
+  **P5:** FGW now produces predictions (POT installed) but all pairs are
+  garbage — median error 700–2000 µm across subjects (recall ≈ 0).  Sub-
+  stage (c) effectively NEGATIVE: FGW does not converge to a useful
+  matching even with sxy + sz both pinned.  Investigated and root-caused
+  to the candidate's solver, not the warm-start (the LP delivers correct
+  centroids; FGW collapses regardless).  P5 is dropped from the v2
+  candidate menu.
+
+  **Decision:** sub-stage (b) goal met for P3.  Sub-stage (c) closed
+  negative for P5.  Move to (d) M1 image-NCC and (e) M3 mask + ICP.
+
+* **2026-04-28 — iter 2 d/e (M1 skipped; M3-ICP-locked authored).**
+  Sub-stage (d) M1 image-NCC: SKIPPED.  Per user direction, M1 alone is
+  rough alignment only — redundant with v2-S02 iter-7 (which already
+  provides surface+slab-rigid alignment with NCC on the same image).
+  Goal of sub-stages (a–e) is *cell-cell matching*, not rough align.
+
+  Sub-stage (e) M3: discovered v1's M3 (`_m3_mask_centroid.py`) bypasses
+  `default_warmstart_zyx` entirely — it calls `run_m1` (own warmstart)
+  then `run_p1(s, cz_init=...)` with a precomputed `cz_init`, so the
+  monkey-patch has zero effect.  A single trial run on 755252 with the
+  v1 M3 path confirmed garbage (r@20=0, n=483, med=897 µm).
+
+  **Replacement: `bench_e_m3_icp_szpinned.py` — "M3-ICP-locked".**  New
+  candidate distinct from C5/P1/P4/P6: keep Stage A's 7-DOF affine fixed
+  (especially the GT-validated sz pin), iterate ONLY residual rigid
+  (R, t) ∈ SE(3) on `cz_init → hcr_gfp` via robust MAD-inlier 1-NN
+  matching.  Procrustes (no scale).  Stops at |Δt|<0.5µm AND |Δθ|<0.2°,
+  max 10 iters.  Output: 1-NN per CZ, drop d>30µm, conf=1/(1+d/σ_med),
+  dedupe best-conf-per-hcr.
+
+  Runtime: 0.1 s/subject (~1 s total), no probreg/POT.
+
+  **r@20 per subject (M3-ICP-locked vs C5_szp):**
+
+  | sid    | sz_pin | M3_ICP | C5_szp | Δ      | n_pred | iters | conv |
+  |--------|--------|--------|--------|--------|--------|-------|------|
+  | 755252 | 2.10   | 0.000  | 0.069  | −0.069 |   522  | 10    | F    |
+  | 767018 | 3.60   | 0.861  | 0.553  | **+0.308** | 518 | 10  | F    |
+  | 767022 | 2.40   | 0.663  | 0.284  | **+0.379** | 765 |  7  | T    |
+  | 782149 | 2.90   | 0.003  | 0.155  | −0.152 |    59  | 10    | F    |
+  | 788406 | 2.80   | 0.438  | 0.375  | +0.063 |   561  | 10    | F    |
+  | 790322 | 3.10   | 0.763  | 0.631  | +0.132 |   663  |  7    | T    |
+  | sum    |        |**2.729**|**2.067**|**+0.662**|       |       |      |
+
+  **Outcome:** M3-ICP-locked beats C5 strictly on 4/6 (767018, 767022,
+  788406, 790322) — meets v2 plan §5 production threshold.  Two
+  catastrophic failures: 755252 ICP stuck (iter0 d_med=24 µm but never
+  converges — anchor wrong); 782149 ICP **diverges** (Δt grows from 33
+  → 98 µm across iters, Δθ → 3.17°; iter0 d_med=89 µm — initial NN match
+  far worse than other subjects).  Both failure subjects: ICP basin too
+  shallow / NN locks onto wrong cells when LP warmstart is more than
+  ~50 µm off.
+
+  Sum r@30 = 2.838 (vs C5 sum r@30 not in same CSV — see iter 2 a).
+
+  Where M3-ICP-locked **wins big** (767018, 767022): ICP gains +0.30 to
+  +0.38 over C5 — these are subjects where the 7-DOF affine is correct
+  but C5's per-method drift smears the matching; locking S+R^180 and
+  doing pure SE(3) refinement converges sharply (med err = 0.0 µm on
+  the matched cells).
+
+  Where it **fails** (755252, 782149): warmstart-quality bottlenecked.
+  Need a recovery path before promoting unconditionally.
+
+  **Decision:** sub-stage (e) **PASSES production threshold (4/6).**
+  Per v2 plan §5 verbatim ("anything beating C5 r@20 on ≥ 4/6 subjects
+  enters production"), M3-ICP-locked enters production as a v2
+  candidate.  But the 2/6 failure mode (catastrophic, not graceful)
+  argues for it being an *ensemble member alongside C5*, not a sole
+  replacement.  Followup proposal: ensemble selector that picks
+  M3-ICP-locked when ICP `converged=True` AND iter-final n_inliers ≥
+  some fraction; falls back to C5 otherwise.  Filed for v2-S04 followup.
+
+  **Sub-stages (a–e) of v2-S03 closed.**  Net session win:
+   - C5 with sz pin: **+0.97 sum r@20 over v1 baseline** (1.050 → 2.067)
+   - M3-ICP-locked (4/6): **+1.68 sum r@20 over v1 baseline** (1.050 →
+     2.729) on the 4 subjects where it converges; degrades on 2/6.
+
+  Files:
+  - `bench_e_m3_icp_szpinned.py`         (runner / candidate body)
+  - `bench_e_m3_icp_szpinned_results.csv` (6 rows)
+  - `bench_e_m3_icp_szpinned.log`         (per-iter ICP trace)
+
+* **2026-04-28 — iter 3 (ensemble gate analysis, no new run).**
+  Failure-mode investigation of M3-ICP-locked on 755252 + 782149 from the
+  existing `bench_e_m3_icp_szpinned.log`.  Hypothesis: ICP that fails to
+  reduce its NN-residual d_med has not found a better alignment than the
+  LP warmstart, regardless of whether `converged` flag is True/False.
+
+  **Per-subject ICP residual change (iter0 d_med → final d_med):**
+
+  | sid    | pre d_med | post d_med | Δ      | r@20 truth | gate (Δ<−5µm) |
+  |--------|-----------|------------|--------|------------|----------------|
+  | 755252 |   24.7    |    24.2    |  −0.5  | 0.000 (F)  | FAIL  ✓        |
+  | 767018 |   45.2    |    20.6    | −24.6  | 0.861 (W)  | PASS  ✓        |
+  | 767022 |   32.4    |    16.7    | −15.7  | 0.663 (W)  | PASS  ✓        |
+  | 782149 |   88.7    |    91.0    |  +2.3  | 0.003 (F)  | FAIL  ✓        |
+  | 788406 |   31.5    |    25.2    |  −6.3  | 0.438 (W)  | PASS  ✓        |
+  | 790322 |   32.3    |    22.5    |  −9.8  | 0.763 (W)  | PASS  ✓        |
+
+  Gate **"final d_med − iter0 d_med < −5 µm"** is a perfect classifier
+  on this 6-subject benchmark.  Threshold separation is wide
+  (winners ≥ 6.3 µm of improvement; losers ≤ 0.5 µm or worse).
+  Caveat: 6 subjects, ~2 failures — the threshold is not statistically
+  validated; any cutoff in (0.5, 6.3) would also work here.  Need a
+  larger benchmark to fix the cutoff.
+
+  **Ensemble: `M3-ICP-locked when gate passes, else C5_szp`** — oracle
+  upper-bound on this benchmark:
+
+  | ensemble       | 755252 | 767018 | 767022 | 782149 | 788406 | 790322 | sum r@20 |
+  |----------------|--------|--------|--------|--------|--------|--------|----------|
+  | C5_szp alone   | 0.069  | 0.553  | 0.284  | 0.155  | 0.375  | 0.631  | 2.067    |
+  | M3-ICP alone   | 0.000  | 0.861  | 0.663  | 0.003  | 0.438  | 0.763  | 2.729    |
+  | **Gated**      | 0.069  | 0.861  | 0.663  | 0.155  | 0.438  | 0.763  | **2.949**|
+
+  vs v1 baseline (1.050): **+1.90 sum r@20 (2.8× v1)**.  vs C5_szp
+  (2.067): **+0.88**.
+
+  **Decision:** v2-S03 stays *closed* with M3-ICP-locked promoted.  The
+  gated ensemble is the natural next deliverable.  Filed as v2-S04 task
+  precursor: implement `bench_g_ensemble.py` that runs both M3-ICP and
+  C5_szp per subject, applies the d_med-improvement gate, and reports
+  the gated sum (and the gate's predicate per subject for audit).  Hold
+  for user direction before committing.

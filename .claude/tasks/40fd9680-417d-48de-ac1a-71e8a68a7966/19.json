@@ -1,0 +1,9 @@
+{
+  "id": "19",
+  "subject": "v2-S03 (e) M3 mask+ICP with sz-pinned LP warm-start",
+  "description": "Drop M1 dependency; use Stage A locked-prior as the warm-start for the ICP refinement. sz pinned.",
+  "activeForm": "Running v2-S03 (e) M3",
+  "status": "completed",
+  "blocks": [],
+  "blockedBy": []
+}

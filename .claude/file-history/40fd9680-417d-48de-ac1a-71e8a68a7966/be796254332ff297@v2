@@ -1,0 +1,402 @@
+"""v2-S04 iter 8 step 1 — matched cz↔gfp pairs by centroid distance + ROI IoU.
+
+Per the rewritten protocol (2026-04-29):
+After LP+sz-pin surface registration, build a *matched* set of cz↔gfp pairs.
+Each pair is scored by:
+  - centroid distance (xy + z, as before)
+  - ROI IoU after LP-warping the cz ROI into HCR µm space
+
+We compute IoU on a local 1 µm voxel grid covering the union of the cz ROI
+(LP-warped) bbox and the gfp ROI (level-0 zarr) bbox. CZ per-cell masks come
+from `cz_voronoi_labels` (R=8 µm, intensity-thresholded). GFP per-cell masks
+come from `segmentation_mask.zarr["0"]` cropped to each cell's pickle bbox.
+
+Pairs are pre-filtered by centroid distance (R_xy=60 µm, R_z=30 µm) before
+computing IoU to keep cost bounded.
+
+Output per subject: `iter8_pairs_{sid}.csv` with columns:
+  cz_id, gfp_id, d_xy_um, d_z_um, d3_um, iou, score
+where score = (1 - d_xy/R_xy) * (1 - d_z/R_z) * (0.5 + iou).
+"""
+from __future__ import annotations
+
+import glob
+import os
+import pickle
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, "/root/capsule/code/full_automatic_execution_02/lib")
+sys.path.insert(0, "/root/capsule/code/dev_code")
+sys.path.insert(0, "/root/capsule/data/claude_data/full_automatic_execution_01")
+sys.path.insert(0, "/root/capsule/data/claude_data/sessions/03c_onset_features/iterations")
+sys.path.insert(0, "/root/capsule/data/claude_data/sessions/08_surface_vascular_match")
+
+import numpy as np
+import pandas as pd
+import zarr
+from scipy.ndimage import map_coordinates
+
+from benchmark_data_loader import load_subject, HCR_SEG_XY_DOWNSAMPLE
+from benchmark_analysis import depth_from_surface
+import lib.centroid_helpers as ch
+import lib.cz_labels as cz_labels_mod
+from locked_prior_warm import compute_locked_prior_warm_start, apply_to_cz_um
+from surfaces_iter08 import get_cz_surface_iter08, get_hcr_top_surface_iter07
+
+OUT = Path(__file__).resolve().parent
+SUBJECTS_ALL = ["755252", "767018", "767022", "782149", "788406", "790322"]
+# Top 50 µm from the HCR top surface, in HCR µm (i.e. AFTER LP+sz-pin
+# registration so both modalities are compared in the same depth frame).
+DEPTH_BAND_UM = (0.0, 50.0)
+R_XY_UM = 60.0
+R_Z_UM = 30.0
+IOU_GRID_UM = 1.5  # voxel size for the per-pair IoU grid (HCR µm)
+
+
+# 767018 zstack fallback
+_orig_load_zstack = cz_labels_mod._load_zstack
+def _patched_load_zstack(s):
+    try:
+        return _orig_load_zstack(s)
+    except StopIteration:
+        import tifffile
+        zs_path = next(Path(s.coreg_dir).glob("*_zstack.tif"))
+        return tifffile.imread(zs_path).astype(np.float32)
+cz_labels_mod._load_zstack = _patched_load_zstack
+
+
+def _load_sz_pins() -> dict:
+    df = pd.read_csv(
+        "/root/capsule/code/full_automatic_execution_02/sessions/"
+        "v2_S02_sz_image_sweep/results_iter7_summary.csv"
+    )
+    col = "sz_peak" if "sz_peak" in df.columns else "sz"
+    df["subject_id"] = df["subject_id"].astype(str)
+    return {str(r["subject_id"]): float(r[col]) for _, r in df.iterrows()}
+
+
+def _hcr_metrics_path(sid: str) -> Path:
+    hits = sorted(glob.glob(
+        f"/root/capsule/data/HCR_{sid}_*/cell_body_segmentation/metrics.pickle"
+    ))
+    if not hits:
+        raise FileNotFoundError(f"HCR metrics.pickle for {sid}")
+    return Path(hits[-1])
+
+
+def _hcr_seg_zarr_path(sid: str) -> Path:
+    hits = sorted(glob.glob(
+        f"/root/capsule/data/HCR_{sid}_*/cell_body_segmentation/segmentation_mask.zarr"
+    ))
+    if not hits:
+        raise FileNotFoundError(f"HCR segmentation zarr for {sid}")
+    return Path(hits[-1])
+
+
+def _cz_per_cell_masks(s, cz_ids):
+    """Return {cz_id: (mask_zyx_local, origin_zyx_vox)} in CZ vox.
+    Crops cz_voronoi_labels to each cell's bbox.
+    """
+    labels = cz_labels_mod.cz_voronoi_labels(s)
+    out = {}
+    for cid in cz_ids:
+        cid = int(cid)
+        loc = np.where(labels == cid)
+        if len(loc[0]) == 0:
+            continue
+        z0, z1 = int(loc[0].min()), int(loc[0].max()) + 1
+        y0, y1 = int(loc[1].min()), int(loc[1].max()) + 1
+        x0, x1 = int(loc[2].min()), int(loc[2].max()) + 1
+        m = (labels[z0:z1, y0:y1, x0:x1] == cid).astype(np.uint8)
+        out[cid] = (m, (z0, y0, x0))
+    return out
+
+
+def _gfp_per_cell_masks(sid, gfp_ids, centroids_z0=None):
+    """Return {gfp_id: (mask_zyx_local, origin_zyx_vox_level0)}.
+
+    When `metrics.pickle` is available, uses the recorded global_bbox per cell.
+    Otherwise falls back to a fixed crop around the cell centroid (level-0
+    voxels) — sufficient to contain a single cell.
+    """
+    z = zarr.open(str(_hcr_seg_zarr_path(sid)))["0"]
+    Z, Y, X = z.shape[-3:]
+
+    # Per-cell bbox source: pickle if available, else centroid-radius
+    try:
+        with open(_hcr_metrics_path(sid), "rb") as f:
+            metrics = pickle.load(f)
+        bbox_lookup = {int(k): np.asarray(metrics[k]["global_bbox"], int)
+                       for k in metrics}
+    except FileNotFoundError:
+        metrics = None
+        # cell_centroids.npy: (N, 4) z, y, x, id at level-0 vox
+        cc_path = sorted(glob.glob(
+            f"/root/capsule/data/HCR_{sid}_*/cell_body_segmentation/cell_centroids.npy"
+        ))[-1]
+        cc = np.load(cc_path)
+        # cell_centroids.npy is in level-2 voxel frame for xy (NOT level-0);
+        # rescale xy by HCR_SEG_XY_DOWNSAMPLE to query level-0 zarr.
+        cz_arr = cc[:, 0].astype(int)
+        cy = (cc[:, 1] * HCR_SEG_XY_DOWNSAMPLE).astype(int)
+        cx = (cc[:, 2] * HCR_SEG_XY_DOWNSAMPLE).astype(int)
+        cid = cc[:, 3].astype(int)
+        cm = {int(i): (int(cz_arr[k]), int(cy[k]), int(cx[k]))
+              for k, i in enumerate(cid)}
+        bbox_lookup = {}
+        # Box: ±15 vox z (~15 µm), ±60 vox xy at level-0 (~15 µm)
+        for gid in gfp_ids:
+            gid = int(gid)
+            if gid not in cm:
+                continue
+            cz, cy_, cx_ = cm[gid]
+            z0 = max(cz - 15, 0); z1 = min(cz + 16, Z)
+            y0 = max(cy_ - 60, 0); y1 = min(cy_ + 61, Y)
+            x0 = max(cx_ - 60, 0); x1 = min(cx_ + 61, X)
+            bbox_lookup[gid] = np.array([z0, y0, x0, z1 - 1, y1 - 1, x1 - 1])
+
+    out = {}
+    for gid in gfp_ids:
+        gid = int(gid)
+        bb = bbox_lookup.get(gid)
+        if bb is None:
+            continue
+        zlo, ylo, xlo, zhi, yhi, xhi = [int(v) for v in bb]
+        crop = np.asarray(z[0, 0, zlo:zhi + 1, ylo:yhi + 1, xlo:xhi + 1])
+        mask = (crop == gid).astype(np.uint8)
+        if mask.sum() == 0:
+            continue
+        zs, ys, xs = np.where(mask)
+        z0_loc, z1_loc = int(zs.min()), int(zs.max()) + 1
+        y0_loc, y1_loc = int(ys.min()), int(ys.max()) + 1
+        x0_loc, x1_loc = int(xs.min()), int(xs.max()) + 1
+        m_tight = mask[z0_loc:z1_loc, y0_loc:y1_loc, x0_loc:x1_loc]
+        out[gid] = (m_tight, (zlo + z0_loc, ylo + y0_loc, xlo + x0_loc))
+    return out
+
+
+def _cz_mask_to_hcr_um_bbox(cz_mask, cz_origin_vox, cz_xy_um, cz_z_um, lp):
+    """Forward-warp CZ mask voxel corners to HCR µm; return AABB in HCR µm.
+    Returns (zmin, ymin, xmin, zmax, ymax, xmax).
+    """
+    z0, y0, x0 = cz_origin_vox
+    Dz, Dy, Dx = cz_mask.shape
+    cz_z_um_arr = np.array([z0, z0 + Dz - 1]) * cz_z_um
+    cz_y_um_arr = np.array([y0, y0 + Dy - 1]) * cz_xy_um
+    cz_x_um_arr = np.array([x0, x0 + Dx - 1]) * cz_xy_um
+    pts = np.array([[z, y, x] for z in cz_z_um_arr for y in cz_y_um_arr for x in cz_x_um_arr])
+    warped = apply_to_cz_um(lp, pts)  # (8, 3) zyx
+    return (warped[:, 0].min(), warped[:, 1].min(), warped[:, 2].min(),
+            warped[:, 0].max(), warped[:, 1].max(), warped[:, 2].max())
+
+
+def _gfp_mask_hcr_um_bbox(gfp_mask, gfp_origin_vox, hcr_seg_xy_um, hcr_seg_z_um):
+    """Return GFP mask AABB in HCR µm (level-0 voxel * seg_xy_um)."""
+    z0, y0, x0 = gfp_origin_vox
+    Dz, Dy, Dx = gfp_mask.shape
+    return (z0 * hcr_seg_z_um, y0 * hcr_seg_xy_um, x0 * hcr_seg_xy_um,
+            (z0 + Dz - 1) * hcr_seg_z_um, (y0 + Dy - 1) * hcr_seg_xy_um,
+            (x0 + Dx - 1) * hcr_seg_xy_um)
+
+
+def _aabb_overlap(a, b):
+    """Test (zmin,ymin,xmin,zmax,ymax,xmax) AABB overlap."""
+    return (a[3] >= b[0] and a[0] <= b[3]
+            and a[4] >= b[1] and a[1] <= b[4]
+            and a[5] >= b[2] and a[2] <= b[5])
+
+
+def _aabb_union(a, b):
+    return (min(a[0], b[0]), min(a[1], b[1]), min(a[2], b[2]),
+            max(a[3], b[3]), max(a[4], b[4]), max(a[5], b[5]))
+
+
+def _resample_to_hcr_um_grid(mask, origin_vox, vox_zyx_um, grid_origin_um, grid_shape, grid_spacing,
+                              transform_um_zyx=None):
+    """Resample local mask onto a regular HCR-µm grid.
+
+    mask: 3D uint8 in source vox.
+    origin_vox: (z0, y0, x0) source-vox origin of the local crop.
+    vox_zyx_um: (vz, vy, vx) µm/vox of source.
+    grid_origin_um: (zmin, ymin, xmin) µm of target grid (HCR µm).
+    grid_shape: (Nz, Ny, Nx).
+    grid_spacing: scalar µm.
+    transform_um_zyx: callable (M,3) HCR µm zyx -> source µm zyx; None ⇒ identity.
+
+    Returns uint8 (Nz, Ny, Nx), 0/1.
+    """
+    Nz, Ny, Nx = grid_shape
+    kz, ky, kx = np.indices((Nz, Ny, Nx), dtype=np.float64)
+    z_um = grid_origin_um[0] + grid_spacing * kz
+    y_um = grid_origin_um[1] + grid_spacing * ky
+    x_um = grid_origin_um[2] + grid_spacing * kx
+    pts = np.stack([z_um.ravel(), y_um.ravel(), x_um.ravel()], axis=1)
+    if transform_um_zyx is not None:
+        pts = transform_um_zyx(pts)
+    vz, vy, vx = vox_zyx_um
+    z0, y0, x0 = origin_vox
+    src_z = pts[:, 0] / vz - z0
+    src_y = pts[:, 1] / vy - y0
+    src_x = pts[:, 2] / vx - x0
+    coords = np.stack([src_z, src_y, src_x], axis=0)
+    sampled = map_coordinates(mask, coords, order=0, mode="constant", cval=0)
+    return sampled.reshape(Nz, Ny, Nx).astype(np.uint8)
+
+
+def _inverse_lp_zyx(hcr_um_zyx, lp):
+    return (hcr_um_zyx - lp.translation) @ lp.R / lp.scales + lp.src_mean
+
+
+def _run_subject(sid, sz_pin, t_start):
+    print(f"\n=== {sid}  sz_pin={sz_pin:.3f} ===", flush=True)
+    s = load_subject(sid)
+    lp = compute_locked_prior_warm_start(s, sz_init=sz_pin)
+    cz_um, cz_ids = ch.centroids_um(s, "cz")
+    gfp_um, gfp_ids = ch.centroids_um(s, "hcr_gfp")
+    print(f"  CZ cells: {len(cz_ids)}; GFP+ cells: {len(gfp_ids)}", flush=True)
+
+    # Depth filter (top 50 µm from HCR top surface, in HCR µm — both modalities
+    # compared in the SAME post-registration depth frame).
+    hcr_surf = get_hcr_top_surface_iter07(s)
+    if hcr_surf is None:
+        raise RuntimeError(f"HCR top surface unavailable for {sid}")
+
+    # CZ: forward-LP all centroids → HCR µm zyx → xyz → depth_from_surface
+    cz_warp_um_all = apply_to_cz_um(lp, cz_um)  # (N, 3) zyx, HCR µm
+    cz_xyz_hcr = cz_warp_um_all[:, [2, 1, 0]]
+    cz_depth_hcr = depth_from_surface(cz_xyz_hcr, hcr_surf)
+    in_slab_cz = ((cz_depth_hcr >= DEPTH_BAND_UM[0])
+                  & (cz_depth_hcr <= DEPTH_BAND_UM[1]))
+    print(f"  top-slab cz (HCR-µm depth ≤ {DEPTH_BAND_UM[1]:.0f}): "
+          f"{int(in_slab_cz.sum())}/{len(cz_ids)}", flush=True)
+    cz_slab_um = cz_um[in_slab_cz]
+    cz_slab_ids = cz_ids[in_slab_cz]
+    cz_warp_um = cz_warp_um_all[in_slab_cz]
+
+    # GFP: depth from HCR top surface
+    gfp_xyz_hcr = gfp_um[:, [2, 1, 0]]
+    gfp_depth_hcr = depth_from_surface(gfp_xyz_hcr, hcr_surf)
+    in_slab_gfp = ((gfp_depth_hcr >= DEPTH_BAND_UM[0])
+                   & (gfp_depth_hcr <= DEPTH_BAND_UM[1]))
+    print(f"  top-slab gfp (HCR-µm depth ≤ {DEPTH_BAND_UM[1]:.0f}): "
+          f"{int(in_slab_gfp.sum())}/{len(gfp_ids)}", flush=True)
+    gfp_um = gfp_um[in_slab_gfp]
+    gfp_ids = gfp_ids[in_slab_gfp]
+    if len(gfp_ids) == 0 or len(cz_slab_ids) == 0:
+        return None
+
+    # Centroid pre-filter
+    pairs = []
+    for i, cz_id in enumerate(cz_slab_ids):
+        cz_id = int(cz_id)
+        cw = cz_warp_um[i]  # zyx
+        dxy = np.hypot(gfp_um[:, 1] - cw[1], gfp_um[:, 2] - cw[2])
+        dz = np.abs(gfp_um[:, 0] - cw[0])
+        in_box = (dxy <= R_XY_UM) & (dz <= R_Z_UM)
+        for j in np.where(in_box)[0]:
+            pairs.append({
+                "cz_id": cz_id,
+                "gfp_id": int(gfp_ids[j]),
+                "cz_warp_z_um": float(cw[0]), "cz_warp_y_um": float(cw[1]),
+                "cz_warp_x_um": float(cw[2]),
+                "gfp_z_um": float(gfp_um[j, 0]), "gfp_y_um": float(gfp_um[j, 1]),
+                "gfp_x_um": float(gfp_um[j, 2]),
+                "d_xy_um": float(dxy[j]), "d_z_um": float(dz[j]),
+                "d3_um": float(np.sqrt(dxy[j] ** 2 + dz[j] ** 2)),
+            })
+    print(f"  {len(pairs)} centroid-pre-filtered pairs", flush=True)
+    if not pairs:
+        return None
+
+    # Pre-load per-cell masks
+    cz_unique = sorted({p["cz_id"] for p in pairs})
+    gfp_unique = sorted({p["gfp_id"] for p in pairs})
+    print(f"  CZ ROIs to mask: {len(cz_unique)}; GFP ROIs: {len(gfp_unique)}", flush=True)
+
+    t0 = time.time()
+    cz_masks = _cz_per_cell_masks(s, cz_unique)
+    print(f"  CZ masks loaded ({len(cz_masks)}/{len(cz_unique)})  +{time.time()-t0:.1f}s",
+          flush=True)
+    t0 = time.time()
+    gfp_masks = _gfp_per_cell_masks(sid, gfp_unique)
+    print(f"  GFP masks loaded ({len(gfp_masks)}/{len(gfp_unique)})  +{time.time()-t0:.1f}s",
+          flush=True)
+
+    cz_xy_um = float(s.cz_xy_um); cz_z_um = float(s.cz_z_um)
+    seg_xy_um = float(s.hcr_seg_xy_um); seg_z_um = float(s.hcr_seg_z_um)
+
+    # Per-pair IoU
+    rows = []
+    t0 = time.time()
+    for k, p in enumerate(pairs):
+        cz_id = p["cz_id"]; gfp_id = p["gfp_id"]
+        if cz_id not in cz_masks or gfp_id not in gfp_masks:
+            continue
+        cz_mask, cz_origin = cz_masks[cz_id]
+        gfp_mask, gfp_origin = gfp_masks[gfp_id]
+
+        cz_bbox_um = _cz_mask_to_hcr_um_bbox(
+            cz_mask, cz_origin, cz_xy_um, cz_z_um, lp)
+        gfp_bbox_um = _gfp_mask_hcr_um_bbox(
+            gfp_mask, gfp_origin, seg_xy_um, seg_z_um)
+        if not _aabb_overlap(cz_bbox_um, gfp_bbox_um):
+            iou = 0.0
+        else:
+            u = _aabb_union(cz_bbox_um, gfp_bbox_um)
+            # Pad slightly for safety
+            pad = 2.0
+            grid_origin = (u[0] - pad, u[1] - pad, u[2] - pad)
+            grid_max = (u[3] + pad, u[4] + pad, u[5] + pad)
+            Nz = int(np.ceil((grid_max[0] - grid_origin[0]) / IOU_GRID_UM)) + 1
+            Ny = int(np.ceil((grid_max[1] - grid_origin[1]) / IOU_GRID_UM)) + 1
+            Nx = int(np.ceil((grid_max[2] - grid_origin[2]) / IOU_GRID_UM)) + 1
+            grid_shape = (Nz, Ny, Nx)
+
+            cz_grid = _resample_to_hcr_um_grid(
+                cz_mask, cz_origin, (cz_z_um, cz_xy_um, cz_xy_um),
+                grid_origin, grid_shape, IOU_GRID_UM,
+                transform_um_zyx=lambda pts: _inverse_lp_zyx(pts, lp),
+            )
+            gfp_grid = _resample_to_hcr_um_grid(
+                gfp_mask, gfp_origin, (seg_z_um, seg_xy_um, seg_xy_um),
+                grid_origin, grid_shape, IOU_GRID_UM,
+                transform_um_zyx=None,
+            )
+            inter = np.logical_and(cz_grid > 0, gfp_grid > 0).sum()
+            uni = np.logical_or(cz_grid > 0, gfp_grid > 0).sum()
+            iou = float(inter) / float(uni) if uni > 0 else 0.0
+
+        score = ((1.0 - p["d_xy_um"] / R_XY_UM)
+                 * (1.0 - p["d_z_um"] / R_Z_UM)
+                 * (0.5 + iou))
+        rows.append({**p, "iou": iou, "score": score})
+        if (k + 1) % 100 == 0:
+            print(f"    pair {k+1}/{len(pairs)}  +{time.time()-t0:.1f}s", flush=True)
+
+    df = pd.DataFrame(rows).sort_values(["cz_id", "score"], ascending=[True, False])
+    df["rank_in_cz"] = df.groupby("cz_id").cumcount() + 1
+    out_csv = OUT / f"iter8_pairs_{sid}.csv"
+    df.to_csv(out_csv, index=False)
+    print(f"  → {out_csv.name}  ({len(df)} pairs, "
+          f"max_iou={df['iou'].max():.3f}, "
+          f"top-1-per-cz iou>0: "
+          f"{int((df[df.rank_in_cz==1]['iou']>0).sum())}/{df['cz_id'].nunique()})  "
+          f"[{time.time()-t_start:.1f}s total]", flush=True)
+    return out_csv
+
+
+def main():
+    sz_pins = _load_sz_pins()
+    t0 = time.time()
+    for sid in SUBJECTS_ALL:
+        if sid not in sz_pins:
+            print(f"{sid}: no sz pin, skipping")
+            continue
+        _run_subject(sid, sz_pins[sid], t0)
+    print(f"\n[done in {time.time()-t0:.1f}s]")
+
+
+if __name__ == "__main__":
+    main()

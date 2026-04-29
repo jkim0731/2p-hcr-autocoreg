@@ -1,0 +1,116 @@
+"""v2-S03 sub-stages (b) + (c) RE-RUN with sz pinned per subject.
+
+Same as `bench_bc_p3_p5.py`, but builds the locked-prior with
+``sz_init = sz_peak`` from
+``../../v2_S02_sz_image_sweep/results_iter7_summary.csv`` and installs
+``bench_harness_patch`` so r@30 is reported alongside r@5/10/20.
+
+Outputs:
+  bench_bc_szpinned_results.csv  per-method × per-subject + r@30
+  bench_bc_szpinned.log          per-row console output
+"""
+from __future__ import annotations
+
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, "/root/capsule/code/full_automatic_execution_02/lib")
+sys.path.insert(0, "/root/capsule/data/claude_data/full_automatic_execution_01")
+sys.path.insert(0, "/root/capsule/code/dev_code")
+sys.path.insert(0, "/root/capsule/data/claude_data/sessions/03c_onset_features/iterations")
+
+import pandas as pd
+
+import bench_harness_patch  # noqa: E402 — must import before any harness call
+bench_harness_patch.patch()
+
+from benchmark_data_loader import BENCHMARK_SUBJECTS, load_subject  # noqa: E402
+from bench_a_szpinned import _load_sz_pins, patch_warmstart_sz_pinned  # noqa: E402
+
+OUT = Path("/root/capsule/code/full_automatic_execution_02/sessions/v2_S03_revival_pass")
+METHODS = ["P3", "P5"]
+
+
+def main():
+    from bench.harness import run_candidate  # noqa: E402
+    import bench.candidates  # noqa: F401, E402
+    import lib.centroid_helpers as ch
+
+    sz_pins = _load_sz_pins()
+    print(f"sz pins (iter-7): {sz_pins}", flush=True)
+
+    rows = []
+    for sid in BENCHMARK_SUBJECTS:
+        sz_pin = sz_pins[sid]
+        print(f"\n=== {sid}  sz_pin={sz_pin:.3f} ===", flush=True)
+        s = load_subject(sid)
+        original, lp = patch_warmstart_sz_pinned(s, sz_pin)
+        print(
+            f"  LP sxy={lp.sxy_value:.3f} sz={lp.scales[0]:.3f} "
+            f"theta_z={lp.rotation_deg_z:.2f}° "
+            f"pwr_ncc={lp.pwr_ncc:.3f} [{lp.pwr_method}]",
+            flush=True,
+        )
+        try:
+            for mid in METHODS:
+                t0 = time.time()
+                try:
+                    r = run_candidate(mid, sid, write_csv=False)
+                    dt = time.time() - t0
+                    if r.get("error"):
+                        print(f"  {mid:3s} swallowed error: "
+                              f"{r['error'].splitlines()[0]}", flush=True)
+                    row = dict(
+                        subject_id=sid, method=mid,
+                        n_pred=int(r.get("n_pred", 0)),
+                        recall_at_5um=float(r.get("recall_at_5um", 0)),
+                        recall_at_10um=float(r.get("recall_at_10um", 0)),
+                        recall_at_20um=float(r.get("recall_at_20um", 0)),
+                        recall_at_30um=float(r.get("recall_at_30um", 0)),
+                        median_error_um=float(r.get("median_error_um",
+                                                     float("nan"))),
+                        sz_pin=sz_pin,
+                        runtime_s=round(dt, 1),
+                    )
+                    rows.append(row)
+                    print(
+                        f"  {mid:3s}: r@10={row['recall_at_10um']:.3f} "
+                        f"r@20={row['recall_at_20um']:.3f} "
+                        f"r@30={row['recall_at_30um']:.3f} "
+                        f"n={row['n_pred']:4d} "
+                        f"med={row['median_error_um']:.1f}µm "
+                        f"({dt:.0f}s)",
+                        flush=True,
+                    )
+                except Exception as e:
+                    print(f"  {mid:3s} FAILED: {type(e).__name__}: {e}",
+                          flush=True)
+                    rows.append(dict(
+                        subject_id=sid, method=mid, n_pred=0,
+                        recall_at_5um=0.0, recall_at_10um=0.0,
+                        recall_at_20um=0.0, recall_at_30um=0.0,
+                        median_error_um=float("nan"),
+                        sz_pin=sz_pin,
+                        runtime_s=round(time.time() - t0, 1),
+                        error=f"{type(e).__name__}: {e}",
+                    ))
+        finally:
+            ch.default_warmstart_zyx = original
+
+    df = pd.DataFrame(rows)
+    df.to_csv(OUT / "bench_bc_szpinned_results.csv", index=False)
+    print("\n=== summary (r@20) ===")
+    pivot_r20 = df.pivot(index="subject_id", columns="method",
+                          values="recall_at_20um")
+    print(pivot_r20.round(3).to_string())
+    print(f"\nsum r@20: {pivot_r20.sum().round(3).to_dict()}")
+    print("\n=== summary (r@30) ===")
+    pivot_r30 = df.pivot(index="subject_id", columns="method",
+                          values="recall_at_30um")
+    print(pivot_r30.round(3).to_string())
+    print(f"\nsum r@30: {pivot_r30.sum().round(3).to_dict()}")
+
+
+if __name__ == "__main__":
+    main()

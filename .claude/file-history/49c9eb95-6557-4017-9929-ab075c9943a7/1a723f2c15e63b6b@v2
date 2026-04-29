@@ -1,0 +1,58 @@
+"""Reproduce P6 n=0 collapse on 755252 with sz_pin=2.10."""
+import sys
+sys.path.insert(0, "/root/capsule/data/claude_data/full_automatic_execution_01")
+sys.path.insert(0, "/root/capsule/code/full_automatic_execution_02/lib")
+sys.path.insert(0, "/root/capsule/code/dev_code")
+sys.path.insert(0, "/root/capsule/data/claude_data/sessions/03c_onset_features/iterations")
+
+import bench_harness_patch
+bench_harness_patch.patch()
+
+import numpy as np
+from benchmark_data_loader import load_subject
+from locked_prior_warm import compute_locked_prior_warm_start, apply_to_cz_um
+import lib.centroid_helpers as ch
+
+s = load_subject("755252")
+print("LP default (depth-ratio):", flush=True)
+lp_default = compute_locked_prior_warm_start(s)
+print(f"  scales={lp_default.scales}  t={lp_default.translation}", flush=True)
+
+print("LP sz_init=2.10:", flush=True)
+lp_pin = compute_locked_prior_warm_start(s, sz_init=2.10)
+print(f"  scales={lp_pin.scales}  t={lp_pin.translation}", flush=True)
+
+# Apply both to a sample CZ centroid set
+cz_um, _ = ch.centroids_um(s, "cz")
+cz_w_default = apply_to_cz_um(lp_default, cz_um)
+cz_w_pin = apply_to_cz_um(lp_pin, cz_um)
+print("CZ warped centroid extents (zyx):", flush=True)
+print(f"  default: ptp={np.ptp(cz_w_default, axis=0).round(1)}  "
+      f"mean={cz_w_default.mean(0).round(0)}", flush=True)
+print(f"  pin   : ptp={np.ptp(cz_w_pin, axis=0).round(1)}  "
+      f"mean={cz_w_pin.mean(0).round(0)}", flush=True)
+
+# HCR
+hcr_um, _ = ch.centroids_um(s, "hcr_gfp")
+print(f"HCR_gfp ptp={np.ptp(hcr_um, axis=0).round(1)}  "
+      f"mean={hcr_um.mean(0).round(0)}", flush=True)
+
+# Now run P6 with the sz-pinned warmstart
+def _locked(cz_um_zyx, hcr_um_zyx, **_kw):
+    cz_init = apply_to_cz_um(lp_pin, cz_um_zyx)
+    return cz_init, dict(warmstart_kind="locked_prior_sz_pinned",
+                         scales_zyx=lp_pin.scales.tolist(),
+                         source="locked_prior_sz_pinned")
+
+original = ch.default_warmstart_zyx
+ch.default_warmstart_zyx = _locked
+try:
+    from bench.harness import run_candidate
+    import bench.candidates  # noqa
+    print("\nRunning P6 with verbose=True ...", flush=True)
+    r = run_candidate("P6", "755252", write_csv=False,
+                       extra_kwargs=dict(verbose=True))
+    print(f"  P6: n={r.get('n_pred', 0)} "
+          f"r@10={r.get('recall_at_10um', 0):.3f}", flush=True)
+finally:
+    ch.default_warmstart_zyx = original

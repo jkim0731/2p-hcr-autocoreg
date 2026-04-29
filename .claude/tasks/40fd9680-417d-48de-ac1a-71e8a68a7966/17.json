@@ -1,0 +1,9 @@
+{
+  "id": "17",
+  "subject": "v2-S03 (b) P3 RANSAC and (c) P5 FGW with sz pinned",
+  "description": "Re-run b (P3 RANSAC: sxy + t_xy locked + sz pinned → 2-DOF) and c (P5 FGW: sxy-rescaled CZ centroids + sz pinned). Compare to v1 baseline and current bench_bc_results.csv (which had sz free).",
+  "activeForm": "Running v2-S03 (b) (c) with sz pinned",
+  "status": "completed",
+  "blocks": [],
+  "blockedBy": []
+}

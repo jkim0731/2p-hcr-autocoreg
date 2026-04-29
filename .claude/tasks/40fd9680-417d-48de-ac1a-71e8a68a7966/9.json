@@ -1,9 +1,9 @@
 {
   "id": "9",
   "subject": "v2-S02: Stage B-Image sz NCC sweep",
-  "description": "Implement 3-D NCC sweep on top of Stage A locked frame. Pass criterion: unimodal peak with peak/median ≥ 1.10, half-width ≤ 0.30. Per-subject result is {passed, sz=x.xx} or {FAILED}. No fallback.",
+  "description": "PASSED 6/6 via iter-7 slab-wise rigid-NCC on binarised CZ ROI segmentation; mean |err| = 0.040 µm; sz_peak per subject available in results_iter7_summary.csv.",
   "activeForm": "Re-running v2-S02 with frozen t_z",
-  "status": "in_progress",
+  "status": "completed",
   "blocks": [],
   "blockedBy": []
 }

@@ -1,0 +1,539 @@
+# 09 — Full Automatic Coregistration v2 (Plan)
+
+**Status:** plan, not yet started.
+**Date:** 2026-04-26
+**Companion docs:** `07 Grand Plan.md` §13 (rollup of session 01–64
+  catalog work + decision rule), `08 Automated surface registration.md`
+  (the 2-D top-slab stage that this plan consumes), `04 Current
+  protocol.md` (manual workflow — informs Stage E, but v2 also revives
+  v1 candidates rather than only mimicking the manual loop).
+
+## 0. Why a v2
+
+`full_automatic_execution_01` (sessions S01–S64 in the Grand Plan
+ledger) explored the full method catalog from centroid-only matchers
+through learned GNNs and ensembles. That campaign halted at a clear
+ceiling:
+
+* **C5 sum r@20 = 1.080 across the 6 benchmark subjects**, with the
+  per-subject distribution `788406=0.263 / 790322=0.289 /
+  755252=0.095 / 767022=0.117 / 767018=0.315 / 782149=0`.
+* **782149 was structurally unreachable** by every centroid-only
+  candidate (P1–P14, M-series, I-series, G1, ensembles) — the
+  documented cause is partial XY overlap, 12 ° pia tilt and a
+  deformed-bottom Z extent; the centroid ICP objective has no local
+  minimum at the truth.
+* The S55 isotonic calibration and S60 vote-consensus probes
+  established that no recombination of the existing centroid scores
+  closes the gap. S58/S59 confirmed that synthetic-warp G1 training
+  cannot close a CZ↔HCR modality / cardinality gap.
+
+Three new artefacts have landed since S64 and were **not available**
+to any v1 session:
+
+1. **CZ pia + HCR top + HCR bottom surfaces** — image-only, cached
+   per subject under `code/dev_code/cached_surfaces/` via
+   `surfaces_iter08.{get_cz_surface_iter08,get_hcr_top_surface_iter07,
+   get_hcr_bottom_surface_iter08}`.
+2. **`sxy` from per-cell ROI-area ratio** — `roi_area_sxy.py`,
+   ±1.6 % / +1.2 % on the two good spot subjects (788406, 790322),
+   +6.5 % on 767018, −15 % on 782149. **Bootstrap-only**: this is
+   useful as an initial guess for the rigid surface registration but
+   has known per-subject biases (782149 surface-span issue) and is
+   **not** the final source of `sxy`. The authoritative `sxy` for
+   every Stage and every subject comes from item (3) below.
+3. **2-D top-slab surface registration v2** — `surface_registration_v2.py`,
+   PWR 4×4 wins all six subjects, cached `crop_bbox` + per-block
+   displacement field; details in `08 Automated surface
+   registration.md`. The sweep numbers
+   (`cached_surface_registration/main_registration_summary.csv`):
+
+   ```
+   sid     best  ncc    rigid  affine pwr3x3 pwr4x4
+   755252  pwr4x4 0.195  0.152  0.153  0.191  0.195
+   767018  pwr4x4 0.153  0.132  0.137  0.151  0.153
+   767022  pwr4x4 0.315  0.188  0.226  0.287  0.315
+   782149  pwr4x4 0.178  0.110  0.111  0.140  0.178   ← v1's "unreachable" subject
+   788406  pwr4x4 0.247  0.142  0.152  0.187  0.247
+   790322  pwr3x3 0.206  0.131  0.135  0.206  0.204
+   ```
+
+These three together pin **3 of the 7 affine DOF** before any 3-D
+centroid matching runs:
+
+* `R = 180°` + small θ refinement from PWR rigid stage,
+* `sxy` from `surface_registration_v2`'s PWR-affine fit
+  (`base_sxy * exp(d_log_scale)`) — image-NCC-driven, used for **all 6
+  subjects**; ROI-area sxy is reserved for bootstrap only,
+* `(t_x, t_y)` from the PWR affine offset,
+* a tilt-aware `t_z` candidate from `HCR_pia(x_cz_ctr, y_cz_ctr)`.
+
+What remains are **`sz`** (the binding bottleneck per the reassessment
+in `code/full_automatic_execution_01/reassess_with_surfaces/
+reassessment.md`) and **per-cell correspondence**, both of which v1
+could not solve. v2 is the design for that remaining gap.
+
+## 1. Pipeline overview
+
+```
+  raw 488 MIP        CZ binary top-MIP        roi_area_sxy
+        \                  /                       |
+   surface_registration_v2 (PWR 4×4)               |
+        \________________________________  _______/
+                                         \ /
+                          Stage A — locked-prior warm-start
+                          (R, sxy, t_x, t_y, t_z @ HCR pia)
+                                          |
+              ┌───────────────────────────┴───────────────────────────┐
+              v                                                       v
+   Stage B — sz estimator                            (sxy-only path: stages D, E.RV)
+   B-Image NCC sweep on the locked frame            available even if Stage B fails
+   (HARD requirement: Stage A must be done first.
+    No fallback. If the sweep gives no clear peak,
+    sz is FAILED → skip Stages C and any sz-locked
+    variant of E.)
+              |
+              v
+   Stage C — locked-prior 3-D refinement (sz pinned)
+              |
+              v
+   Stage D — surface-based seed constellation
+             (footprint IoU + shape similarity in the
+              surface_registration_v2 frame; TPS LOO-vetted)
+              |
+              v
+   Stage E — pair emission with locked priors
+              E.RV  Revival of v1 candidates (P3, P5, M1, M3) with sxy
+                    locked (and sz locked when Stage B succeeded);
+                    re-bench P1/P4/P6/C5 with the same locks.
+              E.TPS Optional TPS expansion seeded by Stage D, mimicking
+                    manual step 5 (only when E.RV does not cover the
+                    volume to manual baseline).
+              |
+              v
+   Stage F — QC loop / GUI review (G1-review, ranked by confidence)
+```
+
+**Hard dependency order.** Stage A (sxy + 2-D surface registration +
+HCR-pia t_z) must run before Stage B; the v1 catalog's repeated `sz`
+failures (06, 07a–07e, 07f) all happened because they tried to recover
+sz without a locked frame. Stage C runs only if Stage B emits a peak;
+Stages D and E.RV can still run on the sxy-only frame if Stage B fails.
+
+Stage A (priors) is new pre-conditioning. Stage B (sz) is new and is a
+hard-stop gate, not a fallback chain. Stage C replaces v1's
+`default_warmstart_zyx` with a prior-locked variant. Stage D is the v2
+replacement for B1 (Grand Plan §5). Stage E is intentionally **two
+parallel branches**: the primary E.RV revives v1 candidates whose
+failure modes were caused by the missing priors that Stage A/B now
+supply, and the optional E.TPS mirrors the manual step 5 only when
+needed.
+
+## 2. Stage-by-stage spec
+
+### Stage A — locked-prior warm-start (replaces `default_warmstart_zyx`)
+
+* **Goal.** Emit a 3-D affine `(R, sxy, sxy, sz, t_x, t_y, t_z)`
+  with 3 DOF pinned by the new artefacts and only `sz, R_θ_residual`
+  free.
+* **Inputs.**
+  - `surface_registration_v2.get_surface_registration(s)` →
+    `(reg["sxy"], reg["methods"]["rigid"]["theta_deg"], crop_bbox,
+    rigid+affine offsets, `affine.params[1]` = `d_log_scale`)`. The
+    final per-subject `sxy` is `reg["sxy"] * exp(d_log_scale)` for
+    **all 6 subjects** (image-NCC-driven). `roi_area_sxy` is not
+    consulted here — see `feedback_sxy_source_of_truth` memory.
+  - `surfaces_iter08.get_hcr_top_surface_iter07(s)` evaluated at the
+    CZ centroid XY (transformed through PWR rigid+affine offsets) →
+    `t_z = HCR_pia(x*, y*) + sz · CZ_centroid_mean_depth_below_CZ_pia`.
+  - `R = 180°` (structural prior) composed with PWR rigid `θ`.
+* **Coordinate composition.** The PWR fit produces `(M, offset)` such
+  that scipy `affine_transform(cz_warm, M, offset, output_shape=
+  hcr_crop.shape)` resamples cz_warm onto the **cropped** HCR grid;
+  the inverse mapping cz_warm-px → cropped-HCR-px is
+  `p_crop = M⁻¹ (p_warm − offset)`. Convert cropped → absolute by
+  adding `crop_bbox[y0, x0]` (level-4 px), then ×`hcr_xy_um`. Missing
+  the crop offset puts the warped cloud ~660 µm off centre on 788406.
+* **`sz` prior (Stage A only).** `sz_init = HCR_mean_depth /
+  CZ_mean_depth`, both computed as cell-centroid means of
+  `depth_from_surface(centroids, surface)` against the iter07/iter08
+  pia surfaces. This puts the warped cloud in the same axial basin
+  v1's centroid ICP converges to (range observed across the 6
+  subjects: 1.77 – 3.64). Stage B replaces this with the image-NCC-
+  refined value before any downstream stage uses sz as a hard lock.
+* **Output.** `LockedPriorWarmStart` dataclass with all five pinned
+  components plus the search range for `sz` from Stage B.
+* **Why it helps.** From the reassessment table, even a *correct* sxy
+  pin without sz fix regresses median residual; a correct sxy + sz
+  drops 790322 median residual 69 → 25 µm and r@30 17 → 65 %.
+* **Failure mode addressed (v1).** S37/S38/S40/S49 all chased "better
+  warm-start" via I2 MI, multi-start ICP, rotation seeds; none beat
+  the default ICP because they kept estimating sz from centroids.
+  Stage A pins sxy and t_z and farms sz out to Stage B.
+
+### Stage B — `sz` estimator (B-Image NCC sweep, single tier, no fallback)
+
+`sz` is the single remaining unbiased DOF of the affine. The v1
+campaign tried 8 sz signal/method pairs (06, 07a–07e, 07f); all
+failed:
+
+* density-bias methods (06, 07a–07c) — failed because HCR GFP+ density
+  is subject- and depth-biased,
+* axial profile-shape methods (07d, 07e) — failed because GCaMP and
+  488 do not share a depth shape and σ_z is near-flat inside cortex,
+* per-cell z-bbox (07f) — **failed because the axial PSF differs
+  between modalities**: cellpose trims and PSF anisotropy make the
+  z-bbox ratio biased by −46 % to −62 % raw and ±20 % even after LOO
+  calibration; 782149 is a structural outlier (CZ aspect-ratio 1.88).
+  See `code/sessions/07f_sz_from_zbbox/log.md` — verdict: "reject 07f
+  as a standalone sz estimator". **Therefore no per-cell axial method
+  is on the v2 path.**
+
+v2 has a single sz estimator: **B-Image** — the user-asked variant —
+and it is a hard gate, not the head of a fallback chain.
+
+#### B-Image (sz NCC sweep on the locked frame) _(only sz path in v2)_
+
+* **Hard prerequisite.** Stage A must have completed:
+  surface_registration_v2 cached and consumed (sxy + (t_x, t_y) +
+  θ_residual), candidate `t_z` from HCR pia at the warped CZ centroid.
+  v1's sz attempts failed precisely because they ran without a locked
+  frame.
+* **Premise.** With Stage A pinning `(R, sxy, t_x, t_y)` and a
+  candidate `t_z` from HCR-pia, the only remaining axial DOF is `sz`.
+  Sweep `sz ∈ [1.5, 4.0]` at 0.05 step; for each candidate, transform
+  the CZ z-stack into the HCR frame using the locked affine + that sz
+  + a refined `t_z` (1-D NCC of mean intensity vs depth, per
+  candidate); compute Pearson NCC of the warped CZ raw (or CZ ROI
+  MIP) vs HCR raw 488 over the surface_registration_v2 crop bbox.
+  Pick the sz that maximises NCC.
+* **Refinement.** Optional inner loop: at each sz, rerun the PWR 4×4
+  per-block displacement field on the warped slab (extends
+  `surface_registration_v2` to 3 dimensions for a slab pair). If the
+  per-block NCCs improve, accept the sz.
+* **Why this might pass where 07d/07e failed.** 07d/07e were 1-D
+  axial profile-shape methods. B-Image is a full 3-D NCC sweep in
+  the *aligned slab* frame — the spatial agreement is per-voxel (so
+  it carries cell-level structure), not per-axial-bin. The locked
+  in-plane frame (`R`, `sxy`, `t_x`, `t_y` from Stage A) is also
+  what 07d/07e lacked.
+* **Pass criterion.** A unimodal NCC peak with peak/median ≥ 1.10 and
+  half-width ≤ 0.30 in `sz` units. Cross-check against the thickness
+  prior `sz_thick = H_HCR / cz_span` (sanity, not selection); flag
+  if `|sz_peak − sz_thick| / sz_thick > 0.30`.
+* **Hard stop on failure.** If the sweep produces no peak meeting the
+  pass criterion, **mark `sz` as FAILED for that subject and skip
+  every downstream stage that requires sz** (Stage C, the sz-locked
+  variant of E.RV). There is no B-Bound fallback and no interval
+  hand-off; the v1 record shows that handing a wide sz interval to
+  ICP reproduces exactly the wrong-basin failure modes that motivated
+  v2 in the first place.
+* **What survives an sz failure.** Stages D and the sxy-only variants
+  in E.RV (P3 with 2-D affine sxy locked, M1 image-density NCC, and
+  the surface-anchored seed constellation) still run; they consume
+  the Stage A locked frame and do not depend on a 3-D affine.
+* **Status.** `not_started`. ~1 session.
+
+### Stage C — locked-prior 3-D refinement
+
+* **Goal.** Refine the affine inside the search bounds from Stages
+  A+B; emit `(R, S, t)` in CZ→HCR µm with all DOF either locked or
+  bounded.
+* **Method sketch.**
+  1. Apply locked-prior warm-start to CZ centroids.
+  2. Run reciprocal-NN ICP **with sxy pinned and sz constrained** to
+     the Stage-B interval; only `(t_x, t_y, t_z, θ_residual)` are
+     free. (This is the same engine v1 used in `lib/centroid_helpers.
+     default_warmstart_zyx`, but with the affine coupling restricted
+     so the wrong-basin failure mode that plagued S29/S30/S32 cannot
+     reappear.)
+  3. Optional B-spline polish via the I3 wrapper (S57) using the
+     locked affine as the fixed initial transform.
+* **Output.** Final 3-D affine + (optional) low-amplitude B-spline.
+* **Failure mode addressed.** The v1 ICP converged to wrong sz on
+  788406 / 790322 even when the GT initial transform was provided
+  (S32 dense-seed test); locking sxy and bounding sz removes that
+  failure surface entirely.
+
+### Stage D — surface-based seed constellation
+
+This is the v2 of B1 (Grand Plan §5.B1 — "5 seeds, 0 recall, seed-rank
+quality limited"). v1 B1 used local centroid descriptors with no
+image-level anchor; v2 uses the surface_registration_v2 displacement
+field as the anchor.
+
+* **Goal.** Produce 4–6 high-confidence CZ↔HCR landmark pairs without
+  human input; mimic manual workflow steps 2.1–2.3.
+* **Inputs.**
+  - `surface_registration_v2.get_surface_registration(s)` —
+    `crop_bbox` + per-pixel displacement field.
+  - CZ per-cell footprints in the warped frame, from
+    `lib/cz_labels.cz_voronoi_labels(s)` (S48), warm-started by the
+    PWR affine.
+  - HCR GFP+ per-cell footprints in the same frame, from
+    `lib/mask_loaders` (F1) restricted to GFP+ IDs.
+  - Stage C affine (so depths are comparable for the top-slab
+    candidates).
+* **Method sketch.**
+  1. **Project to top-slab frame.** For each CZ cell whose centroid
+     depth is in [0, 50 µm] under CZ pia, project its voronoi
+     footprint into the surface_registration_v2 crop bbox via the PWR
+     warp.
+  2. **Candidate generation.** For each CZ footprint, take HCR GFP+
+     cells whose centroid lies within `R_xy_um(p)` of the projected
+     centroid, where `R_xy_um(p) = max_displacement_in_block(p) +
+     1·HCR_xy_um`. Score each (CZ, HCR) candidate by:
+     - **footprint IoU** in the warped frame (S48 voronoi footprint vs
+       F1 mask footprint),
+     - **shape similarity** `1 − |area_ratio − 1| − |ecc_diff|`,
+     - **HCR-quality** from `lib/image_quality.hcr_quality(s)` (S47),
+       to bias toward unambiguous HCR cells.
+  3. **Constellation enumeration.** Enumerate K = 4–6 CZ cells
+     with (a) wide XY spread (cover ≥ 60 % of CZ-bbox half-extent),
+     (b) all candidates in their top-3 candidate list, (c) the
+     candidates form a non-degenerate hull (avoid colinear).
+  4. **TPS leave-one-out vetting.** For each enumerated constellation,
+     fit per-axis `Rbf(thin_plate)` on the K pairs; for each pair p,
+     drop it, refit on K−1, predict its HCR position, and measure
+     residual `r_drop(p)`. The **drop-lift** of the constellation is
+     `mean_p r_drop(p) − r_full_fit_residual`; a structurally correct
+     constellation has *high* drop-lift on every member (each pair
+     materially constrains the warp). Constellations with one or more
+     near-zero drop-lift members are "noisy" and rejected.
+     Constellations with a single pair having outsized drop-lift have
+     a "structurally singular" pair (likely an outlier) — drop it and
+     retry.
+  5. **Best constellation.** Sort surviving constellations by
+     `min_p r_drop(p)` (worst-case importance) and take the top one.
+* **Output.** Seed table `[(cz_id, hcr_id) × K]` with per-pair
+  IoU, shape, drop-lift; intrinsic confidence per pair.
+* **Failure mode addressed.** v1 B1 used local descriptors only and
+  found 5 seeds with 0 GT recall because there was no image-level
+  anchor to bind seed candidates to actual cells. The displacement
+  field from surface_registration_v2 reduces the candidate ambiguity
+  ball to ~`hcr_xy_um × max_displacement_block_px` (typically <
+  60 µm) — small enough that footprint IoU is decisive on all six
+  subjects per the PWR4×4 NCC table in §0.
+
+### Stage E — pair emission with locked priors
+
+User direction (2026-04-26): do NOT route everything through a "mimic
+manual step 5" path. Pick promising approaches from the v1 catalog
+that were blocked by missing priors and re-run them now that sxy and
+(when Stage B succeeds) sz are locked. TPS expansion stays as an
+optional sub-stage when revival doesn't reach manual coverage.
+
+Stage E therefore has **two parallel branches** that both consume
+Stage A (and Stage C when available) and either of which can ship if
+it beats C5:
+
+#### E.RV — Revival of v1 candidates with locked priors _(primary)_
+
+Each row below is a v1 method whose documented failure mode was
+"missing prior" (sxy collapse, sz wrong basin, scale-mismatched
+distances, etc.). With Stage A locked and Stage B (when it passes)
+pinning sz, the failure mode disappears. v2-S03 re-benches each on
+the F9 harness; anything that exceeds C5 r@20 enters the production
+ensemble.
+
+| candidate | v1 failure (Grand Plan §11) | what Stage A/B fix | sub-task |
+|-----------|------------------------------|--------------------|----------|
+| P3 RANSAC affine | 7-DOF under-determined | sxy + t_xy locked → 3-DOF | re-run with the locked-prior warm-start; only solve `(t_z, θ_residual)` and (when Stage B passed) verify against pinned sz |
+| P5 FGW | scale-mismatched distances | sxy pre-applied → distances comparable | re-run with sxy-rescaled CZ centroids; expect convergence on subjects where v1 collapsed |
+| M1 mask NCC | density mismatch CZ:HCR ~20× | replaced by image-NCC: re-run on the surface_registration_v2 crop with the PWR4×4-warped CZ binary, no centroid density step | sxy-only path; runs even if Stage B fails |
+| M3 mask + ICP | M1 warm-start wrong basin | superseded by Stage A locked-prior warm-start | drop the M1 dependency, replace with Stage A as the warm-start |
+| P1 / P4 / P6 / C5 | wrong sz from centroid ICP | Stage B sz pin; ICP only on residuals | re-bench all three (and C5's density-priority dispatch) with sxy locked, sz pinned (or sz-failed → ICP free in z but bounded ±20 % around `sz_thick`) |
+
+Output: a per-method r@20 / r@30 table on the 6 benchmark subjects,
+versus the C5 baseline `788406=0.263 / 790322=0.289 / 755252=0.095 /
+767022=0.117 / 767018=0.315 / 782149=0`. Anything that beats C5 on
+≥ 4/6 subjects is promoted into the production ensemble. Anything that
+beats C5 only on the spot subjects (788406 / 790322 / 767018) is held
+as a spot-only path.
+
+#### E.TPS — TPS expansion seeded by Stage D _(optional, mimics manual step 5)_
+
+Run this **only if** E.RV's best per-subject result still falls below
+the manual landmark recall on that subject (target: r@20 ≥ 0.50). It
+mirrors the manual step 5 protocol on top of the Stage D seed.
+
+* **Inputs.** Stage D seed; CZ centroids + HCR GFP+ centroids; Stage
+  C affine (used as global offset only — the warp lives in TPS).
+* **Method sketch.** This is essentially Grand Plan B2 with the v1
+  acceptance gate from S46–S47:
+  1. Fit per-axis TPS on active landmarks.
+  2. For each unmatched CZ cell, propose its NN HCR cell after TPS
+     warp; gate by:
+     - TPS residual relative to the local-active-landmark residual
+       distribution (reject if > 3 σ),
+     - F6 feature-cosine ≥ τ_cos,
+     - HCR-quality bonus from S47 (β = 5),
+     - 1-NN topology agreement: the CZ cell's k-NN in CZ should map
+       (under TPS) within `r_topo` of the HCR target's k-NN.
+  3. Accept → append; refit TPS; repeat. Periodic
+     `grid_sample_landmarks()` (already in
+     `manual workflow/landmark_filtering.py`) keeps coverage even.
+  4. **Sliding leave-one-out check.** Every N iterations, repeat the
+     Stage-D drop-lift check on a random K=10 subset of active
+     landmarks; flag pairs with low drop-lift for GUI review (Stage F).
+* **Output.** Full coreg table + per-pair confidence (TPS residual,
+  drop-lift, feature affinity).
+* **Stop condition.** Acceptance rate over the last grid epoch falls
+  below a per-subject threshold (~1 %) or active landmark count
+  saturates near the manual baseline (50–100 per the protocol).
+
+### Stage F — GUI review
+
+* **Goal.** Surface uncertain pairs for human accept / reject;
+  re-trigger Stage E with the augmented landmark set.
+* **Reuse.** The G1-review GUI from session 25 already exists
+  (`full_automatic_execution_01/sessions/25_G1_review_gui/`). v2
+  ranks pairs by ascending drop-lift instead of ascending TLS
+  residual.
+
+## 3. How the failed v1 candidates are addressed
+
+| v1 candidate | v1 failure                                | v2 fix                                         |
+|-----------|-------------------------------------------|-------------------------------------------------|
+| M1 mask NCC density | density mismatch CZ:HCR ~20× (S31, S50) | replaced by surface_registration_v2 PWR (image-NCC, not density) |
+| M3 mask + ICP   | M1 warm-start wrong basin                  | superseded by Stage A locked-prior warm-start  |
+| M4 per-cell IoU | CZ outline-only mask blocked              | unblocked by `cz_voronoi_labels` (S48) used in Stage D |
+| I1 axial NCC    | 1-D shape mismatch                        | replaced by 3-D NCC sweep in Stage B-Image      |
+| I2 SimpleITK MI | global MI flat at init (S49)              | reused as polish only after Stage A pin        |
+| I3 B-spline     | absorbed affine, killed matches           | runs after Stage C with affine *fixed*         |
+| P3 RANSAC affine| 7-DOF under-determined                    | sxy + t_xy locked → 3-DOF, becomes tractable    |
+| P5 FGW          | scale-mismatched distances                | sxy pre-applied → distances comparable          |
+| P1 / P4 / P6    | wrong sz from centroid ICP                | Stage B sz pin removes the binding error        |
+| G1 / G2         | synthetic→real gap (modality mismatch)    | unaddressed; deferred per S58/S59 verdict       |
+| 782149 (subject)| centroid ICP has no min at truth          | Stage A pins 3 DOF on this subject too: `surface_registration_v2` PWR4×4 reaches NCC 0.178 on 782149 (best of all 6 subjects' methods), so the in-plane prior is sound; Stage D footprint matching consumes the same warp |
+
+## 4. Open issues / risks
+
+1. **Intensity-only subjects (755252, 767022).** No `metrics.pickle`
+   → `roi_area_sxy` and `hcr_cell_tight_bboxes` blocked. Mitigation:
+   re-run the HCR cellpose / segmentation export to produce
+   `metrics.pickle` for these subjects, or use the PWR4×4-derived sxy
+   from `surface_registration_v2` (which is already cached and
+   subject-agnostic) as the Stage A scale.
+2. **Drop-lift constellation enumeration cost.** Naive enumeration is
+   `C(N_cz_top, K) × top-3` ≈ 10⁶ on 200-cell top-slab. Mitigations:
+   restrict K=4 with hull-emptiness pruning, cap to top 50 CZ cells
+   by IoU candidate quality, parallelise per-constellation TPS.
+3. **Stage B-Image cost.** Each sz step triggers a 3-D resample +
+   PWR; ~2 s/step × 50 steps = ~100 s/subject. Acceptable; if too
+   slow, do a coarse sxy = 0.1 sweep then a fine 0.02 sweep around
+   the peak.
+4. **Stage B-Image hard-stop blast radius.** If sz fails on a subject,
+   Stages C and the sz-locked variant of E.RV are skipped on that
+   subject; only Stage D + sxy-only E.RV (P3 with t_z free, M1 image
+   NCC) and E.TPS remain. This is by user direction — no fallback.
+
+## 5. Session order
+
+1. **v2-S01 — Stage A locked-prior warm-start.** Wire
+   `surface_registration_v2`, `roi_area_sxy`, and cached surfaces into
+   a `LockedPriorWarmStart` dataclass; emit `(R, sxy, t_x, t_y, t_z)`
+   for all 6 subjects. Replace `default_warmstart_zyx` in the P1 / P4 /
+   P6 / C5 dispatch and re-bench on F9. This isolates the lift from
+   priors alone (Stage B not yet involved). Expected: lift on the
+   subjects where v1 was sxy-collapsed, slight regression where v1's
+   wrong-`sz` basin coincidentally matched ground truth (consistent
+   with `reassessment.md`). Owner: 1 session.
+2. **v2-S02 — Stage B-Image sz NCC sweep.** Implement the 3-D NCC
+   sweep on top of v2-S01's locked frame. Pass criterion: unimodal
+   peak with peak/median ≥ 1.10. Per-subject result is one of
+   `{passed, sz=x.xx}` or `{FAILED}`. There is no fallback; failure
+   on a subject simply removes that subject from sz-dependent
+   downstream stages. Owner: 1 session.
+3. **v2-S03 — Stage E.RV: revival of v1 candidates with locked
+   priors.** Re-bench, in this order:
+   (a) **P1 / P4 / P6 / C5** with the Stage A frame and (when v2-S02
+       passed) sz pinned — establishes how much of v1's gap was
+       prior-misestimation vs algorithmic.
+   (b) **P3 RANSAC** with sxy + t_xy locked — now 3-DOF (or 2-DOF
+       when sz is also pinned), tractable.
+   (c) **P5 FGW** with sxy-rescaled CZ centroids — distances now
+       comparable.
+   (d) **M1 image NCC** on the surface_registration_v2 crop using the
+       PWR4×4-warped CZ binary (no centroid density step).
+   (e) **M3 mask + ICP** with M1 → Stage A as the warm-start.
+   For each method, emit per-subject r@20 / r@30 / median residual.
+   Anything beating C5 r@20 on ≥ 4/6 subjects enters production.
+   Owner: 1–2 sessions.
+4. **v2-S04 — Stage D seed constellation + TPS LOO vetting.**
+   Build the surface-based seed enumerator + drop-lift filter on
+   788406 first; benchmark against the manual landmark seeds in
+   `landmarks_qced.csv`. Generalise to the other 5 subjects. Owner:
+   1–2 sessions.
+5. **v2-S05 — Stage E.TPS (only on subjects where E.RV r@20 < 0.50).**
+   Wire B2 (Grand Plan §5) on top of Stage D seeds with the v1
+   acceptance gates (HCR-quality, F6 cosine, 1-NN topology). Run on
+   the subset of subjects that need it; compare to E.RV and to manual
+   landmark recall. Owner: 1–2 sessions.
+6. **v2-S06 — Stage F GUI integration.** Re-rank G1-review queue by
+   drop-lift; capture user actions back into the E.TPS loop and into
+   future E.RV training data. Owner: 1 session.
+
+## 6. Stop / pivot rules
+
+* **v2-S01.** If the locked-prior warm-start does not match or beat the
+  v1 default warm-start on ≥ 4/6 subjects (in median residual against
+  GT after one ICP step), halt — Stage A's priors are wrong somewhere
+  upstream (surface fits, sxy, or surface registration). Do not chain
+  to v2-S02. The right next step is to debug the prior, not to add
+  fallbacks.
+* **v2-S02.** Per-subject **hard stop**, no fallback. If the B-Image
+  NCC sweep on subject `s` produces no peak meeting the pass criterion
+  (peak/median ≥ 1.10, half-width ≤ 0.30), then `sz_s = FAILED` and
+  Stages C, sz-locked variants of E.RV, are skipped on `s`. Stage D
+  and the sxy-only E.RV branch (P3 with t_z free, M1 image NCC) and
+  E.TPS still run on `s`. Do **not** widen the search range and hand
+  it to ICP; the v1 record (S29 / S30 / S32) shows that path
+  reproduces the wrong-basin failure that motivated v2.
+* **v2-S04.** If no constellation reaches `min drop-lift > 5 µm` on a
+  subject, route that subject's seed to G1-review (Stage F → E.TPS
+  with human-vetted seed). E.RV still runs unmodified.
+* **No subject is pre-marked manual-only.** 782149's prior-stage NCC
+  (PWR4×4 = 0.178) is the best of any method on that subject and
+  Stage D's footprint matching uses the same warp; v2 keeps
+  attempting it through E. If Stages A–E all return r@20 < 0.05 on
+  any subject (including 782149) at the end of v2-S05, only then is
+  that subject re-classified as manual-only — not in advance.
+
+## 7. File map (anticipated)
+
+```
+code/
+├── docs/
+│   ├── 07 Grand Plan.md           # §13 v2 rollup added
+│   ├── 08 Automated surface registration.md   # consumed by v2 Stage A
+│   └── 09 Full automatic v2 plan.md            # this file
+├── dev_code/
+│   ├── surfaces_iter08.py
+│   ├── roi_area_sxy.py
+│   ├── surface_registration_v2.py
+│   └── (new) sz_estimator.py       # B-Image NCC sweep only
+└── full_automatic_execution_02/    # new working tree (not a fork; new sessions)
+    ├── lib/
+    │   ├── locked_prior_warm.py    # Stage A
+    │   ├── sz_estimator.py         # Stage B (mirrors dev_code copy)
+    │   ├── seed_constellation.py   # Stage D
+    │   └── tps_expansion.py        # Stage E
+    └── sessions/
+        ├── v2_S01_locked_prior/
+        ├── v2_S02_sz_image_sweep/
+        ├── v2_S03_revival_pass/
+        ├── v2_S04_seed_constellation/
+        ├── v2_S05_tps_expansion/
+        └── v2_S06_gui/
+```
+
+## 8. References
+
+- `code/docs/07 Grand Plan.md` (§9.6 stop rules; §11 ledger; §13 v2 entry)
+- `code/docs/08 Automated surface registration.md`
+- `code/full_automatic_execution_01/reassess_with_surfaces/reassessment.md`
+- `code/full_automatic_execution_01/reassess_with_surfaces/sz_design.md`
+- `code/full_automatic_execution_01/sessions/61_plain_english_summary/`
+- `code/sessions/07f_sz_from_zbbox/log.md` (per-cell axial PSF mismatch — basis for dropping per-cell sz from v2)
+- `code/dev_code/{surfaces_iter08,roi_area_sxy,surface_registration_v2,cz_labels}.py`

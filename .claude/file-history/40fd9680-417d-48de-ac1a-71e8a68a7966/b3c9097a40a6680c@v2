@@ -1,0 +1,143 @@
+# Automated surface registration (CZ ↔ HCR, 2-D top-slab)
+
+> **Path note (2026-04-28):** the development-home path
+> `code/sessions/08_surface_vascular_match/` cited below was moved to
+> `/root/capsule/data/claude_data/sessions/08_surface_vascular_match/`
+> (read-only). The promoted module + cache are still under `code/`
+> (`code/dev_code/...`).
+
+**Status:** PROMOTED to main pipeline (2026-04-26).
+**Module:** `code/dev_code/surface_registration_v2.py`
+**Cache:** `code/dev_code/cached_surface_registration/<sid>.json`
+**Development home / regression tests:**
+`data/claude_data/sessions/08_surface_vascular_match/` (read-only;
+formerly `code/sessions/08_surface_vascular_match/`).
+
+## What this stage produces
+
+A 2-D affine + per-block displacement field that maps the warm-started
+CZ binary top-MIP onto the HCR-level-4 grid, scored by Pearson NCC
+between the warped CZ binary and the **raw 488 MIP intensity**.  The
+result is the input to the cell-level mapping stage — it gives a tight
+shared cropped frame and a per-pixel displacement field that downstream
+methods can use.
+
+## Inputs and target choice
+
+| Side | What is fed in |
+|------|----------------|
+| CZ source | binary CZ-ROI top-slab MIP, depth 0–50 µm beneath CZ pia (fill-holes on the outline TIFF, then max-MIP), warm-started by 180° rotation + `sxy` rescale onto the HCR-level-4 grid |
+| HCR target (comparison metric) | **raw 488 MIP, depth 0–100 µm beneath HCR top surface** — no binarisation |
+| HCR target (rigid bootstrap) | watershed-binarised 488 MIP — only used to seed Stage 1 because the rigid θ + tx/ty sweep is unstable when initial overlap is poor |
+| Surfaces | `surfaces_iter08.get_cz_surface_iter08(s)` (CZ pia) and `get_hcr_top_surface_iter07(s, level=4)` (HCR top) |
+| `sxy` (CZ → HCR µm scale) | `register_binary.get_sxy_with_fallback(sid, s)` — ROI-area `sxy` when available, landmark-GT fallback for subjects without `metrics.pickle` |
+
+The decision to keep the comparison metric on **raw 488 intensity** (not
+the watershed binary, not the GFP+ ROI MIP) was made in session 08:
+
+* watershed sometimes mis-binarises (cells merge or vanish) — using
+  it as the metric target couples registration quality to an
+  upstream binarisation step that has its own failure modes;
+* the GFP+ ROI MIP from `segmentation_mask_orig_res.zarr` is *also*
+  supported as an alternative target for diagnostic/sanity checks
+  (see `hcr_gfp_seg_mip.py`) but the default scoring uses raw 488
+  because it preserves the relative weight of densely-vs-sparsely
+  labelled regions and the metric values are a smooth function of
+  the warp.
+
+## Methods scored (best is selected automatically)
+
+All four chain on top of the same Stage-1 rigid initialisation:
+
+| Code | Method | Notes |
+|------|--------|-------|
+| M1 | rigid | translation + rotation only (FFT-NCC sweep θ ∈ ±30°, fine ±2° at 0.25°) |
+| M2 | rigid + affine | 4-DOF similarity (rot, uniform scale, tx, ty), Powell on −NCC, scale ±15 %, θ ±15° |
+| M4a | rigid + affine + PWR 3×3 | Suite2p-style piecewise rigid seeded **from the affine warp**, 3×3 grid, 30 % block overlap |
+| M4b | rigid + affine + PWR 4×4 | same, 4×4 grid, 0 % overlap |
+
+The PWR per-grid overlap settings (3×3 → 0.30, 4×4 → 0.0) come from
+the sweep in `code/sessions/08_surface_vascular_match/pwr_overlap.py`
+(2026-04-25): those are the per-grid optima against the rigid baseline.
+
+PWR uses Pearson-NCC block search with two accept gates:
+
+1. **boundary-rejection**: a block whose best-shift hits the
+   ±`max_shift_px` boundary is treated as noise; its shift is forced
+   to (0, 0) before interpolation.
+2. **NCC-floor**: blocks with a best-shift NCC below `ncc_min` (0.05)
+   are similarly forced to (0, 0).
+
+A previous version of PWR had a sign error in the inverse warp
+(`coords = [yy − dy, xx − dx]` rather than `[yy + dy, xx + dx]`); the
+synthetic-shift test in `pwr_overlap.synthetic_sign_test()` is the
+regression check for that bug.
+
+## Selection metric
+
+Pearson NCC between warped CZ (continuous, post-interpolation) and the
+raw 488 MIP, computed on the M1-bbox + 15 % margin crop.  Pearson
+works for any pair of (binary, intensity) inputs; for binary-vs-binary
+pairs it reduces to standard binary NCC, so the same metric also works
+when feeding a binary HCR target for diagnostic comparison.
+
+## Public API
+
+```python
+from surface_registration_v2 import (
+    compute_surface_registration,   # run from scratch
+    get_surface_registration,       # cache-aware accessor
+    apply_registration,             # re-render the warp at any time
+    build_main_registration_store,  # batch-build the cache + CSV
+)
+
+s   = load_subject(sid)
+reg = get_surface_registration(s)            # JSON-cached
+warp = apply_registration(s, reg)            # rendered on demand
+print(reg["best_method"], reg["best_ncc"])
+```
+
+## Validation result (6-subject benchmark, 2026-04-26)
+
+```
+target = raw488 (the default metric)
+sid       rigid  affine  pwr3x3  pwr4x4   best
+788406    0.142  0.152   0.187   0.247   M4b
+790322    0.131  0.135   0.206   0.204   M4a
+767018    0.132  0.137   0.151   0.153   M4b
+782149    0.110  0.111   0.140   0.178   M4b
+755252    0.152  0.153   0.191   0.195   M4b
+767022    0.188  0.226   0.287   0.315   M4b
+```
+
+PWR wins all six; mean Δ over rigid = +0.066.  Affine alone barely
+moves the needle on most subjects (+0.01) — the gain is dominated by
+the PWR stage.  See
+`code/sessions/08_surface_vascular_match/figures/compare_methods_v2_summary.png`.
+
+## When to re-run
+
+The cache is invalidated by changes upstream of registration:
+
+* CZ or HCR top surface refit (delete cached entries in
+  `dev_code/cached_surfaces/` to force re-registration with new
+  surfaces);
+* `sxy` re-estimate (e.g., a new ROI-area or landmark fit);
+* CZ outline TIFF (`*seg-mask-outline.tif`) changes.
+
+To rebuild from scratch for all benchmark subjects:
+```
+python /root/capsule/code/dev_code/surface_registration_v2.py
+```
+
+## Related sessions / artefacts
+
+* `08_surface_vascular_match/compare_methods_v2.py` — the comparison
+  driver that fixes the protocol used here.
+* `08_surface_vascular_match/pwr_overlap.py` — the PWR overlap/grid
+  sweep that fixed the sign bug and chose the per-grid overlaps.
+* `08_surface_vascular_match/hcr_gfp_seg_mip.py` — alternate HCR
+  target (binary GFP+ ROI MIP from `segmentation_mask_orig_res.zarr`).
+* `surfaces_iter08.py` — pia-surface fits used here.
+* `roi_area_sxy.py` — `sxy` estimator preferred over the
+  landmark-GT fallback when `metrics.pickle` is present.

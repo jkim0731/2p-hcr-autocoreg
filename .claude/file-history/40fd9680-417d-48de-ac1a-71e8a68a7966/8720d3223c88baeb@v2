@@ -1,0 +1,125 @@
+"""Diagnose why forward-TPS rasterization produces wildly inflated cell extents.
+
+Runs the TPS forward map on the 4 anchor cells of 755252 (K=4) and prints
+per-cell src/dst extent + voxel count + min/max coordinates.
+"""
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, "/root/capsule/code/full_automatic_execution_02/lib")
+sys.path.insert(0, "/root/capsule/code/dev_code")
+sys.path.insert(0, "/root/capsule/data/claude_data/full_automatic_execution_01")
+sys.path.insert(0, "/root/capsule/data/claude_data/sessions/03c_onset_features/iterations")
+sys.path.insert(0, "/root/capsule/data/claude_data/sessions/08_surface_vascular_match")
+
+import numpy as np
+import pandas as pd
+from scipy.interpolate import RBFInterpolator
+
+from benchmark_data_loader import load_subject
+import lib.cz_labels as cz_labels_mod
+from locked_prior_warm import compute_locked_prior_warm_start
+
+OUT = Path(__file__).resolve().parent
+
+_orig_load_zstack = cz_labels_mod._load_zstack
+def _patched_load_zstack(s):
+    try:
+        return _orig_load_zstack(s)
+    except StopIteration:
+        import tifffile
+        zs_path = next(Path(s.coreg_dir).glob("*_zstack.tif"))
+        return tifffile.imread(zs_path).astype(np.float32)
+cz_labels_mod._load_zstack = _patched_load_zstack
+
+
+def _forward_lp_zyx(cz_um_zyx, lp):
+    return (cz_um_zyx - lp.src_mean) * lp.scales @ lp.R.T + lp.translation
+
+
+def main():
+    sid = "755252"
+    cfg = json.loads((OUT / f"iter8_constellation_{sid}.json").read_text())
+    cz_anchor = cfg["cz_ids"]; gfp_anchor = cfg["gfp_ids"]
+    pairs = pd.read_csv(OUT / f"iter8_pairs_{sid}.csv")
+
+    s = load_subject(sid)
+    sz_pin = pd.read_csv(
+        "/root/capsule/code/full_automatic_execution_02/sessions/"
+        "v2_S02_sz_image_sweep/results_iter7_summary.csv"
+    )
+    sz_pin["subject_id"] = sz_pin["subject_id"].astype(str)
+    sz_pin = float(sz_pin[sz_pin.subject_id == sid].iloc[0]["sz_peak"])
+    lp = compute_locked_prior_warm_start(s, sz_init=sz_pin)
+    print(f"lp.src_mean={lp.src_mean}  lp.scales={lp.scales}  lp.R det={np.linalg.det(lp.R):.4f}")
+
+    rows_anchor = pd.merge(
+        pd.DataFrame({"cz_id": cz_anchor, "gfp_id": gfp_anchor, "ord": range(len(cz_anchor))}),
+        pairs, on=["cz_id", "gfp_id"], how="left",
+    ).sort_values("ord")
+    src_xyz_anchor = rows_anchor[["cz_warp_x_um", "cz_warp_y_um", "cz_warp_z_um"]].to_numpy()
+    dst_xyz_anchor = rows_anchor[["gfp_x_um", "gfp_y_um", "gfp_z_um"]].to_numpy()
+    print("\nAnchors (HCR µm xyz):")
+    for i, (sx, dx) in enumerate(zip(src_xyz_anchor, dst_xyz_anchor)):
+        print(f"  {i}: cz={cz_anchor[i]:>4}  src={sx}  dst={dx}  Δ={dx-sx}")
+
+    # Spatial extent of anchors
+    print(f"\nAnchor src extent: {src_xyz_anchor.max(0) - src_xyz_anchor.min(0)}")
+    print(f"Anchor dst extent: {dst_xyz_anchor.max(0) - dst_xyz_anchor.min(0)}")
+
+    # Singular values of the centred-anchor matrix to gauge near-coplanarity
+    sc = src_xyz_anchor - src_xyz_anchor.mean(0)
+    dc = dst_xyz_anchor - dst_xyz_anchor.mean(0)
+    print(f"src centred SVs: {np.linalg.svd(sc, compute_uv=False)}")
+    print(f"dst centred SVs: {np.linalg.svd(dc, compute_uv=False)}")
+
+    tps_fwd = RBFInterpolator(src_xyz_anchor, dst_xyz_anchor, kernel="thin_plate_spline")
+
+    # Test 1: warp 8 corners of a small box around each anchor's src
+    print("\n=== test 1: TPS at anchor and ±5µm corners ===")
+    for i, sx in enumerate(src_xyz_anchor):
+        pts = np.array([
+            sx,
+            sx + [5, 0, 0], sx - [5, 0, 0],
+            sx + [0, 5, 0], sx - [0, 5, 0],
+            sx + [0, 0, 5], sx - [0, 0, 5],
+        ])
+        warped = tps_fwd(pts)
+        ext = warped.max(0) - warped.min(0)
+        print(f"  anchor {i} (cz={cz_anchor[i]}): src ±5µm box → dst extent {ext}")
+        for k, (p, w) in enumerate(zip(pts, warped)):
+            print(f"      src={p} → dst={w}  Δ={w - dst_xyz_anchor[i]}")
+        break  # just 1 for brevity
+
+    # Test 2: per-cell forward-warp using cz_voronoi_labels
+    print("\n=== test 2: per-cell forward-warp through (LP, TPS) ===")
+    cz_xy_um = float(s.cz_xy_um); cz_z_um = float(s.cz_z_um)
+    cz_labels_zyx = cz_labels_mod.cz_voronoi_labels(s)
+    print(f"cz_voronoi_labels shape: {cz_labels_zyx.shape}  cz_xy={cz_xy_um}  cz_z={cz_z_um}")
+
+    for i, cid in enumerate(cz_anchor):
+        loc = np.where(cz_labels_zyx == cid)
+        if len(loc[0]) == 0:
+            print(f"  cz={cid}: empty mask")
+            continue
+        z_vox, y_vox, x_vox = loc
+        cz_um_zyx = np.stack(
+            [z_vox * cz_z_um, y_vox * cz_xy_um, x_vox * cz_xy_um], axis=1)
+        src_zyx = _forward_lp_zyx(cz_um_zyx, lp)
+        src_xyz = src_zyx[:, ::-1]
+        dst_xyz = tps_fwd(src_xyz)
+        src_ext = src_xyz.max(0) - src_xyz.min(0)
+        dst_ext = dst_xyz.max(0) - dst_xyz.min(0)
+        src_min = src_xyz.min(0); src_max = src_xyz.max(0)
+        dst_min = dst_xyz.min(0); dst_max = dst_xyz.max(0)
+        print(f"  cz={cid:>4} nvox={len(z_vox):>5}")
+        print(f"    src_xyz min={src_min}  max={src_max}  ext={src_ext}")
+        print(f"    dst_xyz min={dst_min}  max={dst_max}  ext={dst_ext}")
+        print(f"    anchor src for this cid: {src_xyz_anchor[i]}")
+
+
+if __name__ == "__main__":
+    main()

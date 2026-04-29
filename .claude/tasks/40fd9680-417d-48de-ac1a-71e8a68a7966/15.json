@@ -1,0 +1,9 @@
+{
+  "id": "15",
+  "subject": "Re-run v2-S03 (a) P1/P4/P6/C5 with sz pinned per subject",
+  "description": "Now that v2-S02 PASSED 6/6, re-run sub-stage (a) with the iter-7 sz_peak pinned (replaces v1's free-sz centroid ICP). Compare to LP-only (sz free) bench_a_results.csv to isolate the sz-pin lift, especially on 788406 where LP's depth-ratio sz_init=3.60 was 28% high vs GT=2.82.",
+  "activeForm": "Re-running v2-S03 (a) with sz pinned",
+  "status": "completed",
+  "blocks": [],
+  "blockedBy": []
+}
