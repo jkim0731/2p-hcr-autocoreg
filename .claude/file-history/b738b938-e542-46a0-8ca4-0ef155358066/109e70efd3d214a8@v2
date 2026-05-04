@@ -1,0 +1,224 @@
+"""S11 / Step 7 — Compare ROI quality inside vs outside HCR tile-stitching seams.
+
+For each subject:
+  - Load tile-overlap-zone intervals (level-2 voxels) from
+    `outputs/tile_boundaries.json`.
+  - Tag every cell by whether its centroid lies in an x- or y-overlap
+    band (or neither).
+  - Compute, separately for in-seam vs out-of-seam:
+      * model binary score distribution (mean / median / pos@0.5 fraction)
+      * model 4-class probability mean
+      * human-label class breakdown (where labels exist)
+
+Outputs:
+  outputs/stitching_boundary_summary.csv   (one row per (sid, seam_status))
+  outputs/stitching_boundary_labels.csv    (label-vs-seam contingency table)
+  outputs/stitching_boundary_summary.json  (combined-across-subject view)
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+from scipy.stats import chi2_contingency
+
+ROOT = Path("/root/capsule")
+SESS = ROOT / "code/sessions/v3_S11_roi_quality"
+CACHE = ROOT / "code/dev_code/cached_roi_quality"
+TIGHT_BBOX = ROOT / "code/dev_code/cached_hcr_cell_tight_bbox"
+OUT = SESS / "outputs"
+
+SUBJECTS = ["755252", "767018", "767022", "782149", "788406", "790322"]
+CLASS_NAMES = ["bad", "bad_ok", "good", "merged"]
+
+LABEL_LOG = OUT / "roi_qc_actions.jsonl"
+
+
+def _active_labels(sid: str) -> pd.DataFrame:
+    rows = []
+    with open(LABEL_LOG) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            rows.append(json.loads(line))
+    df = pd.DataFrame(rows)
+    df["sid"] = df["sid"].astype(str)
+    df = df[df["sid"] == sid].copy()
+    if df.empty:
+        return pd.DataFrame(columns=["hcr_id", "label"])
+    tomb: set[int] = set()
+    if (df["label"] == "_undone_").any():
+        for _, r in df[df["label"] == "_undone_"].iterrows():
+            ub = r.get("undoes") or {}
+            try:
+                tomb.add(int(ub.get("hcr_id", -1)))
+            except (TypeError, ValueError):
+                pass
+    df = df[df["label"].isin(CLASS_NAMES + ["unsure"])]
+    df = df[~df["hcr_id"].astype(int).isin(tomb)]
+    if "ts" in df.columns:
+        df = df.sort_values("ts")
+    df = df.drop_duplicates(subset=["hcr_id"], keep="last")
+    return df[["hcr_id", "label"]].reset_index(drop=True)
+
+
+def _classify_seam(
+    xc: np.ndarray, yc: np.ndarray,
+    overlap_x: list[dict], overlap_y: list[dict],
+) -> pd.Series:
+    """Returns one of {'none', 'x_only', 'y_only', 'corner'}."""
+    in_x = np.zeros(len(xc), dtype=bool)
+    in_y = np.zeros(len(xc), dtype=bool)
+    for z in overlap_x:
+        in_x |= (xc >= z["x_lo_lvl2"]) & (xc <= z["x_hi_lvl2"])
+    for z in overlap_y:
+        in_y |= (yc >= z["y_lo_lvl2"]) & (yc <= z["y_hi_lvl2"])
+    out = np.where(in_x & in_y, "corner",
+          np.where(in_x, "x_only",
+          np.where(in_y, "y_only", "none")))
+    return pd.Series(out)
+
+
+def main() -> None:
+    boundaries = json.load(open(OUT / "tile_boundaries.json"))
+
+    summary_rows = []
+    label_rows = []
+
+    for sid in SUBJECTS:
+        if sid not in boundaries:
+            print(f"[skip] {sid}: no tile_boundaries entry")
+            continue
+        bnd = boundaries[sid]
+        ovx = bnd["overlap_zones_x"]
+        ovy = bnd["overlap_zones_y"]
+
+        bb = pd.read_parquet(TIGHT_BBOX / f"{sid}_hcr_cell_tight_bbox_v1.parquet")
+        # OOF stage-2 v2 scores (binary + 4-class)
+        bin_oof = pd.read_parquet(CACHE / f"{sid}_stage2_binary_score_v2.parquet")
+        mc_oof = pd.read_parquet(CACHE / f"{sid}_stage2_4class_proba_v2.parquet")
+
+        df = bb[["hcr_id", "xc_vox", "yc_vox", "zc_vox"]].copy()
+        df = df.merge(bin_oof[["hcr_id", "score"]], on="hcr_id", how="left")
+        df = df.merge(mc_oof[["hcr_id"] + [f"p_{c}" for c in CLASS_NAMES]],
+                      on="hcr_id", how="left")
+
+        df["seam"] = _classify_seam(
+            df["xc_vox"].to_numpy(), df["yc_vox"].to_numpy(), ovx, ovy
+        )
+        df["in_seam"] = df["seam"] != "none"
+
+        # Attach human labels (only labelled cells get a non-NaN label)
+        labs = _active_labels(sid)
+        df = df.merge(labs.rename(columns={"label": "human_label"}),
+                      on="hcr_id", how="left")
+
+        # Per-seam-status summary (model)
+        for status, sub in df.groupby("seam"):
+            row = {
+                "sid": sid, "seam": status, "n": len(sub),
+                "frac_of_subject": len(sub) / len(df),
+                "binary_score_mean": float(sub["score"].mean()),
+                "binary_score_median": float(sub["score"].median()),
+                "frac_pred_pos_at_0.5": float((sub["score"] >= 0.5).mean()),
+            }
+            for c in CLASS_NAMES:
+                row[f"p_{c}_mean"] = float(sub[f"p_{c}"].mean())
+            # labelled-only stats
+            sub_lab = sub[sub["human_label"].isin(CLASS_NAMES)]
+            row["n_labelled"] = len(sub_lab)
+            for c in CLASS_NAMES:
+                row[f"label_{c}"] = int((sub_lab["human_label"] == c).sum())
+            summary_rows.append(row)
+
+        # Build labelled-only contingency rows
+        lab = df[df["human_label"].isin(CLASS_NAMES)]
+        for status, g in lab.groupby("seam"):
+            counts = g["human_label"].value_counts().to_dict()
+            label_rows.append({
+                "sid": sid, "seam": status, "n_labelled": len(g),
+                **{f"n_{c}": int(counts.get(c, 0)) for c in CLASS_NAMES},
+            })
+
+        # Subject-level chi2 (in_seam vs not, by class) — log-only
+        if (lab["in_seam"]).any() and (~lab["in_seam"]).any():
+            ct = pd.crosstab(lab["in_seam"], lab["human_label"])
+            try:
+                chi2, p, _, _ = chi2_contingency(ct)
+            except ValueError:
+                chi2, p = float("nan"), float("nan")
+        else:
+            chi2, p = float("nan"), float("nan")
+
+        n_in = int(df["in_seam"].sum())
+        n_lab_in = int(lab["in_seam"].sum())
+        print(
+            f"[{sid}] n_total={len(df)}  in_seam={n_in} ({100*n_in/len(df):.1f}%)  "
+            f"n_lab={len(lab)}  lab_in_seam={n_lab_in}  "
+            f"binary_mean(in)={df.loc[df['in_seam'],'score'].mean():.3f} vs "
+            f"(out)={df.loc[~df['in_seam'],'score'].mean():.3f}  "
+            f"chi2(label,seam) p={p:.3g}"
+        )
+
+    summary_df = pd.DataFrame(summary_rows)
+    summary_df.to_csv(OUT / "stitching_boundary_summary.csv", index=False)
+    label_df = pd.DataFrame(label_rows)
+    label_df.to_csv(OUT / "stitching_boundary_labels.csv", index=False)
+
+    # ----- combined-across-subject pooled view -----
+    print("\n" + "=" * 72)
+    print("POOLED across all 6 subjects")
+    print("=" * 72)
+    pooled = summary_df.groupby("seam").apply(lambda g: pd.Series({
+        "n": int(g["n"].sum()),
+        "binary_score_mean": float((g["binary_score_mean"] * g["n"]).sum() / g["n"].sum()),
+        "frac_pred_pos_at_0.5": float((g["frac_pred_pos_at_0.5"] * g["n"]).sum() / g["n"].sum()),
+        **{f"p_{c}_mean": float((g[f"p_{c}_mean"] * g["n"]).sum() / g["n"].sum())
+           for c in CLASS_NAMES},
+        "n_labelled": int(g["n_labelled"].sum()),
+        **{f"label_{c}": int(g[f"label_{c}"].sum()) for c in CLASS_NAMES},
+    }), include_groups=False)
+    print("\nMODEL (all cells, weighted):")
+    print(pooled[["n", "binary_score_mean", "frac_pred_pos_at_0.5"]
+                 + [f"p_{c}_mean" for c in CLASS_NAMES]].round(3).to_string())
+
+    # Pooled label distribution by seam
+    print("\nLABELLED cells by seam:")
+    lab_table = pooled[["n_labelled"] + [f"label_{c}" for c in CLASS_NAMES]].copy()
+    for c in CLASS_NAMES:
+        lab_table[f"frac_{c}"] = lab_table[f"label_{c}"] / lab_table["n_labelled"]
+    print(lab_table.round(3).to_string())
+
+    # Pooled chi-square
+    in_seam = lab_table.index != "none"
+    ct = lab_table[[f"label_{c}" for c in CLASS_NAMES]].copy()
+    ct.index.name = "seam"
+    print("\npooled label×seam contingency:")
+    print(ct.to_string())
+    # binarise: any seam vs none
+    bin_ct = pd.DataFrame({
+        "in_seam": ct.loc[ct.index != "none"].sum(axis=0),
+        "no_seam": ct.loc["none"] if "none" in ct.index else pd.Series(0, index=ct.columns),
+    }).T
+    if (bin_ct.sum(axis=1) > 0).all():
+        chi2, p, _, _ = chi2_contingency(bin_ct)
+        print(f"\nbinarised in_seam vs none chi2={chi2:.2f}  p={p:.3g}")
+
+    pooled_dict = {
+        "model_pooled": pooled.to_dict(orient="index"),
+        "label_pooled": lab_table.to_dict(orient="index"),
+        "label_seam_chi2": {"chi2": float(chi2), "p_value": float(p)} if "p" in dir() else {},
+    }
+    (OUT / "stitching_boundary_summary.json").write_text(
+        json.dumps(pooled_dict, indent=2, default=float)
+    )
+    print(f"\nWrote {OUT/'stitching_boundary_summary.csv'}")
+    print(f"Wrote {OUT/'stitching_boundary_labels.csv'}")
+    print(f"Wrote {OUT/'stitching_boundary_summary.json'}")
+
+
+if __name__ == "__main__":
+    main()

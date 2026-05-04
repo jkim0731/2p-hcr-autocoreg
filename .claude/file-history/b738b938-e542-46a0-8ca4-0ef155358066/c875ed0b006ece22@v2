@@ -1,0 +1,309 @@
+"""S11 / Step 8 — empirical core/shell radius calibration from "good" ROIs.
+
+For every label='good' ROI in every subject, sample c405 along 26 lines
+(centroid → each 26-neighbour direction) at 1 µm steps in physical units.
+Each sample is (signed_dist_um_from_centroid, c405).  Aggregate to a per-
+subject and pooled radial profile.
+
+The core radius r* is the distance from centroid at which mean(c405)
+*starts to rise* (the inner edge of the bright shell, since c405 = Rn28S
+is dim in nucleus / bright in cytoplasm).  We report:
+  - mean(c405) per 1 µm bin
+  - r* via two heuristics:
+      (a) argmin of the smoothed radial profile over [0, R_outer/2]
+      (b) first d where profile exceeds (mean_inner + 0.25*(mean_outer - mean_inner))
+
+Outputs:
+  outputs/core_shell_calibration_per_subject.csv
+  outputs/core_shell_calibration_pooled.csv
+  outputs/core_shell_calibration.json   (recommended radius — per-subject + pooled)
+
+Per-subject parallelism via multiprocessing.Pool.
+"""
+from __future__ import annotations
+
+import json
+import sys
+import time
+from multiprocessing import get_context
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import zarr
+
+ROOT = Path("/root/capsule")
+DEV = ROOT / "code/dev_code"
+SESS = ROOT / "code/sessions/v3_S11_roi_quality"
+OUT = SESS / "outputs"
+LABEL_LOG = OUT / "roi_qc_actions.jsonl"
+TIGHT_BBOX = DEV / "cached_hcr_cell_tight_bbox"
+sys.path.insert(0, str(DEV))
+
+SUBJECTS = ["755252", "767018", "767022", "782149", "788406", "790322"]
+MAX_RADIUS_UM = 12.0      # half-line length (cell ~10–14 µm radius post-expansion)
+STEP_UM = 1.0
+DIRS_VOX = np.array([
+    (dz, dy, dx)
+    for dz in (-1, 0, 1) for dy in (-1, 0, 1) for dx in (-1, 0, 1)
+    if not (dz == 0 and dy == 0 and dx == 0)
+], dtype=float)  # 26 directions in voxel-grid units
+
+
+def _active_good_labels(sid: str) -> list[int]:
+    if not LABEL_LOG.exists():
+        return []
+    rows = []
+    with open(LABEL_LOG) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            rows.append(json.loads(line))
+    df = pd.DataFrame(rows)
+    df["sid"] = df["sid"].astype(str)
+    df = df[df["sid"] == sid].copy()
+    if df.empty:
+        return []
+    tomb: set[int] = set()
+    if (df["label"] == "_undone_").any():
+        for _, r in df[df["label"] == "_undone_"].iterrows():
+            ub = r.get("undoes") or {}
+            try:
+                tomb.add(int(ub.get("hcr_id", -1)))
+            except (TypeError, ValueError):
+                pass
+    df = df[df["label"] == "good"]
+    df = df[~df["hcr_id"].astype(int).isin(tomb)]
+    if "ts" in df.columns:
+        df = df.sort_values("ts")
+    df = df.drop_duplicates(subset=["hcr_id"], keep="last")
+    return df["hcr_id"].astype(int).tolist()
+
+
+def _calibrate_subject(sid: str) -> dict:
+    """Sample radial intensity along 26 directions × good ROIs.  Returns dict
+    with mean profile and recommended radii."""
+    from benchmark_data_loader import load_subject  # noqa: PLC0415  (heavy import, in worker)
+
+    s = load_subject(sid)
+    seg_xy_um = float(s.hcr_xy_um)
+    seg_z_um = float(s.hcr_z_um)
+    seg = zarr.open(
+        str(s.hcr_dir / "cell_body_segmentation/segmentation_mask_orig_res.zarr"),
+        mode="r",
+    )
+    arr405_path = s.hcr_dir / "image_tile_fusing/fused/channel_405.zarr"
+    if not arr405_path.exists():
+        return {"sid": sid, "n_cells": 0, "error": "no 405 channel"}
+    z405 = zarr.open(str(arr405_path), mode="r")["2"]
+
+    Z, Y, X = seg.shape[-3:]
+    good_ids = _active_good_labels(sid)
+    if not good_ids:
+        return {"sid": sid, "n_cells": 0, "error": "no good labels"}
+
+    # Tight bbox cache
+    tb = pd.read_parquet(TIGHT_BBOX / f"{sid}_hcr_cell_tight_bbox_v1.parquet")
+    tb = tb[tb["hcr_id"].isin(good_ids)].copy()
+
+    # Pre-compute step vectors in VOXEL units for each of 26 directions, so that
+    # one step = STEP_UM in PHYSICAL space along that direction.
+    voxel_um_zyx = np.array([seg_z_um, seg_xy_um, seg_xy_um])
+    step_voxels: list[np.ndarray] = []
+    for v in DIRS_VOX:
+        v_um = v * voxel_um_zyx
+        L = np.linalg.norm(v_um)
+        v_um /= L  # unit µm vector
+        # to advance d µm: voxel offset = d * (v_um / voxel_um_zyx)
+        step_voxels.append(STEP_UM * (v_um / voxel_um_zyx))
+
+    n_steps = int(round(MAX_RADIUS_UM / STEP_UM))
+    samples: list[tuple[float, float]] = []  # (signed_d_um, intensity)
+
+    for r in tb.itertuples(index=False):
+        hid = int(r.hcr_id)
+        zmin = int(r.zmin_vox); zmax = int(r.zmax_vox)
+        ymin = int(r.ymin_vox); ymax = int(r.ymax_vox)
+        xmin = int(r.xmin_vox); xmax = int(r.xmax_vox)
+        # pad by MAX_RADIUS_UM converted to voxels to cover the line endpoints
+        pad_z = int(np.ceil(MAX_RADIUS_UM / seg_z_um)) + 2
+        pad_xy = int(np.ceil(MAX_RADIUS_UM / seg_xy_um)) + 2
+        z0 = max(0, zmin - pad_z); z1 = min(Z, zmax + pad_z)
+        y0 = max(0, ymin - pad_xy); y1 = min(Y, ymax + pad_xy)
+        x0 = max(0, xmin - pad_xy); x1 = min(X, xmax + pad_xy)
+        seg_crop = np.asarray(seg[0, 0, z0:z1, y0:y1, x0:x1])
+        mask = seg_crop == hid
+        if not mask.any():
+            continue
+        img405 = np.asarray(z405[0, 0, z0:z1, y0:y1, x0:x1]).astype(np.float32)
+        # cell centroid in *crop* coords (voxel units, sub-voxel)
+        zz, yy, xx = np.where(mask)
+        cz = float(zz.mean()); cy = float(yy.mean()); cx = float(xx.mean())
+
+        for vstep in step_voxels:
+            for k in range(1, n_steps + 1):
+                z_p = cz + vstep[0] * k
+                y_p = cy + vstep[1] * k
+                x_p = cx + vstep[2] * k
+                zi = int(round(z_p)); yi = int(round(y_p)); xi = int(round(x_p))
+                if zi < 0 or zi >= mask.shape[0] or yi < 0 or yi >= mask.shape[1] \
+                        or xi < 0 or xi >= mask.shape[2]:
+                    break
+                if not mask[zi, yi, xi]:
+                    break
+                samples.append((k * STEP_UM, float(img405[zi, yi, xi])))
+
+    if not samples:
+        return {"sid": sid, "n_cells": int(len(tb)), "n_samples": 0}
+
+    arr = np.asarray(samples, dtype=float)
+    d = arr[:, 0]
+    I = arr[:, 1]
+    bins = np.arange(0.5, MAX_RADIUS_UM + 1.0, STEP_UM)  # bin centres at 1, 2, ...
+    bin_idx = np.clip(((d - 0.5) / STEP_UM).astype(int), 0, len(bins) - 2)
+    sums = np.bincount(bin_idx, weights=I, minlength=len(bins) - 1)
+    counts = np.bincount(bin_idx, minlength=len(bins) - 1)
+    means = np.where(counts > 0, sums / np.maximum(counts, 1), np.nan)
+
+    # heuristic A: argmin over [1, MAX_RADIUS_UM/2 + 1]
+    centres = bins[:-1] + STEP_UM / 2.0
+    half_n = max(2, int((MAX_RADIUS_UM / 2.0) / STEP_UM))
+    if np.isfinite(means[:half_n]).any():
+        argmin_idx = int(np.nanargmin(means[:half_n]))
+        r_argmin = float(centres[argmin_idx])
+    else:
+        r_argmin = float("nan")
+
+    # heuristic B: first d where mean exceeds inner+0.25*(outer - inner).
+    # inner = mean of first 3 bins (closest to centroid), outer = mean of bins 4-6.
+    inner = float(np.nanmean(means[:3])) if np.isfinite(means[:3]).any() else float("nan")
+    outer = float(np.nanmean(means[3:6])) if np.isfinite(means[3:6]).any() else float("nan")
+    thresh = inner + 0.25 * (outer - inner) if np.isfinite(inner) and np.isfinite(outer) else float("nan")
+    if np.isfinite(thresh):
+        rises = np.where(means >= thresh)[0]
+        # first index where mean rises *after* inner zone
+        rises = rises[rises > 0]
+        r_thresh = float(centres[rises[0]]) if rises.size else float("nan")
+    else:
+        r_thresh = float("nan")
+
+    return {
+        "sid": sid,
+        "n_cells": int(len(tb)),
+        "n_samples": int(len(samples)),
+        "centres_um": centres.tolist(),
+        "mean_intensity_per_bin": [float(x) for x in means],
+        "count_per_bin": [int(x) for x in counts],
+        "inner_mean": inner,
+        "outer_mean": outer,
+        "r_argmin_um": r_argmin,
+        "r_thresh_um": r_thresh,
+        "voxel_z_um": seg_z_um,
+        "voxel_xy_um": seg_xy_um,
+    }
+
+
+def main() -> None:
+    OUT.mkdir(parents=True, exist_ok=True)
+    print("Calibrating core/shell radius from 'good' labels per subject...")
+    print(f"  MAX_RADIUS_UM={MAX_RADIUS_UM}  STEP_UM={STEP_UM}  N_DIRS=26")
+
+    t0 = time.time()
+    ctx = get_context("spawn")
+    with ctx.Pool(processes=min(len(SUBJECTS), 6)) as pool:
+        results = pool.map(_calibrate_subject, SUBJECTS)
+    print(f"\nelapsed: {time.time() - t0:.1f}s")
+
+    # Per-subject summary table
+    rows = []
+    profiles = {}
+    pool_centres = None
+    pool_sum = None
+    pool_cnt = None
+    for r in results:
+        sid = r["sid"]
+        if "error" in r:
+            print(f"  [{sid}] {r['error']}")
+            continue
+        rows.append({
+            "sid": sid,
+            "n_good_cells": r["n_cells"],
+            "n_samples": r["n_samples"],
+            "voxel_z_um": r["voxel_z_um"],
+            "voxel_xy_um": r["voxel_xy_um"],
+            "inner_mean_405": r["inner_mean"],
+            "outer_mean_405": r["outer_mean"],
+            "r_argmin_um": r["r_argmin_um"],
+            "r_thresh_um": r["r_thresh_um"],
+        })
+        cs = np.asarray(r["centres_um"])
+        m = np.asarray(r["mean_intensity_per_bin"])
+        n = np.asarray(r["count_per_bin"])
+        profiles[sid] = (cs, m, n)
+        if pool_centres is None:
+            pool_centres = cs.copy()
+            pool_sum = np.zeros_like(cs)
+            pool_cnt = np.zeros_like(cs)
+        # weighted-aggregate: each subject contributes (n * m, n)
+        pool_sum += np.where(np.isfinite(m), m * n, 0.0)
+        pool_cnt += n
+
+    pd.DataFrame(rows).to_csv(OUT / "core_shell_calibration_per_subject.csv", index=False)
+
+    # pooled profile
+    if pool_centres is not None:
+        with np.errstate(invalid="ignore"):
+            pooled_mean = np.where(pool_cnt > 0, pool_sum / np.maximum(pool_cnt, 1), np.nan)
+        prof = pd.DataFrame({
+            "centre_um": pool_centres,
+            "pooled_mean_405": pooled_mean,
+            "pooled_count": pool_cnt.astype(int),
+        })
+        for sid, (cs, m, n) in profiles.items():
+            prof[f"mean_{sid}"] = m
+            prof[f"count_{sid}"] = n
+        prof.to_csv(OUT / "core_shell_calibration_pooled.csv", index=False)
+
+        # Pooled r_argmin/r_thresh
+        half_n = max(2, int((MAX_RADIUS_UM / 2.0) / STEP_UM))
+        if np.isfinite(pooled_mean[:half_n]).any():
+            r_argmin_pool = float(pool_centres[int(np.nanargmin(pooled_mean[:half_n]))])
+        else:
+            r_argmin_pool = float("nan")
+        inner = float(np.nanmean(pooled_mean[:3]))
+        outer = float(np.nanmean(pooled_mean[3:6]))
+        thresh = inner + 0.25 * (outer - inner)
+        rises = np.where(pooled_mean >= thresh)[0]
+        rises = rises[rises > 0]
+        r_thresh_pool = float(pool_centres[rises[0]]) if rises.size else float("nan")
+
+        summary = {
+            "max_radius_um": MAX_RADIUS_UM,
+            "step_um": STEP_UM,
+            "n_dirs": 26,
+            "per_subject": rows,
+            "pooled": {
+                "inner_mean_405": inner,
+                "outer_mean_405": outer,
+                "r_argmin_um": r_argmin_pool,
+                "r_thresh_um": r_thresh_pool,
+            },
+        }
+        (OUT / "core_shell_calibration.json").write_text(json.dumps(summary, indent=2))
+
+        print("\nPER-SUBJECT calibration:")
+        print(pd.DataFrame(rows).to_string(index=False))
+        print(f"\nPOOLED profile (centre_um → pooled_mean_405):")
+        for cu, pm, pc in zip(pool_centres, pooled_mean, pool_cnt.astype(int)):
+            print(f"  d={cu:5.2f} µm  mean_I={pm:7.1f}  N={pc}")
+        print(f"\nPOOLED r_argmin = {r_argmin_pool:.2f} µm")
+        print(f"POOLED r_thresh = {r_thresh_pool:.2f} µm  "
+              f"(inner={inner:.1f}  outer={outer:.1f})")
+        print(f"\nWrote {OUT / 'core_shell_calibration_per_subject.csv'}")
+        print(f"Wrote {OUT / 'core_shell_calibration_pooled.csv'}")
+        print(f"Wrote {OUT / 'core_shell_calibration.json'}")
+
+
+if __name__ == "__main__":
+    main()

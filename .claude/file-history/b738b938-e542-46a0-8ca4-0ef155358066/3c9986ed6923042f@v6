@@ -1,0 +1,390 @@
+# 10 — Grand Plan v3: Cell-cell matching and QC
+
+> **Date opened:** 2026-04-29
+> **Author:** automatic
+> **Supersedes:** the "Stage A → Stage B → Stage C" rough-registration sections of `09 Full automatic v2 plan.md`. Stage D / E / F (cell-cell + QC) are reframed and absorbed here. The v1 catalog ledger in `07 Grand Plan.md` §11 is still the authoritative record of failed/abandoned candidates; this plan adds the **constrained-revival** angle: revisit failures *inside the small overlap volume* delivered by the now-locked initial registration.
+>
+> **Path note (2026-04-28).** `notebooks/`, `sessions/`, and `full_automatic_execution_01/` are read-only under `/root/capsule/data/claude_data/`. v2 sessions/code under `/root/capsule/data/claude_data/full_automatic_execution_02/` (read-only). Any new session/code must be written under `/root/capsule/code/` (tree to recreate as needed).
+
+---
+
+## 0. Why a v3 plan
+
+We have crossed a real threshold:
+
+* The 2-D PWR 4×4 surface registration (`dev_code/surface_registration_v2.py`) pins `(R, sxy, t_x, t_y)` on **all 6 benchmark subjects** with PWR-NCC 0.15–0.32, including the v1-unreachable 782149.
+* The slab-rigid-NCC `sz` estimator (v2-S02 iter 7) pins `sz` on **6/6** with mean |err| 0.04 (range −0.09 to +0.06).
+* `LockedPriorWarmStart` consumes both and pins all 5 of `(R, sxy, sxy, sz, t_x, t_y)` — only `t_z` and a small `θ_residual` remain for any downstream fit.
+* The v2-S03 gated ensemble (`M3-ICP-locked` when ICP improves Δd_med < −5 µm, else `C5_szp`) reaches **sum r@20 = 2.95 vs v1's 1.05** (+1.90, ~2.8×). Per-subject: 755252=0.07, 767018=0.86, 767022=0.66, 782149=0.16, 788406=0.44, 790322=0.76.
+* v2-S04 iter 7/8 demonstrated that hull-restricted **TPS** evaluation lifts NCC by +0.20 to +0.84 on 5/6 subjects — including +0.30 on 782149 — once anchors are picked using IoU-overlap pairs and K-subset NCC search.
+
+**What this means.** The two assumptions that broke v1 — *unknown global pose* and *no shared image-level anchor* — no longer hold. Every remaining method has to operate inside a known overlap volume of ~600 × 500 × 300 µm with all 5 affine DOF pinned. **Most v1 failures were caused by global-pose ambiguity, not by the matcher itself.** They deserve a constrained-revival pass before being treated as dead.
+
+What's left is to take that locked frame all the way to a per-cell coreg table at manual quality, with QC that is fast enough for the human reviewer to be the rate-limiting step rather than the algorithm.
+
+---
+
+## 1. Goal and success criteria
+
+**Goal.** Produce a per-subject coreg table `[(cz_id, hcr_id, confidence)]` that approaches manual baseline (r@20 ≥ 0.50; recall vs `coreg_table.csv` ≥ 0.70 on dense subjects; precision ≥ 0.90 after a human-in-the-loop pass). **v3 is *not* aiming for hands-off automation yet** — the operating mode is "algorithm proposes, human reviews / corrects in the GUI." Full automation may follow once classifier confidence is calibrated and the GUI's accept-rate stabilises across subjects, but that is out of scope for v3.
+
+**Two-track problem (per Notes.md 2026-04-29).**
+
+* **Track A (centroid-based).** Refines the locked affine into a per-cell mapping using centroid features, F6 descriptors, and TPS. Fast; sensitive to GFP+ threshold and CZ/HCR segmentation quality.
+* **Track B (image-based).** Uses image NCC / MI / mask-IoU **inside the locked overlap** to produce per-cell evidence; cell-cell matching can either come from Track A and be QC'd by Track B image scores, or from a learned matcher trained on local image patches.
+
+These tracks are not exclusive. The default v3 pipeline is **Track A produces the candidate list, Track B QCs each pair, GUI is the final arbiter** — the human reviews the classifier-sorted queue and accepts / rejects / re-anchors as needed. Track A alone is acceptable on dense subjects where TPS is well-anchored; Track B is the rescue path on 755252 + 782149. v3 explicitly keeps the human in the loop; the goal is to reduce reviewer load, not eliminate it.
+
+**Success.**
+
+| metric | target |
+|--------|-------:|
+| sum r@20 across 6 subjects | ≥ 4.50 (vs v2 ensemble 2.95) |
+| per-subject r@20 ≥ 0.50 | 5/6 (rescue 755252 + 782149 to ≥ 0.40) |
+| precision after GUI pass | ≥ 0.90 |
+| reviewer throughput in GUI | ≥ 100 pairs/hour |
+| wall-clock to "ready for review" per subject | ≤ 30 min on current 16-core CPU |
+
+**Stop rule.** If Track A + Track B + GUI cannot raise 755252 / 782149 above r@20 = 0.40 after exhausting subgoals 4.1–4.3 below, those subjects are re-classified as **manual-seed only** (the GUI exposes K=4 image-NCC-validated anchors, the user picks them, and the rest of the pipeline runs as before). This is a milder fallback than v1's "structurally unreachable" verdict.
+
+---
+
+## 2. Snapshot of what's shipped (do not re-implement)
+
+| Artefact | Status | Location |
+|----------|--------|----------|
+| Pia/top/bottom surface fits (iter08 CZ, iter07 HCR top, iter08 HCR bottom) | promoted | `code/dev_code/surfaces_iter08.py`, cached JSON in `code/dev_code/cached_surfaces/` |
+| ROI-area sxy estimator (bootstrap-only) | promoted | `code/dev_code/roi_area_sxy.py` |
+| 2-D top-slab surface registration v2 (PWR 4×4 wins 6/6) | promoted | `code/dev_code/surface_registration_v2.py`, cache in `code/dev_code/cached_surface_registration/<sid>.json` |
+| Locked-prior warm-start (Stage A) | shipped | `data/claude_data/full_automatic_execution_02/lib/locked_prior_warm.py` |
+| Slab-rigid `sz` estimator (Stage B iter 7) | shipped (6/6 within ±0.30 of GT) | `data/claude_data/full_automatic_execution_02/sessions/v2_S02_sz_image_sweep/run_iter7_slab_rigid_ncc.py` |
+| `M3-ICP-locked` candidate (SE(3) refinement, sxy + sz pinned) | shipped | `data/claude_data/full_automatic_execution_02/sessions/v2_S03_revival_pass/bench_e_m3_icp_szpinned.py` |
+| Gated ensemble (M3-ICP gate, else C5_szp) | shipped | `data/claude_data/full_automatic_execution_02/sessions/v2_S03_revival_pass/bench_g_ensemble.py` |
+| Stage D iter 8 K-subset TPS-NCC seed picker | shipped | `data/claude_data/full_automatic_execution_02/sessions/v2_S04_seed_constellation/iter8_search_constellation.py` |
+| **HCR per-ROI quality classifier (S11, subgoal 4.4) — stage-2 v5d** | **promoted** (2026-05-01; binary AUC 0.917, 4-class f1_macro 0.720 @ 1648 labels) | `code/dev_code/roi_quality_v5d.py` (`extract_features`, `predict`, `predict_subject`, `train`); models + meta + OOF parquets in `code/dev_code/cached_roi_quality/` |
+| HCR ROI labelling GUI (standalone matplotlib app) | promoted | `code/dev_code/roi_label_gui.py` |
+| F1/F2/F4/F6/F7/F8/F9 foundations | first-pass-done (some need promotion to `code/`) | `data/claude_data/full_automatic_execution_01/sessions/0[1-8]_*` |
+| `cz_voronoi_labels` (per-cell CZ label volume) | shipped | `code/dev_code/cz_labels.py` (S48) |
+| `hcr_quality(s)` per-cell HCR image quality | shipped | `lib/image_quality.py` (S47) |
+| HCR cellpose segmentation `metrics.pickle` (4 of 6 subjects) | shipped | `{hcr_dir}/cell_body_segmentation/metrics.pickle` |
+| C5 (P1⊕P4⊕P6 ensemble), all candidates F9-callable | shipped | `data/claude_data/full_automatic_execution_01/bench/candidate_impls/` |
+| G1-review GUI (ipywidgets) | first-pass-done | `data/claude_data/full_automatic_execution_01/sessions/25_G1_review_gui/` |
+
+**Do not re-implement.** When a session needs any of these, it imports from the listed location. The only items that may need to move from `data/claude_data/` to `code/` are the v2 lib modules (`locked_prior_warm.py`, the iter-7 sz helpers) — promotion is a 1-session task scheduled below.
+
+---
+
+## 3. What remains (the v3 work)
+
+Two of the four original goals (`02 Goals.md`) are now done; two remain:
+
+| Goal | Status |
+|------|--------|
+| 1. Sub-volume localisation | **DONE** — `surface_registration_v2.crop_bbox` |
+| 2. Whole-volume registration | **DONE** — Stage A + Stage B locked-prior frame |
+| 3. Constellation automation | **PARTIAL** — Stage D iter 8 produces K=4–6 IoU-pair anchors with TPS-NCC validation on 5/6; 782149 only finds 1 valid quadruple |
+| 4. ROI ↔ ROI mapping | **OPEN** — v3 §4 below (subgoal 4.4 HCR-side ROI quality classifier is **shipped** as v5d; subgoals 4.2/4.3/4.5 still open) |
+
+The four open questions from `Notes.md` (2026-04-29):
+
+1. HCR ROI segmentation errors — addressable by a learned ROI classifier, restricted to the locked overlap volume (subgoal 4.4).
+2. Initial landmark search not great or hard to verify — addressable by image-NCC validation of Stage D anchors (already partly done in S04 iter 8) and by Track B image-side QC scores (subgoal 4.2).
+3. Cell-cell matching classifier to automate QC — this is the v3 deliverable, addressed in subgoal 4.3.
+4. Redo automatic registration with the initial-registration constraint — this is the framing of every v3 subgoal: no candidate searches outside the `crop_bbox`.
+
+---
+
+## 4. v3 subgoals (cell-cell matching + QC)
+
+Every subgoal below operates inside the cropped overlap volume from `surface_registration_v2`. The locked frame and the Stage A → Stage B → ensemble pipeline are fixed inputs.
+
+### 4.1 — Constrained revival of v1 candidates
+
+> **Premise (per user, 2026-04-29).** Many v1 failures were caused by candidate searches over the full HCR volume (~78 k GFP+ cells) and the global pose ambiguity. Inside the locked overlap (~3–10 k GFP+ cells, known affine), the same algorithms can succeed where they previously didn't.
+
+**Concretely re-run, in order, with the locked frame and the overlap crop:**
+
+| candidate | v1 verdict | constrained-revival hypothesis |
+|-----------|------------|---------------------------------|
+| **P1 TEASER++** at K=20, c̄=15, β=5 | shipped, sum r@20 = 0.78 | with HCR cropped to ~5 k cells and aniso scale pinned, K can shrink to 5–10 and TLS no longer drifts to a wrong basin |
+| **P14 Hungarian** | tied P1 in v1 | constrained Hungarian on ~1000×5000 affinity is near-instant; should be the new sanity floor |
+| **P4 Spectral GM** at β=5 | wins 755252 in v1 | with affinity built only over crop-local pairs, M shrinks 100× and one full power iteration solves it |
+| **P5 FGW (POT)** | abandoned (n_pred=0) | crop drops |HCR| 10×, partial-mass / ε regulariser tuning becomes tractable; revival is *speculative*, run last |
+| **P15 FPFH / spin-image descriptors** | rejected for size imbalance | crop fixes the size imbalance — re-test |
+| **M4 per-cell IoU** with `cz_voronoi_labels` (S48) ↔ HCR mask | blocked by data in v1 | unblocked: S48 ships per-cell CZ labels; per-pair IoU now computable inside crop |
+| **G1 GNN matcher** retrained on F8 with **CZ-sized source / HCR-overlap target** asymmetry | abandoned (S52) | the v1 abandonment was driven by loss-floor + cardinality mismatch in F8; F8 inside the locked crop has source ≈ target cardinality (and the dustbin floor disappears) |
+| **G2 contrastive embedding** | 0 recall in v1 | same logic; revisit only if G1 still fails |
+
+**Output.** A per-method r@20 / precision / runtime table on the 6 benchmark subjects, restricted to the locked-frame crop. Anything that ties or beats `M3-ICP-locked + C5_szp` enters the production candidate menu.
+
+**Cost.** Each revival is one ≤ 1-day session. Total budget: ≤ 8 sessions. Stop early if any 3 consecutive revivals fail (then the centroid family is exhausted and we focus on Track B / classifier).
+
+**Why this is not "thrashing."** v1's negative result was real *under v1's assumptions*. The assumption that breaks is "operate over the full HCR volume." Each revival explicitly states which v1 assumption it relaxes; if it still fails inside the crop, the verdict carries over and the candidate is closed for good. Use the v1 ledger entry as the regression baseline.
+
+### 4.2 — Track B (image-side) per-pair QC scores
+
+> **Premise.** Centroid-only ranking produces self-consistent wrong matches (v1 §11; v2-S04 iter 5). Image-NCC inside a hull-restricted TPS is the most predictive signal we have (v2-S04 iter 7: Δ-NCC > 0 on 5/6 even when centroid drop-lift was 0). v3 promotes image-NCC from a Stage-D selection criterion to a **per-pair confidence channel** that runs alongside any centroid candidate.
+
+**Per-pair scores to compute (one number per (cz_id, hcr_id) pair):**
+
+1. **Local image NCC.** A 60 × 60 × 60 µm patch around each centroid in CZ z-stack and HCR 488; warp CZ patch with the locked affine + (optional) local TPS; Pearson NCC after intensity normalisation. Reuses the iter-7 helper.
+2. **Per-cell mask IoU (M4 revival).** `cz_voronoi_labels(s)` (S48) ↔ HCR `cell_body_segmentation/segmentation_mask.zarr` resampled onto a shared 4 µm isotropic grid via F3.
+3. **Footprint-IoU (XY MIP).** Already in iter-8 search; export at the per-pair level.
+4. **F6 feature cosine.** Already shipped in S46-b/S47. Use `lib/image_quality.hcr_quality(s)` per HCR cell + F6 cosine.
+5. **TPS residual relative to local active-landmark distribution** (when there are active landmarks).
+6. **Topology agreement** at k = 5: the CZ cell's k-NN in CZ should map (under TPS) within `r_topo` of the HCR target's k-NN.
+
+**Output.** A long-form CSV `pair_scores.csv` with columns `[sid, cz_id, hcr_id, ncc_local, iou_mask, iou_xy, f6_cos, tps_res, topo, source]` where `source ∈ {C5_szp, M3_ICP, P1_revived, …}`. One row per pair-method combination.
+
+**How it's used.**
+
+* As input to the QC classifier (subgoal 4.3).
+* As intrinsic confidence for the GUI sort order in subgoal 4.5.
+* As an ensemble tie-breaker when two methods disagree on a CZ cell's HCR target.
+
+### 4.3 — Cell-cell matching classifier (the v3 main deliverable)
+
+> **Premise (per Notes.md).** Manual reviewers accept/reject a candidate pair using context (morphology, neighbourhood, increase in local TPS coherence after activation). A learned classifier on the per-pair features in 4.2 can replicate that and run against every candidate from any matcher.
+
+**Inputs.** `pair_scores.csv` (4.2) + the candidate's intrinsic confidence + an optional CZ-image patch + an optional HCR-image patch.
+
+**Architecture spectrum (run a sweep, pick the simplest that hits target):**
+
+1. **GBT on hand-features** (XGBoost / LightGBM) — same pattern as QF1 in `07 Grand Plan.md` §7. Train on `coreg_table.csv` ∪ `landmarks_qced.csv (active=true)` as positives; sample negatives uniformly inside the crop ∪ GUI-rejected pairs as hard negatives. **First milestone.**
+2. **Two-tower contrastive embedding.** CZ and HCR per-cell feature vectors → 64-dim shared embedding via projection MLPs; InfoNCE with crop-local in-batch negatives. (≈ G2 reborn.)
+3. **Patch CNN classifier.** 3D ResNet-10 on 32³-voxel CZ patch ⊕ HCR patch ⊕ pair scores → match probability. GPU-required.
+4. **Cross-attention transformer (G1 reborn).** Tokens = crop-local cells; F6 ⊕ image-patch CNN feature as node attribute; SuperGlue-style cross-attention + Sinkhorn+dustbin head. GPU-required.
+
+**Training.**
+
+* **Stage 1 (synthetic).** F8 synthetic warps **inside the locked overlap crop** (scale 1.0 around the locked sxy/sz; small TPS jitter ≤ 30 µm). The cardinality matches between source and target — this is the gap S52 hit.
+* **Stage 2 (weak supervision).** `coreg_table.csv` from a leave-one-subject-out schedule. Strict CLAUDE.md compliance: training subjects are NOT validation subjects.
+* **Stage 3 (GUI fine-tune).** As `qc_actions.jsonl` grows, fine-tune at low LR; monitor for catastrophic forgetting.
+
+**Reference points.** Compare to Matt's classifier (per Notes.md). Goal: match or beat on AUC and on calibrated probability quality.
+
+**Success metric.** LOSO-CV AUC ≥ 0.92, Brier ≤ 0.10 after isotonic calibration, **precision ≥ 0.90 at recall ≥ 0.70** on validation subjects.
+
+**Failure mode addressed.** v1 G1/G2 failed (sessions 21, 22, 37, 38, 52) because F8 had the wrong cardinality and the rough alignment was wrong; both are fixed inside the crop.
+
+### 4.4 — HCR ROI segmentation classifier (per Notes.md)
+
+> **Premise (user, 2026-04-29).** Don't re-run cellpose. Use the existing HCR ROI segmentation (`cell_body_segmentation/segmentation_mask.zarr`, `metrics.pickle`) as-is, and train a per-ROI pass/fail classifier whose features describe the ROI itself plus its local context. The classifier filters bad ROIs without touching the segmentation pipeline.
+
+**Plan.**
+
+1. **Per-ROI feature extractor** (no re-segmentation). For every HCR ROI, compute:
+   * **Shape / size** from `metrics.pickle`: volume, surface area, equivalent diameter, axis ratios, sphericity, voxel count.
+   * **Intensity stats** at the ROI on every available channel (488 GFP, **405 nuclear / DAPI**, 561, 594): mean, std, p10/p50/p90, foreground-vs-margin contrast.
+   * **Nuclear-channel agreement (405).** Mean / p90 of 405 inside the ROI vs in a 1-voxel-eroded core vs in a small dilated shell. A "real" cell should peak inside; a segmentation artefact often does not. **This is the new signal added per the user's hint.**
+   * **Local context patch** at the ROI centroid: small 3-D crop on 405 (and optionally 488) at level 2 covering ~30 µm; downsampled to a fixed-size feature volume or summarised by mean / std / Laplacian per radial shell.
+   * **Neighbour density / spacing** from `hcr_centroids` (existing): k-NN distances, count of GFP+ neighbours within 30 µm, ratio of GFP+ to all neighbours.
+   * **GFP+ score** (`peakgauss3_density_p0.1` or `peakgauss3_mean_bg_p1`) — kept as a feature, not as the gate.
+   * **Mask consistency** with the level-0 `segmentation_mask.zarr`: overlap fraction between the ROI's metrics-pickle bbox and the actual mask label region (catches the "level mislabel" issue documented in `reference_hcr_seg_zarr_levels`).
+2. **Labels — bootstrap with rule-based pseudo-labels, then refine with a small human pass.** This problem is HCR-internal (no CZ↔HCR matching), so the CLAUDE.md rule "no benchmark for design" doesn't bite — `coreg_table.csv` is irrelevant; what's needed is HCR-only ROI quality labels.
+   * **Stage 1 — heuristic pseudo-labels (no human, per subject).**
+     * **Easy negatives (bad ROI):** volume in bottom 1 % (debris / fragments) or top 1 % (merged blobs); ROIs touching xy or z boundary of the seg volume; ROIs whose 405 intensity at the centroid is below the local background (no nucleus where one should be); ROIs with solidity < 0.6 or axis aspect > 4 (highly non-convex / extreme elongation); ROIs whose `metrics.pickle` bbox does not intersect a label region in `segmentation_mask.zarr` (catches level-mislabel + stale pickle).
+     * **Synthetic negatives:** programmatically force-merge two adjacent ROIs (label = bad) and force-split one ROI through its centroid plane (label = bad). Adds the failure modes the heuristics can't cover.
+     * **Easy positives (good ROI):** volume in the middle 50 %; 405 peak inside the ROI mask; solidity > 0.85; not boundary-touching; stable 405/488 statistics across the eroded core vs the dilated shell.
+     * Drop ROIs that satisfy neither set ("ambiguous"); they go to Stage 2.
+   * **Stage 2 — small targeted human pass (~5–10 min/subject).** Train Stage-1 GBT on the heuristic labels. Score every ROI; sample ~50–100 ROIs per subject from the **uncertain band** (predicted score 0.3–0.7) for a quick GUI thumbs-up / thumbs-down. Save to `roi_qc_actions.jsonl`. Retrain. This is where the model picks up the cases the heuristics can't reach.
+   * **Validation.** LOSO-CV on Stage-2 human labels (synthetic + heuristic only used as auxiliary training signal, never for evaluation). Brier + AUC. Held-out subject's human labels are ground truth.
+   * **Why this works.** Synthetic merges/splits + outlier rules cheaply cover the obvious failure modes. Human time is reserved for the ambiguous middle, where labels are most informative per minute. Strict CLAUDE.md compliance because no CZ↔HCR coreg labels are touched.
+3. **Classifier.** GBT (XGBoost / LightGBM) on the hand features first; LOSO-CV across the 6 subjects. Add a small CNN branch on the 405 patch only if the GBT misses AUC ≥ 0.90.
+4. **Reference points.** Compare to Matt's classifier on the same labels (per Notes.md).
+5. **Output.** Per-ROI `roi_quality ∈ [0, 1]`. Used in two places:
+   * Subgoal 4.2 — added as a per-pair feature (the HCR side of the candidate pair).
+   * Subgoal 4.5 — TPS expansion's gate refuses any HCR target with `roi_quality < τ_roi`.
+6. **No segmentation rerun.** All compute is feature extraction + GBT training; runs in minutes per subject on CPU. GPU is only needed if the patch CNN branch is added in step 3.
+
+### 4.5 — TPS expansion seeded by Stage D (E.TPS done right)
+
+v2-S05 (E.TPS) failed because it used aniso-similarity instead of TPS, and because K=4 anchors had only 3 residual DOF. v2-S04 iter 7/8 fixed both; v3 wires them into the expansion loop:
+
+1. Start from the iter-8 K=4–6 IoU-pair anchors.
+2. Fit per-axis `Rbf(thin_plate)`.
+3. **Inside the convex hull only**, NN-match each unmatched CZ cell to nearest HCR GFP+ cell after TPS warp.
+4. Gate by: (a) TPS residual < 3σ of local active-landmark residual, (b) classifier probability ≥ τ (subgoal 4.3), (c) topology agreement at k=5.
+5. Accept → append; refit TPS; repeat.
+6. **Periodic hull growth.** Each accepted pair extends the hull; once hull covers ≥ 80 % of CZ-bbox volume, drop the hull restriction.
+7. Terminate when acceptance rate < 1 % per epoch or active landmarks ≥ 80.
+
+This is the Section 5 of the manual protocol re-implemented with image-NCC + classifier gates instead of human eyes.
+
+### 4.6 — Optional volume-registration refinement using accepted pairs
+
+> **Premise (user, 2026-04-29).** Once we have ≥ 30 high-confidence pairs from 4.5, we can refit the global affine (or even a low-rank deformable warp). This may help reach more cells in 4.5's later epochs.
+
+**Plan.** After every grid epoch in 4.5:
+
+1. Re-fit anisotropic similarity on all currently active pairs (still 9-DOF, well-conditioned now).
+2. Compare the refit's TPS residuals to the locked frame's. If refit reduces residuals by ≥ 20 % AND keeps `(sxy, sz)` within ±5 % of the locked priors, **adopt** it for the next epoch.
+3. If refit drifts beyond the prior bounds, **reject** and keep the locked frame (the prior is more trustworthy than 30 pairs in poorly distributed regions).
+
+This is intentionally conservative — the locked frame is image-NCC-validated against ~50 000 voxels, the refit against ≤ 80 pairs.
+
+### 4.7 — QC GUI (Stage F revisited)
+
+Reuse the v1 `25_G1_review_gui` and add three v3 features:
+
+1. **Sort order** = ascending classifier probability (4.3) AND ascending TPS residual; tied pairs broken by image NCC (4.2).
+2. **Side-by-side image patch view** — CZ z-stack patch + HCR 488 + HCR mask, all rendered in the locked frame.
+3. **One-click "activate ⇒ refit TPS ⇒ propose new neighbours"** that re-runs 4.5 with the new active set.
+
+**Throughput target.** 100 pairs/hour. The hard part is rendering speed — see §5 (compute).
+
+---
+
+## 5. Compute resource estimate (do GPU/CPU upgrades help?)
+
+Current environment: **16 CPU cores, 124 GB RAM, no GPU** (`torch.cuda.is_available() == False`).
+
+| Operation | Where | Per-subject cost (current) | GPU lift | More-CPU lift |
+|-----------|-------|---------------------------:|----------|----------------|
+| `surface_registration_v2` PWR 4×4 + caching | rough reg (DONE) | ~30 s | 5–10× via cuFFT-NCC | 1–2× (FFTs already vectorised) |
+| Stage B sz slab-rigid NCC sweep | rough reg (DONE) | ~100 s | 5–10× via FFT | 1× (single-thread FFT) |
+| Stage D image-NCC sweep over K-subset | subgoal 4.5 / now | ~30–120 s | 5–10× | 4–6× (embarrassingly parallel over K subsets) |
+| Per-pair NCC over thousands of pairs (subgoal 4.2) | new | est. 5–10 min | **20–50×** via batched cupy | 4–6× |
+| HCR per-ROI feature extraction (subgoal 4.4) | new | ~2–5 min/subject CPU | 1–2× | 4–6× (per-ROI loop is parallelisable) |
+| HCR ROI GBT training (subgoal 4.4 Stage 1+2) | new | < 1 min CPU on hand-features | 1× | 1× |
+| HCR ROI 405-patch CNN (subgoal 4.4 fallback) | only if GBT < AUC 0.90 | training: ~1 evening CPU on 32³ patches | 5–10× ⇒ minutes | 2× |
+| F6 feature extractor | mostly numpy/scipy | ~30 s | 1–2× | 4–6× (already scales well) |
+| TEASER / Spectral GM / FGW (subgoal 4.1) | candidate revivals | 30 s – 5 min | 1–2× | 2–4× |
+| BCPD / CPD nonrigid (P6) | already in C5 | ~30 s | 2–3× | 1× |
+| GBT classifier training (subgoal 4.3 first try) | new | < 1 min | 1× | 1× |
+| Patch CNN classifier (subgoal 4.3 fallback) | new | training: hours CPU | **20–50×** | 2–4× |
+| Cross-attention transformer / G1 retrain | subgoal 4.3 fallback | training: days CPU | **50–100×** ⇒ hours | 2× (BLAS-bound) |
+| GUI patch rendering | subgoal 4.7 | ~50 ms / patch CPU | 5–10× via cucim/napari-cuda | 2× |
+
+**Recommendations.**
+
+* **A single GPU (e.g. one A10 / RTX 4090 / L4) becomes attractive only at the patch-CNN / G1-retrain fallback (subgoal 4.3 milestone 2) and for batched per-pair NCC (subgoal 4.2).** Cellpose is **no longer in the loop** — subgoal 4.4 reuses the existing segmentation and only trains a per-ROI classifier, which fits comfortably on CPU. Recommendation: defer the GPU request until S08 (GBT) shows whether the patch-CNN upgrade is needed.
+* **Specifically for the HCR ROI classifier (S11) — GPU is NOT required.** The Stage-1 + Stage-2 design is GBT on hand-features, which trains in seconds on CPU. The optional 405-patch CNN branch (only if GBT misses AUC ≥ 0.90) is a small 3D ResNet on 32³ patches; it trains in a CPU evening (or GPU minutes), but at this dataset size GPU is a convenience, not a unlock. The real GPU motivator across v3 is still the §4.3 patch-CNN / G1-retrain in S14, not S11.
+* **Increasing CPU count past 16 has diminishing returns** for current work. The bottleneck operations (FFT-based NCC, learned models) don't scale linearly with cores. 32 CPU cores would help only on the embarrassingly-parallel K-subset enumeration in subgoal 4.5 and the per-ROI feature loop in subgoal 4.4 (~2–4× speedup on those specific steps).
+* **RAM is currently sufficient.** The largest in-memory artefact is HCR level-2 in-crop, ≤ 10 GB; level-4 is ≤ 1 GB. We have 124 GB.
+* **If GPU is not feasible**, prioritise (a) staying on GBT classifier in 4.3 (no GPU need), (b) caching every Track-B per-pair score so the classifier re-trains in seconds, (c) doing HCR re-segmentation only on the 1–2 subjects flagged by IoU validation, (d) running revivals in 4.1 in parallel via multiprocessing.
+
+**Concrete ask.** Stay on the current 16-CPU / 124 GB / no-GPU host through S06–S13. Open a GPU request only if S08's GBT classifier misses the AUC ≥ 0.92 / Brier ≤ 0.10 target *and* S14 (patch-CNN / G1-retrain) is queued. Increasing CPU > 16 has diminishing returns; increasing RAM is unnecessary.
+
+---
+
+## 6. Session order (recommended)
+
+The simplicity × likely-success ordering for v3.
+
+> **Numbering note.** v2 ended at `v2_S05_tps_expansion`. v3 sessions continue at **S06** under `code/sessions/v3_S0{N}_*/`. Lib code that needs to be promoted from `data/claude_data/full_automatic_execution_02/lib/` lands in `code/dev_code/` (where the v2 surface / sz / sxy modules already live).
+
+### 6.1 Promotion of shipped v2 lib code to `code/dev_code/`
+
+**S06** — Promote `locked_prior_warm.py`, `sz_estimator.py` (iter-7 helpers), `M3-ICP-locked`, gated ensemble, and the iter-8 K-subset TPS-NCC seed picker from `data/claude_data/full_automatic_execution_02/` to `/root/capsule/code/dev_code/`. **One session.** Output: importable Python modules + a regression test that re-runs the gated ensemble and reproduces the published 2.95 sum r@20.
+
+### 6.2 Track B (image-side) per-pair scoring (subgoal 4.2)
+
+**S07** — Implement `pair_scoring.py` with all six per-pair scores. Cache `pair_scores.csv` per (subject, candidate-source). Validate that each score is well-separated between known-correct and known-wrong pairs from `coreg_table.csv`. **One session.**
+
+### 6.3 GBT classifier first (subgoal 4.3 milestone 1)
+
+**S08** — Train XGBoost on `pair_scores.csv` with LOSO-CV on the 6 benchmark subjects. Compare to Matt's classifier on the same labels. Save calibrated thresholds. **One session.**
+
+### 6.4 TPS expansion + classifier gate (subgoal 4.5)
+
+**S09** — Wire the iter-8 anchors → TPS expansion → classifier gate → hull growth. Bench against the gated ensemble. Pick up rescue gains on 755252 / 782149 if they materialise. **One to two sessions.**
+
+### 6.5 Constrained-revival pass (subgoal 4.1) — **runs in parallel with 6.4**
+
+**S10** — P14 (Hungarian inside crop), then P1 at K=5 with locked frame, then M4 (`cz_voronoi_labels` ↔ HCR mask IoU). Stop early if no method ties C5_szp. **Up to four sessions; stop at first three failures.**
+
+### 6.6 HCR ROI pass/fail classifier (subgoal 4.4)
+
+**S11** — (a) Per-ROI feature extraction (shape, intensity on 405/488/561/594, 405-context patch, neighbour density, GFP+ score, mask consistency); (b) Stage-1 heuristic + synthetic pseudo-labels → first GBT; (c) human pass on ~50–100 uncertain ROIs/subject (logged to `roi_qc_actions.jsonl`); (d) Stage-2 GBT retrain with LOSO-CV; (e) compare to Matt's classifier on the same labels. No re-segmentation. Wire `roi_quality ∈ [0, 1]` into the per-pair feature table from S07 and into the TPS-expansion gate in S09. **One session feature + Stage-1 (CPU); follow-on half-session for Stage-2 after human pass.**
+
+### 6.7 Volume-refinement after pairs accumulate (subgoal 4.6)
+
+**S12** — Add the conservative refit-or-reject step inside the S09 loop. **Half session.**
+
+### 6.8 GUI integration (subgoal 4.7) — **central to v3 since we keep the human in the loop**
+
+**S13** — Update the v1 G1-review GUI with classifier-sorted queue, side-by-side image patches, and one-click TPS refit. The GUI is the human's primary surface for v3, so reviewer ergonomics (latency, hotkeys, undo) get first-class attention. **Two sessions.**
+
+### 6.9 Patch-CNN / G1-retrain (subgoal 4.3 milestone 2) — *gated on GPU*
+
+**S14** — Only if GBT (S08) misses the AUC ≥ 0.92 / Brier ≤ 0.10 target. Train 3D ResNet-10 patch classifier; later, retrain G1 cross-attention with crop-local F8 cardinality. **Two to three sessions, GPU-required.**
+
+---
+
+## 7. Stop / pivot rules
+
+* **After S08.** If the GBT classifier already hits AUC ≥ 0.92, AUC saturation tells us the per-pair features are sufficient; the classifier upgrade in S14 is unnecessary. Move budget to S13 (GUI) instead.
+* **After S09.** If TPS expansion + classifier still leaves 755252 / 782149 below r@20 = 0.40, route those subjects to **manual-seed mode** (the GUI surfaces the best K=4 image-NCC-validated quadruples; the user picks one; the rest of the pipeline runs unchanged). Note in the new memory entry.
+* **After S10 (revival pass).** If three consecutive revivals fail, mark the centroid-only family as exhausted and concentrate on Track B (S13) and the patch CNN (S14).
+* **No subject pre-classified manual-only.** Even 782149 has Stage A locked (PWR-NCC 0.178, best of any method) and Stage B sz pinned (err 0.026); the bar to go manual is "no v3 subgoal raises r@20 above 0.40."
+
+---
+
+## 8. Risks and open issues
+
+1. **Over-fitting the classifier to 6 subjects.** Mitigation: LOSO-CV mandatory; F8 synthetic positives for Stage 1; never tune hyperparameters on validation subjects.
+2. **HCR ROI segmentation drift across subjects.** Different cellpose runs and pipeline versions exist (`Notes.md`). Mitigation: per-ROI pass/fail classifier in subgoal 4.4 — uses existing segmentation + 405 nuclear-channel context, no rerun. Filters out bad ROIs before they reach the matcher; trained per-feature so the model itself stays subject-agnostic.
+3. **Locked frame errors propagating.** PWR4×4 can over-fit on subjects with sparse vasculature. Mitigation: per-subject Δ-NCC vs rigid is logged; if Δ < 0.02 the v3 pipeline falls back to affine for that subject.
+4. **782149 still hardest.** With only ~3.8 k GFP+ cells and a 12 ° pia tilt, even a perfect classifier can run out of evidence. Plan B = manual-seed mode in §7.
+5. **HCR 405 channel availability per subject.** The pass/fail classifier in subgoal 4.4 leans on 405 / nuclear context as a key feature. If 405 is missing or mis-aligned for a subject, the classifier degrades to shape + 488 + neighbour-density features only. Mitigation: confirm 405 availability before S11; if missing, drop the patch branch and accept reduced AUC.
+
+---
+
+## 9. File map
+
+```
+code/
+├── docs/
+│   ├── 07 Grand Plan.md                    # v1 ledger (kept as reference)
+│   ├── 08 Automated surface registration.md
+│   ├── 09 Full automatic v2 plan.md        # rough-registration v2 (Stages A/B done)
+│   ├── 10 Grand Plan v3 — Cell-cell matching and QC.md   # this file
+│   └── Notes.md
+├── dev_code/
+│   ├── surfaces_iter08.py
+│   ├── roi_area_sxy.py
+│   ├── surface_registration_v2.py
+│   ├── cz_labels.py                        # S48 voronoi labels
+│   ├── cached_surface_registration/<sid>.json
+│   ├── locked_prior_warm.py                # promoted in S06 from data/claude_data
+│   ├── sz_estimator.py                     # promoted in S06 from data/claude_data
+│   ├── icp_locked.py                       # M3-ICP-locked + gated ensemble (S06)
+│   ├── seed_constellation.py               # iter-8 K-subset TPS-NCC picker (S06)
+│   ├── pair_scoring.py                     # subgoal 4.2 — S07
+│   ├── pair_classifier.py                  # subgoal 4.3 — S08 / S14
+│   ├── tps_expansion.py                    # subgoal 4.5 — S09
+│   ├── roi_quality.py                      # subgoal 4.4 — S11 (per-ROI pass/fail, no re-seg)
+│   └── volume_refit.py                     # subgoal 4.6 — S12
+└── sessions/                               # all v3 sessions live here, continuing v2 numbering
+    ├── v2_S01_locked_prior/                # already present (v2 carry-over)
+    ├── v2_S02_sz_image_sweep/
+    ├── v2_S03_revival_pass/
+    ├── v2_S04_seed_constellation/
+    ├── v2_S05_tps_expansion/
+    ├── v3_S06_promotion/
+    ├── v3_S07_pair_scores/
+    ├── v3_S08_gbt_classifier/
+    ├── v3_S09_tps_expansion/
+    ├── v3_S10_revival_pass/
+    ├── v3_S11_roi_quality/
+    ├── v3_S12_volume_refit/
+    ├── v3_S13_gui/
+    └── v3_S14_patch_cnn/
+```
+
+(Read-only v1/v2 references stay at `/root/capsule/data/claude_data/`.)
+
+---
+
+## 10. References
+
+* `code/docs/07 Grand Plan.md` (§4 method catalog; §11 v1 ledger; §13 v2 rollup)
+* `code/docs/08 Automated surface registration.md`
+* `code/docs/09 Full automatic v2 plan.md`
+* `code/docs/Notes.md` (2026-04-29 — the four open questions this plan answers)
+* `code/docs/04 Current protocol.md` §2.1–2.5 (manual workflow; the spec for subgoals 4.5/4.7)
+* `data/claude_data/full_automatic_execution_02/sessions/v2_S03_revival_pass/log.md` (gated-ensemble baseline = 2.95 sum r@20)
+* `data/claude_data/full_automatic_execution_02/sessions/v2_S04_seed_constellation/log.md` (iter 7/8 — TPS hull-restricted NCC; iter-8 K-subset selection)
+* `data/claude_data/full_automatic_execution_02/sessions/v2_S05_tps_expansion/log.md` (E.TPS aniso-only failure — fixed in v3 §4.5)
+* `data/claude_data/full_automatic_execution_01/reassess_with_surfaces/reassessment.md` (sxy + sz pin reasoning)

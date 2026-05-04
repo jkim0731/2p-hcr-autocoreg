@@ -1,0 +1,113 @@
+"""
+Headless smoke test for the labelling GUI internals:
+  - sample uncertain ROIs (no display)
+  - render one ROI to a matplotlib figure (no display)
+  - simulate good/bad/unsure/undo, confirm JSONL log is written and
+    `label_progress()` reflects it.
+
+Run::
+
+    python code/sessions/v3_S11_roi_quality/test_gui_smoke.py
+"""
+from __future__ import annotations
+
+import json
+import sys
+import shutil
+import tempfile
+from pathlib import Path
+
+import matplotlib
+matplotlib.use("Agg")  # headless
+import matplotlib.pyplot as plt
+import numpy as np
+
+HERE = Path("/root/capsule/code/sessions/v3_S11_roi_quality")
+sys.path.insert(0, str(HERE))
+
+import gui as G  # noqa: E402
+
+SID = "788406"
+
+
+def main() -> None:
+    # Redirect the label log to a temp dir so we don't touch real outputs.
+    tmp = Path(tempfile.mkdtemp(prefix="s11_smoke_"))
+    G.OUTPUTS = tmp
+    G.LABEL_LOG = tmp / "roi_qc_actions.jsonl"
+    print(f"using temp log at {G.LABEL_LOG}")
+
+    rng = np.random.default_rng(0)
+    rois = G._sample_uncertain(
+        SID, n_rois=5, score_band=(0.3, 0.7), rng=rng, skip_hcr_ids=set()
+    )
+    assert len(rois) == 5, f"expected 5, got {len(rois)}"
+    print("sampled 5 ROIs (uncertain band):")
+    for r in rois:
+        print(f"  hcr_id={r.hcr_id}  score={r.score:.3f}  bbox_z={r.bbox[1]-r.bbox[0]}  "
+              f"bbox_y={r.bbox[3]-r.bbox[2]}  bbox_x={r.bbox[5]-r.bbox[4]}")
+
+    # Render one ROI to confirm zarr crops + masks + matplotlib all work.
+    fig = plt.figure(figsize=(9, 6))
+    G._render_roi(rois[0], fig)
+    out_png = tmp / "preview.png"
+    fig.savefig(out_png, dpi=110, bbox_inches="tight")
+    print(f"rendered preview -> {out_png}  ({out_png.stat().st_size} bytes)")
+
+    # Simulate writing a few labels (good, bad, unsure, then undo).
+    for label, roi in zip(["good", "bad", "unsure"], rois[:3]):
+        G._append_label(
+            {
+                "ts": "2026-04-29T00:00:00Z",
+                "sid": roi.sid,
+                "hcr_id": roi.hcr_id,
+                "label": label,
+                "stage1_score": roi.score,
+                "reviewer": "smoke",
+                "session_token": "test",
+            }
+        )
+    # Undo the last (unsure) record
+    last_record = {
+        "sid": rois[2].sid,
+        "hcr_id": rois[2].hcr_id,
+        "label": "unsure",
+    }
+    G._append_label(
+        {
+            "ts": "2026-04-29T00:01:00Z",
+            "sid": rois[2].sid,
+            "hcr_id": rois[2].hcr_id,
+            "label": "_undone_",
+            "undoes": last_record,
+            "reviewer": "smoke",
+            "session_token": "test",
+        }
+    )
+
+    progress = G.label_progress()
+    print("\nlabel_progress():")
+    print(progress.to_string(index=False))
+
+    # Verify undo removed the unsure
+    row = progress[progress["sid"] == SID].iloc[0]
+    assert row["good"] == 1, row
+    assert row["bad"] == 1, row
+    assert row["unsure"] == 0, row  # undone
+    assert row["total"] == 2, row
+    print("\nundo accounting: OK")
+
+    # Resume guard: re-sample with the previously-labelled ids in skip set
+    rng2 = np.random.default_rng(0)
+    skip = {rois[0].hcr_id, rois[1].hcr_id, rois[2].hcr_id}
+    rois2 = G._sample_uncertain(SID, n_rois=10, score_band=(0.3, 0.7), rng=rng2,
+                                skip_hcr_ids=skip)
+    assert all(r.hcr_id not in skip for r in rois2), "skip set was ignored"
+    print(f"resume guard: {len(rois2)} new ROIs, none overlap with previously labelled set")
+
+    shutil.rmtree(tmp)
+    print("\nALL SMOKE CHECKS PASSED")
+
+
+if __name__ == "__main__":
+    main()

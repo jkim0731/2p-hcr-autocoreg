@@ -1,0 +1,80 @@
+#!/usr/bin/env python3
+"""Driver: extract v5 protrusion-touches features with per-subject MP.
+
+Reads cached masks (`cached_per_cell_crops/{sid}_per_cell_crops.parquet`) and
+seg_orig labelled zarr per strip; writes
+`cached_roi_quality/{sid}_features_v5.parquet`.
+
+Usage:
+    python 01e_extract_features_v5.py [--force] [--workers 6] [--subjects ...]
+"""
+from __future__ import annotations
+
+import argparse
+import sys
+import time
+from pathlib import Path
+
+import pandas as pd
+
+DEV_CODE = Path("/root/capsule/code/dev_code")
+SESSION_DIR = Path("/root/capsule/code/sessions/v3_S11_roi_quality")
+OUTPUTS_DIR = SESSION_DIR / "outputs"
+OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+
+sys.path.insert(0, str(DEV_CODE))
+
+from benchmark_data_loader import BENCHMARK_SUBJECTS  # noqa: E402
+from roi_quality_v5 import _features_v5_cache_path, extract_v5_all  # noqa: E402
+
+DEFAULT_SUBJECTS = list(BENCHMARK_SUBJECTS)
+
+
+def _summary(sid: str, df: pd.DataFrame) -> dict:
+    def _med(c):
+        return float(df[c].median()) if c in df.columns and df[c].notna().any() else float("nan")
+
+    def _frac(c):
+        return float((df[c] > 0).mean()) if c in df.columns and df[c].notna().any() else float("nan")
+
+    return {
+        "sid": sid,
+        "n_roi": len(df),
+        "med_n_protrusion_voxels": _med("n_protrusion_voxels"),
+        "frac_protrusion_touches_other": _frac("protrusion_touches_other"),
+        "med_protrusion_into_neighbor_frac": _med("protrusion_into_neighbor_frac"),
+        "med_protrusion_top_neighbor_frac": _med("protrusion_top_neighbor_frac"),
+    }
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--force", action="store_true")
+    ap.add_argument("--workers", type=int, default=6)
+    ap.add_argument("--subjects", nargs="+", default=None)
+    args = ap.parse_args()
+
+    subjects = args.subjects or DEFAULT_SUBJECTS
+    print(f"v5 extraction → {len(subjects)} subjects, "
+          f"workers={args.workers}, force={args.force}")
+    t0 = time.time()
+    results = extract_v5_all(subjects, workers=args.workers, force=args.force)
+    print(f"\n=== ALL DONE in {time.time() - t0:.0f}s ===")
+    for r in results:
+        print(f"  {r}")
+
+    rows = []
+    for sid in subjects:
+        p = _features_v5_cache_path(sid)
+        if p.exists():
+            df = pd.read_parquet(p)
+            rows.append(_summary(sid, df))
+    if rows:
+        out_csv = OUTPUTS_DIR / "feature_summary_v5.csv"
+        pd.DataFrame(rows).to_csv(out_csv, index=False)
+        print(f"\nSummary written to {out_csv}")
+        print(pd.DataFrame(rows).to_string(index=False))
+
+
+if __name__ == "__main__":
+    main()

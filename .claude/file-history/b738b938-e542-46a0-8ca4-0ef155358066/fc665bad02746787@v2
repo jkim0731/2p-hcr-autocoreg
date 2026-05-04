@@ -1,0 +1,188 @@
+"""
+S11 / Step 2 — Stage-1 pseudo-labels for the HCR ROI pass/fail classifier.
+
+Reads the per-subject feature parquet from
+    code/dev_code/cached_roi_quality/<sid>_features.parquet
+and writes a per-subject label table to
+    code/dev_code/cached_roi_quality/<sid>_pseudo_labels.parquet
+with columns [hcr_id, label, source].
+
+Rule layout (matches docs/10 Grand Plan v3 §4.4 Stage-1):
+
+  Negatives (label = 0; first matching rule wins, in priority order)
+    1. not_found_in_seg     — centroid had no seg label (volume_um3 NaN)
+    2. boundary_touching    — bbox touches z or xy edge of seg volume
+    3. volume_low           — volume below subject's 1st percentile
+    4. volume_high          — volume above subject's 99th percentile
+    5. low_solidity         — solidity < 0.6 and not NaN
+    6. nuclear_inversion    — 405 peak NOT inside ROI AND 405 core p90
+                              < 405 shell p90 (nuclear signal lives
+                              outside the mask -> wrong-cell artefact)
+    7. mask_inconsistent    — pickle exists and tight bbox not contained
+                              in pickle's `global_bbox` (catches stale
+                              metrics / level mislabel)
+
+  Positives (label = 1; cell must satisfy ALL)
+    a. not boundary-touching
+    b. volume in subject's [p25, p75] band
+    c. solidity in [0.85, 1.05]   (>1 happens for nearly-convex blobs)
+    d. c405_peak_inside == True
+    e. c405_core_minus_shell_p90 > 0
+
+  Uncertain (label = NaN)
+    everything else — these go to the GUI for human labelling in Step 4.
+
+Synthetic merges / splits are NOT generated here.  If the Stage-1 GBT
+underperforms in LOSO eval (Step 5), add a `02b_synthetic_negatives.py`
+that operates directly on the seg zarr.
+
+Run::
+
+    python code/sessions/v3_S11_roi_quality/02_pseudo_label.py
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+ROOT = Path("/root/capsule")
+CACHE = ROOT / "code/dev_code/cached_roi_quality"
+OUTPUTS = ROOT / "code/sessions/v3_S11_roi_quality/outputs"
+SUBJECTS = ["755252", "767018", "767022", "782149", "788406", "790322"]
+
+NEG_RULES = [
+    "not_found_in_seg",
+    "boundary_touching",
+    "volume_low",
+    "volume_high",
+    "low_solidity",
+    "nuclear_inversion",
+    "mask_inconsistent",
+]
+
+POS_TAG = "easy_pos_all"
+
+
+def label_subject(features: pd.DataFrame) -> pd.DataFrame:
+    f = features.copy()
+    n = len(f)
+
+    # Per-subject volume percentiles (compute on cells with valid volumes)
+    vol = f["volume_um3"]
+    p1, p99 = np.nanpercentile(vol, [1, 99])
+    p25, p75 = np.nanpercentile(vol, [25, 75])
+
+    # Each rule -> boolean mask, all length n
+    not_found = vol.isna()  # shape features unavailable
+    boundary = f["boundary_touching"].fillna(False).astype(bool)
+    vol_low = (vol < p1) & ~not_found
+    vol_high = (vol > p99) & ~not_found
+    low_sol = (f["solidity"] < 0.6) & f["solidity"].notna()
+    nuc_inv = (
+        (~f["c405_peak_inside"].fillna(False).astype(bool))
+        & (f["c405_core_minus_shell_p90"] < 0)
+        & f["c405_core_minus_shell_p90"].notna()
+    )
+    mask_inconsistent = (
+        (~f["tight_bbox_in_pickle_bbox"].fillna(True).astype(bool))
+    )
+
+    neg_masks = [not_found, boundary, vol_low, vol_high, low_sol, nuc_inv, mask_inconsistent]
+    assert len(neg_masks) == len(NEG_RULES)
+
+    # First matching negative rule wins
+    label = pd.Series(np.full(n, np.nan), index=f.index, dtype="float64")
+    source = pd.Series([""] * n, index=f.index)
+    for tag, m in zip(NEG_RULES, neg_masks):
+        m = m.fillna(False).to_numpy()
+        take = m & label.isna().to_numpy()
+        label.iloc[take] = 0.0
+        source.iloc[take] = tag
+
+    # Positives: ALL conditions, only assigned where label still NaN
+    pos = (
+        (~boundary)
+        & (vol >= p25) & (vol <= p75) & ~not_found
+        & (f["solidity"] >= 0.85) & (f["solidity"] <= 1.05) & f["solidity"].notna()
+        & f["c405_peak_inside"].fillna(False).astype(bool)
+        & (f["c405_core_minus_shell_p90"] > 0) & f["c405_core_minus_shell_p90"].notna()
+    )
+    pos_take = pos.to_numpy() & label.isna().to_numpy()
+    label.iloc[pos_take] = 1.0
+    source.iloc[pos_take] = POS_TAG
+
+    out = pd.DataFrame(
+        {
+            "hcr_id": f["hcr_id"].astype("int64"),
+            "label": label,
+            "source": source.where(source != "", other=pd.NA),
+        }
+    )
+    return out
+
+
+def main() -> None:
+    OUTPUTS.mkdir(parents=True, exist_ok=True)
+    summary_rows = []
+    rule_rows = []
+    for sid in SUBJECTS:
+        feat_path = CACHE / f"{sid}_features.parquet"
+        if not feat_path.exists():
+            print(f"[{sid}] FEATURE FILE MISSING — skip")
+            continue
+        f = pd.read_parquet(feat_path)
+        labels = label_subject(f)
+        out_path = CACHE / f"{sid}_pseudo_labels.parquet"
+        labels.to_parquet(out_path, index=False)
+
+        n = len(labels)
+        n_pos = int((labels["label"] == 1).sum())
+        n_neg = int((labels["label"] == 0).sum())
+        n_nan = int(labels["label"].isna().sum())
+        summary_rows.append(
+            {
+                "sid": sid,
+                "n_total": n,
+                "n_pos": n_pos,
+                "n_neg": n_neg,
+                "n_uncertain": n_nan,
+                "frac_pos": round(n_pos / n, 4),
+                "frac_neg": round(n_neg / n, 4),
+                "frac_uncertain": round(n_nan / n, 4),
+            }
+        )
+        # Per-rule breakdown
+        rule_counts = (
+            labels[labels["label"] == 0]["source"].value_counts(dropna=False).to_dict()
+        )
+        rule_counts.update({"easy_pos_all": int((labels["source"] == POS_TAG).sum())})
+        rule_counts["sid"] = sid
+        rule_rows.append(rule_counts)
+
+        print(
+            f"[{sid}] total={n}  pos={n_pos} ({n_pos/n:.1%})  "
+            f"neg={n_neg} ({n_neg/n:.1%})  uncertain={n_nan} ({n_nan/n:.1%})  "
+            f"-> {out_path.name}"
+        )
+        print(f"    neg breakdown: {rule_counts}")
+
+    summary_df = pd.DataFrame(summary_rows).sort_values("sid")
+    summary_df.to_csv(OUTPUTS / "pseudo_label_summary.csv", index=False)
+
+    rules_df = pd.DataFrame(rule_rows).fillna(0).astype({"sid": str})
+    cols = ["sid", *NEG_RULES, POS_TAG]
+    cols = [c for c in cols if c in rules_df.columns]
+    rules_df = rules_df[cols]
+    rules_df.to_csv(OUTPUTS / "pseudo_label_rule_counts.csv", index=False)
+
+    print("\n=== summary ===")
+    print(summary_df.to_string(index=False))
+    print("\n=== rule counts ===")
+    print(rules_df.to_string(index=False))
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,586 @@
+"""v3-S12 — FPFH descriptor feasibility for cell-cell matching.
+
+Question: under a clean alignment (GT-TPS) and a realistic HCR cell set
+(strict-GFP+ ∩ ROI-quality-binary ≥ 0.5 ∩ bbox of warped CZ), does any
+of {FPFH, PPF, kNN-distance histogram} discriminate a GT-paired HCR cell
+from close-but-wrong neighbours better than centroid distance under LP?
+
+Setup
+-----
+* Alignment for descriptors: **GT-TPS** — fit Rbf(thin_plate) from GT
+  pairs (cz_zyx_um → hcr_zyx_um) and warp the full CZ centroid set into
+  HCR µm zyx.  This isolates "is the descriptor doing work?" from "did
+  the pose converge?".
+* Pia normals: per-cell, evaluated as the analytic gradient of the
+  cached HCR pia surface (``surfaces_iter08``) at the cell's (x, y).
+  Same surface for CZ-warped and HCR cells.
+* HCR cell pool (per subject):
+  - strict-GFP+ from GMM-intersection cutoff (cached at
+    `data/claude_data/sessions/07b_scale_clean_gfp/gmm_threshold_results.json`)
+  - intersected with `roi_quality_stage2_binary_score_v5d ≥ 0.5`
+  - clipped to bbox of GT-TPS-warped CZ centroids + ``EXPAND_UM``.
+
+Descriptors tested
+------------------
+* FPFH (open3d, radius=``FPFH_RADIUS_UM``, max_nn=30)
+* PPF — Drost 2010 4-feature pair: ``(d, ∠(n_r,d), ∠(n_t,d), ∠(n_r,n_t))``
+  marginal histograms (``PPF_BINS`` per feature, flattened to 4*PPF_BINS dim)
+* kNN-dist — 1D histogram of nearest-neighbour distances (k = 1..``KNN_K``)
+* centroid distance under **LP** warm-start — realistic baseline.
+  Centroid distance under GT-TPS is degenerate (≈0 for matches) so is
+  not a useful descriptor; the LP variant is the deployment reference.
+
+Metrics (per subject × descriptor × near-miss radius R ∈ {30, 50, 100} µm)
+-------------------------------------------------------------------------
+* Match vs hard near-miss AUC.
+  - match: GT pair (cz_i, hcr_j)
+  - near-miss: filtered HCR cells k ≠ j with ‖hcr_k − hcr_j‖ ≤ R
+* recall@1/5/20: rank ALL filtered HCR cells by descriptor distance to
+  cz_i; check if hcr_j is in the top-K.
+
+Stop rule (Grand Plan v3 §4.1 spirit)
+-------------------------------------
+A descriptor earns FPFH+RANSAC promotion iff AUC ≥ 0.85 on ≥4/6
+subjects AND beats centroid-under-LP on the same.  Otherwise the
+matcher family is closed.
+"""
+from __future__ import annotations
+
+import json
+import sys
+import time
+from dataclasses import dataclass
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+from scipy.interpolate import Rbf
+from scipy.spatial import cKDTree
+from sklearn.metrics import roc_auc_score
+
+# --------------------------------------------------------------------------- #
+# import paths (mirror S10)
+# --------------------------------------------------------------------------- #
+_V1 = "/root/capsule/data/claude_data/full_automatic_execution_01"
+_V2_LIB = "/root/capsule/data/claude_data/full_automatic_execution_02/lib"
+_DEV = "/root/capsule/code/dev_code"
+_ITER = "/root/capsule/data/claude_data/sessions/03c_onset_features/iterations"
+_SURF8 = "/root/capsule/data/claude_data/sessions/08_surface_vascular_match"
+for _p in (_V2_LIB, _V1, _DEV, _ITER, _SURF8):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
+import bench_harness_patch  # noqa: E402
+
+bench_harness_patch.patch()
+
+from benchmark_data_loader import BENCHMARK_SUBJECTS, load_subject  # noqa: E402
+from locked_prior_warm import (  # noqa: E402
+    apply_to_cz_um,
+    compute_locked_prior_warm_start,
+)
+from lib.centroid_helpers import centroids_um  # noqa: E402
+from surfaces_iter08 import get_hcr_top_surface_iter07  # noqa: E402
+
+# Open3D for FPFH
+import open3d as o3d  # noqa: E402
+
+# --------------------------------------------------------------------------- #
+# constants
+# --------------------------------------------------------------------------- #
+SZ_TABLE = Path(
+    "/root/capsule/data/claude_data/full_automatic_execution_02/sessions/"
+    "v2_S02_sz_image_sweep/results_iter7_summary.csv"
+)
+ROI_QUALITY_DIR = Path("/root/capsule/code/dev_code/cached_roi_quality")
+STRICT_GFP_JSON = Path(
+    "/root/capsule/data/claude_data/sessions/07b_scale_clean_gfp/"
+    "gmm_threshold_results.json"
+)
+OUT_DIR = Path("/root/capsule/code/sessions/v3_S12_fpfh_feasibility")
+OUT_DIR.mkdir(parents=True, exist_ok=True)
+
+EXPAND_UM = 30.0
+ROI_THR = 0.5
+NEAR_MISS_RADII_UM = (30.0, 50.0, 100.0)
+FPFH_RADIUS_UM = 120.0  # ~10-20 neighbours at typical cell density
+PPF_BINS = 5            # 4 features × 5 bins = 20-dim PPF descriptor
+PPF_RADIUS_UM = 120.0
+KNN_K = 12
+KNN_HIST_BINS = 16
+KNN_HIST_MAX_UM = 200.0
+
+
+# --------------------------------------------------------------------------- #
+# inputs
+# --------------------------------------------------------------------------- #
+def load_sz_pins() -> dict[str, float]:
+    df = pd.read_csv(SZ_TABLE)
+    df["subject_id"] = df["subject_id"].astype(str)
+    return dict(zip(df["subject_id"], df["sz_peak"].astype(float)))
+
+
+def load_strict_gfp_ids(sid: str) -> tuple[set[int], dict]:
+    """Return (set of strict-GFP+ hcr_ids, summary metadata) for the subject.
+
+    Filters the relevant feature table by the cached GMM-intersection
+    cutoff ('density' for spot subjects; 'mean_minus_bg' for intensity).
+    """
+    summary = json.loads(STRICT_GFP_JSON.read_text())
+    rec = next(r for r in summary if r["subject"] == sid)
+    cutoff = float(rec["cutoff_linear"])
+    feature = rec["feature_name"]
+
+    # Re-derive the feature table with the same logic as 07b
+    if feature == "density":
+        s = load_subject(sid)
+        coreg_dir = Path(s.coreg_dir)
+        spot_files = list(coreg_dir.glob("*spot_488_counts.csv"))
+        if spot_files:
+            df = pd.read_csv(spot_files[0])
+            if "density" not in df.columns and {"counts", "volume"}.issubset(df.columns):
+                df["density"] = df["counts"] / df["volume"]
+            tbl = df[["hcr_id", "density"]].dropna()
+        else:
+            from benchmark_data_loader import _aggregate_spots_from_hcr
+            agg = _aggregate_spots_from_hcr(Path(s.hcr_dir))
+            tbl = agg[["hcr_id", "density"]].dropna()
+        keep = tbl[tbl["density"].astype(float) >= cutoff]
+    elif feature == "mean_minus_bg":
+        from benchmark_data_loader import DATA_DIR
+        df = pd.read_csv(Path(DATA_DIR) / f"cell_data_mean_{sid}_R1.csv")
+        if "channel" in df.columns:
+            df = df[df["channel"] == 488]
+        for k in ("cell_id", "id"):
+            if k in df.columns:
+                df = df.rename(columns={k: "hcr_id"})
+        df = df.copy()
+        df["mean_minus_bg"] = df["mean"].astype(float) - df["background"].astype(float)
+        keep = df[df["mean_minus_bg"].astype(float) >= cutoff]
+    else:
+        raise RuntimeError(f"unknown feature {feature}")
+
+    ids = set(int(x) for x in keep["hcr_id"].values)
+    meta = dict(
+        cutoff_linear=cutoff,
+        feature=feature,
+        n_strict=len(ids),
+        coreg_total=int(rec["coreg_total"]),
+        coreg_kept_strict=int(rec["coreg_kept_strict"]),
+        coreg_coverage_strict=float(rec["coreg_coverage_strict"]),
+    )
+    return ids, meta
+
+
+def load_roi_quality(sid: str) -> pd.Series:
+    p = ROI_QUALITY_DIR / f"{sid}_stage2_binary_score_v5d.parquet"
+    df = pd.read_parquet(p)
+    df["hcr_id"] = df["hcr_id"].astype(int)
+    return df.set_index("hcr_id")["score"]
+
+
+# --------------------------------------------------------------------------- #
+# pia surface → per-cell normals
+# --------------------------------------------------------------------------- #
+def pia_normal_per_cell(surface: dict, xy_pts: np.ndarray) -> np.ndarray:
+    """Per-cell unit normal to pia at (x, y), pointing into the tissue.
+
+    Surface model: ``z(x, y) = a·x + b·y + c + p·x² + q·xy + r·y²``.
+    Gradient: (∂z/∂x, ∂z/∂y) = (a + 2px + qy, b + qx + 2ry).
+    Normal pointing into tissue (positive depth): (-∂z/∂x, -∂z/∂y, 1) / ||·||.
+
+    Note: HCR µm centroid frame is zyx; the pia surface lives in (x, y)
+    so callers must extract (x, y) = (zyx[:, 2], zyx[:, 1]).  Returns
+    normals in (x, y, z) order — caller is responsible for any reshuffle.
+    """
+    x = np.asarray(xy_pts[:, 0], dtype=float)
+    y = np.asarray(xy_pts[:, 1], dtype=float)
+    a = float(surface["a"]); b = float(surface["b"])
+    p = float(surface["p"]); q = float(surface["q"]); r = float(surface["r"])
+    dz_dx = a + 2.0 * p * x + q * y
+    dz_dy = b + q * x + 2.0 * r * y
+    n = np.column_stack([-dz_dx, -dz_dy, np.ones_like(x)])
+    n = n / (np.linalg.norm(n, axis=1, keepdims=True) + 1e-12)
+    return n  # (N, 3) in xyz order
+
+
+# --------------------------------------------------------------------------- #
+# GT-TPS warp
+# --------------------------------------------------------------------------- #
+def fit_gt_tps(cz_zyx_um: np.ndarray, cz_ids: np.ndarray,
+               hcr_zyx_um: np.ndarray, hcr_ids: np.ndarray,
+               coreg: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+    """Return (cz_warped_zyx_um, gt_mask_in_filtered_hcr).
+
+    Fits 3 thin-plate-spline interpolators (one per output axis) from
+    GT (cz_centroid → hcr_centroid) pairs and warps the *full* CZ
+    centroid set.  Centroids are looked up by id.
+    """
+    cz_lookup = {int(i): pt for i, pt in zip(cz_ids, cz_zyx_um)}
+    hcr_lookup = {int(i): pt for i, pt in zip(hcr_ids, hcr_zyx_um)}
+    src = []
+    dst = []
+    for cz_id, hcr_id in zip(coreg["cz_id"].astype(int), coreg["hcr_id"].astype(int)):
+        if cz_id in cz_lookup and hcr_id in hcr_lookup:
+            src.append(cz_lookup[cz_id])
+            dst.append(hcr_lookup[hcr_id])
+    src = np.asarray(src)
+    dst = np.asarray(dst)
+    rbf_z = Rbf(src[:, 0], src[:, 1], src[:, 2], dst[:, 0], function="thin_plate")
+    rbf_y = Rbf(src[:, 0], src[:, 1], src[:, 2], dst[:, 1], function="thin_plate")
+    rbf_x = Rbf(src[:, 0], src[:, 1], src[:, 2], dst[:, 2], function="thin_plate")
+    z = rbf_z(cz_zyx_um[:, 0], cz_zyx_um[:, 1], cz_zyx_um[:, 2])
+    y = rbf_y(cz_zyx_um[:, 0], cz_zyx_um[:, 1], cz_zyx_um[:, 2])
+    x = rbf_x(cz_zyx_um[:, 0], cz_zyx_um[:, 1], cz_zyx_um[:, 2])
+    return np.column_stack([z, y, x]), len(src)
+
+
+# --------------------------------------------------------------------------- #
+# descriptors
+# --------------------------------------------------------------------------- #
+def compute_fpfh(points_xyz: np.ndarray, normals_xyz: np.ndarray,
+                 radius_um: float, max_nn: int = 30) -> np.ndarray:
+    """Open3D FPFH on a point cloud with externally-supplied normals.
+
+    Returns (N, 33) descriptor.
+    """
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(points_xyz)
+    pcd.normals = o3d.utility.Vector3dVector(normals_xyz)
+    feat = o3d.pipelines.registration.compute_fpfh_feature(
+        pcd,
+        o3d.geometry.KDTreeSearchParamHybrid(radius=radius_um, max_nn=max_nn),
+    )
+    return np.asarray(feat.data).T  # (N, 33)
+
+
+def compute_ppf(points_xyz: np.ndarray, normals_xyz: np.ndarray,
+                radius_um: float, n_bins: int = 5,
+                d_max_um: float | None = None) -> np.ndarray:
+    """Per-cell PPF descriptor: marginal histograms of (d, α, β, γ) over neighbours within radius.
+
+    Drost 2010 PPF features for a centre point r and neighbour t with
+    normals n_r, n_t and offset d = t − r:
+        f1 = ‖d‖
+        f2 = ∠(n_r, d) ∈ [0, π]
+        f3 = ∠(n_t, d) ∈ [0, π]
+        f4 = ∠(n_r, n_t) ∈ [0, π]
+    Histogram each marginally over all neighbours; concatenate to a
+    flat descriptor of size 4·n_bins.  L1-normalised per cell.
+    """
+    n = points_xyz.shape[0]
+    if d_max_um is None:
+        d_max_um = radius_um
+    tree = cKDTree(points_xyz)
+    edges_d = np.linspace(0.0, d_max_um, n_bins + 1)
+    edges_a = np.linspace(0.0, np.pi, n_bins + 1)
+    descriptors = np.zeros((n, 4 * n_bins), dtype=float)
+    for i in range(n):
+        idx = tree.query_ball_point(points_xyz[i], r=radius_um)
+        idx = [j for j in idx if j != i]
+        if not idx:
+            continue
+        d_vec = points_xyz[idx] - points_xyz[i]          # (k, 3)
+        d_len = np.linalg.norm(d_vec, axis=1) + 1e-12     # (k,)
+        d_hat = d_vec / d_len[:, None]
+        n_r = normals_xyz[i]
+        n_t = normals_xyz[idx]
+        # Pairwise angles
+        cos_alpha = np.clip(d_hat @ n_r, -1.0, 1.0)
+        cos_beta = np.clip(np.einsum("kj,kj->k", d_hat, n_t), -1.0, 1.0)
+        cos_gamma = np.clip(n_t @ n_r, -1.0, 1.0)
+        alpha = np.arccos(cos_alpha)
+        beta = np.arccos(cos_beta)
+        gamma = np.arccos(cos_gamma)
+        h1, _ = np.histogram(d_len, bins=edges_d)
+        h2, _ = np.histogram(alpha, bins=edges_a)
+        h3, _ = np.histogram(beta, bins=edges_a)
+        h4, _ = np.histogram(gamma, bins=edges_a)
+        h = np.concatenate([h1, h2, h3, h4]).astype(float)
+        s = h.sum()
+        if s > 0:
+            h /= s
+        descriptors[i] = h
+    return descriptors
+
+
+def compute_knn_dist(points_xyz: np.ndarray, k: int = 12,
+                     n_bins: int = 16, max_um: float = 200.0) -> np.ndarray:
+    """Histogram of distances to k nearest neighbours, per cell."""
+    n = points_xyz.shape[0]
+    tree = cKDTree(points_xyz)
+    k_query = min(k + 1, n)
+    d, _ = tree.query(points_xyz, k=k_query)
+    # drop the self distance (column 0)
+    d = d[:, 1:]
+    edges = np.linspace(0.0, max_um, n_bins + 1)
+    descriptors = np.zeros((n, n_bins), dtype=float)
+    for i in range(n):
+        h, _ = np.histogram(d[i], bins=edges)
+        s = h.sum()
+        if s > 0:
+            descriptors[i] = h.astype(float) / s
+    return descriptors
+
+
+# --------------------------------------------------------------------------- #
+# scoring
+# --------------------------------------------------------------------------- #
+def descriptor_distance(d_a: np.ndarray, d_b: np.ndarray) -> np.ndarray:
+    """Pairwise L2 distance between rows of d_a (m, F) and d_b (n, F)."""
+    aa = (d_a ** 2).sum(axis=1)[:, None]
+    bb = (d_b ** 2).sum(axis=1)[None, :]
+    ab = d_a @ d_b.T
+    return np.sqrt(np.maximum(aa + bb - 2.0 * ab, 0.0))
+
+
+def score_descriptor(
+    cz_descr: np.ndarray, hcr_descr: np.ndarray, hcr_zyx: np.ndarray,
+    gt_pairs: list[tuple[int, int]],
+    cz_id_to_row: dict[int, int], hcr_id_to_row: dict[int, int],
+    near_miss_radii_um: tuple[float, ...] = (30.0, 50.0, 100.0),
+    distance_fn=descriptor_distance,
+) -> dict:
+    """Compute AUC + recall@K for a descriptor.
+
+    Returns dict with per-radius AUC and recall@1/5/20 across all GT
+    pairs whose HCR partner is in the filtered set.
+    """
+    # restrict GT pairs to those where both endpoints are in the descriptor sets
+    eligible = [
+        (cz_id, hcr_id) for cz_id, hcr_id in gt_pairs
+        if cz_id in cz_id_to_row and hcr_id in hcr_id_to_row
+    ]
+    if not eligible:
+        return {"n_eligible": 0}
+
+    cz_rows = np.array([cz_id_to_row[c] for c, _ in eligible])
+    hcr_rows = np.array([hcr_id_to_row[h] for _, h in eligible])
+    # full distance matrix from GT-CZ rows to ALL filtered HCR (m_gt, n_hcr)
+    D = distance_fn(cz_descr[cz_rows], hcr_descr)  # shape (m, n_hcr)
+
+    n_hcr = hcr_descr.shape[0]
+    hcr_tree = cKDTree(hcr_zyx)
+
+    # recall@K (use full filtered HCR set as candidates)
+    ranks = np.argsort(D, axis=1)
+    pos_in_rank = np.array([
+        np.where(ranks[i] == hcr_rows[i])[0][0] for i in range(len(eligible))
+    ])
+    recall = {f"recall@{k}": float((pos_in_rank < k).mean()) for k in (1, 5, 20)}
+
+    # AUC vs hard near-miss for each radius
+    aucs = {}
+    for R in near_miss_radii_um:
+        scores = []
+        labels = []
+        for i, (cz_id, hcr_id) in enumerate(eligible):
+            j_hcr = hcr_rows[i]
+            d_match = D[i, j_hcr]
+            # find HCR cells within R of true partner (excluding the partner itself)
+            nbr_idx = hcr_tree.query_ball_point(hcr_zyx[j_hcr], r=R)
+            nbr_idx = [k for k in nbr_idx if k != j_hcr]
+            if not nbr_idx:
+                continue
+            d_nm = D[i, nbr_idx]
+            scores.append(-d_match)             # higher = match-like
+            labels.append(1)
+            scores.extend((-d_nm).tolist())
+            labels.extend([0] * len(nbr_idx))
+        if len(set(labels)) < 2:
+            aucs[f"auc_R{int(R)}um"] = float("nan")
+            aucs[f"n_nm_R{int(R)}um"] = 0
+        else:
+            aucs[f"auc_R{int(R)}um"] = float(roc_auc_score(labels, scores))
+            aucs[f"n_nm_R{int(R)}um"] = int(np.sum(np.array(labels) == 0))
+    out = {"n_eligible": len(eligible), **recall, **aucs}
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# per-subject driver
+# --------------------------------------------------------------------------- #
+def run_one_subject(sid: str, sz_pin: float, *, expand_um: float = EXPAND_UM,
+                    roi_thr: float = ROI_THR) -> dict:
+    print(f"\n=== {sid} ===")
+    t0 = time.time()
+    s = load_subject(sid)
+
+    # ---- centroids (zyx µm) ----
+    cz_um, cz_ids = centroids_um(s, "cz")
+    hcr_all_um, hcr_all_ids = centroids_um(s, "hcr_all")
+
+    # ---- GT pairs ----
+    coreg = s.coreg_table[["cz_id", "hcr_id"]].dropna().astype(int)
+    print(f"  GT pairs: {len(coreg)}")
+
+    # ---- GT-TPS warp of full CZ centroid set ----
+    cz_warped, n_ctrl = fit_gt_tps(cz_um, cz_ids, hcr_all_um, hcr_all_ids, coreg)
+    print(f"  TPS controls: {n_ctrl}")
+
+    # ---- LP warm-start (for centroid-LP baseline) ----
+    lp = compute_locked_prior_warm_start(s, sz_init=sz_pin)
+    cz_lp = apply_to_cz_um(lp, cz_um)
+
+    # ---- HCR filters ----
+    strict_ids, strict_meta = load_strict_gfp_ids(sid)
+    print(f"  strict-GFP+: n={strict_meta['n_strict']}, "
+          f"coreg-cov={strict_meta['coreg_coverage_strict']:.3f}")
+    roi_q = load_roi_quality(sid)
+    q_pass = roi_q.reindex(hcr_all_ids.astype(int)).fillna(0.0).to_numpy() >= roi_thr
+    strict_pass = np.array([int(h) in strict_ids for h in hcr_all_ids])
+    # bbox from GT-TPS warped CZ
+    lo = cz_warped.min(axis=0) - expand_um
+    hi = cz_warped.max(axis=0) + expand_um
+    bbox_pass = ((hcr_all_um >= lo) & (hcr_all_um <= hi)).all(axis=1)
+    keep = bbox_pass & strict_pass & q_pass
+    print(f"  HCR pool: bbox={int(bbox_pass.sum())}  "
+          f"∩strict={int((bbox_pass & strict_pass).sum())}  "
+          f"∩quality={int(keep.sum())}")
+    hcr_zyx = hcr_all_um[keep]
+    hcr_ids = hcr_all_ids[keep].astype(int)
+
+    # GT survival in filtered set
+    hcr_filtered_set = set(hcr_ids.tolist())
+    gt_pairs_all = list(zip(coreg["cz_id"].astype(int), coreg["hcr_id"].astype(int)))
+    gt_pairs_kept = [(c, h) for c, h in gt_pairs_all if h in hcr_filtered_set]
+    print(f"  GT pairs surviving filter: {len(gt_pairs_kept)} / {len(gt_pairs_all)}")
+
+    # ---- CZ subset: only CZ cells that are in some GT pair (we score on those) ----
+    # (full CZ cloud is still used for the *neighborhood* in descriptors)
+    cz_id_to_row = {int(i): r for r, i in enumerate(cz_ids)}
+    hcr_id_to_row = {int(i): r for r, i in enumerate(hcr_ids)}
+
+    # ---- pia surface + per-cell normals ----
+    surface = get_hcr_top_surface_iter07(s)
+    if surface is None:
+        raise RuntimeError(f"No HCR pia surface for {sid}")
+    # pia surface is in HCR µm; centroid frame is zyx → take (x, y) = (col 2, col 1)
+    cz_xy = np.column_stack([cz_warped[:, 2], cz_warped[:, 1]])
+    hcr_xy = np.column_stack([hcr_zyx[:, 2], hcr_zyx[:, 1]])
+    n_cz_xyz = pia_normal_per_cell(surface, cz_xy)   # (N_cz, 3) in (x, y, z) order
+    n_hcr_xyz = pia_normal_per_cell(surface, hcr_xy)
+
+    # Convert centroids zyx → xyz for descriptor computation
+    cz_xyz = cz_warped[:, [2, 1, 0]]
+    hcr_xyz = hcr_zyx[:, [2, 1, 0]]
+
+    print(f"  CZ pool: {len(cz_xyz)}  HCR pool: {len(hcr_xyz)}")
+
+    # ---- descriptors ----
+    print("  computing descriptors ...")
+    t = time.time()
+    fpfh_cz = compute_fpfh(cz_xyz, n_cz_xyz, FPFH_RADIUS_UM)
+    fpfh_hcr = compute_fpfh(hcr_xyz, n_hcr_xyz, FPFH_RADIUS_UM)
+    print(f"    FPFH: {fpfh_cz.shape[1]}d, {time.time() - t:.1f}s")
+    t = time.time()
+    ppf_cz = compute_ppf(cz_xyz, n_cz_xyz, PPF_RADIUS_UM, n_bins=PPF_BINS)
+    ppf_hcr = compute_ppf(hcr_xyz, n_hcr_xyz, PPF_RADIUS_UM, n_bins=PPF_BINS)
+    print(f"    PPF: {ppf_cz.shape[1]}d, {time.time() - t:.1f}s")
+    t = time.time()
+    knn_cz = compute_knn_dist(cz_xyz, k=KNN_K, n_bins=KNN_HIST_BINS, max_um=KNN_HIST_MAX_UM)
+    knn_hcr = compute_knn_dist(hcr_xyz, k=KNN_K, n_bins=KNN_HIST_BINS, max_um=KNN_HIST_MAX_UM)
+    print(f"    kNN-dist: {knn_cz.shape[1]}d, {time.time() - t:.1f}s")
+
+    # ---- score each descriptor ----
+    rows = []
+    for descr_name, cz_d, hcr_d in [
+        ("FPFH", fpfh_cz, fpfh_hcr),
+        ("PPF", ppf_cz, ppf_hcr),
+        ("kNN_dist", knn_cz, knn_hcr),
+    ]:
+        m = score_descriptor(
+            cz_d, hcr_d, hcr_zyx, gt_pairs_kept,
+            cz_id_to_row, hcr_id_to_row,
+            near_miss_radii_um=NEAR_MISS_RADII_UM,
+        )
+        rows.append({"subject_id": sid, "descriptor": descr_name, **m})
+
+    # ---- centroid-distance under LP (realistic baseline) ----
+    # Use 3D LP-warmed positions as "descriptor"; distance is Euclidean.
+    cz_lp_xyz = cz_lp[:, [2, 1, 0]]
+    m_lp = score_descriptor(
+        cz_lp_xyz, hcr_xyz, hcr_zyx, gt_pairs_kept,
+        cz_id_to_row, hcr_id_to_row,
+        near_miss_radii_um=NEAR_MISS_RADII_UM,
+    )
+    rows.append({"subject_id": sid, "descriptor": "centroid_LP", **m_lp})
+
+    # ---- centroid-distance under GT-TPS (degenerate floor) ----
+    m_gt = score_descriptor(
+        cz_xyz, hcr_xyz, hcr_zyx, gt_pairs_kept,
+        cz_id_to_row, hcr_id_to_row,
+        near_miss_radii_um=NEAR_MISS_RADII_UM,
+    )
+    rows.append({"subject_id": sid, "descriptor": "centroid_GT_TPS", **m_gt})
+
+    print(f"  done in {time.time() - t0:.1f}s")
+    return {
+        "rows": rows,
+        "subject_id": sid,
+        "n_gt": len(coreg),
+        "n_gt_kept": len(gt_pairs_kept),
+        "n_strict_gfp": strict_meta["n_strict"],
+        "coreg_coverage_strict": strict_meta["coreg_coverage_strict"],
+        "n_hcr_filtered": int(keep.sum()),
+        "n_cz": len(cz_xyz),
+    }
+
+
+# --------------------------------------------------------------------------- #
+# main
+# --------------------------------------------------------------------------- #
+def main(subjects: list[str] | None = None):
+    if subjects is None:
+        subjects = list(BENCHMARK_SUBJECTS)
+    sz_pins = load_sz_pins()
+
+    all_rows = []
+    summary_rows = []
+    for sid in subjects:
+        try:
+            res = run_one_subject(sid, sz_pins[sid])
+            all_rows.extend(res["rows"])
+            summary_rows.append({
+                "subject_id": sid,
+                "n_gt": res["n_gt"],
+                "n_gt_kept": res["n_gt_kept"],
+                "n_hcr_filtered": res["n_hcr_filtered"],
+                "n_cz": res["n_cz"],
+                "coreg_coverage_strict": res["coreg_coverage_strict"],
+            })
+        except Exception as e:
+            print(f"  {sid} FAILED: {type(e).__name__}: {e}")
+            import traceback
+            traceback.print_exc()
+
+    df = pd.DataFrame(all_rows)
+    df.to_csv(OUT_DIR / "fpfh_feasibility_results.csv", index=False)
+    print(f"\nWrote {OUT_DIR / 'fpfh_feasibility_results.csv'}")
+
+    summary = pd.DataFrame(summary_rows)
+    summary.to_csv(OUT_DIR / "subject_summary.csv", index=False)
+    print(f"Wrote {OUT_DIR / 'subject_summary.csv'}")
+
+    # ---- pretty-print summary ----
+    print("\n=== AUC R=50µm by (subject, descriptor) ===")
+    if "auc_R50um" in df.columns:
+        piv = df.pivot_table(
+            index="subject_id", columns="descriptor",
+            values="auc_R50um", aggfunc="first",
+        )
+        print(piv.round(3).to_string())
+
+    print("\n=== recall@5 by (subject, descriptor) ===")
+    if "recall@5" in df.columns:
+        piv = df.pivot_table(
+            index="subject_id", columns="descriptor",
+            values="recall@5", aggfunc="first",
+        )
+        print(piv.round(3).to_string())
+
+    return df, summary
+
+
+if __name__ == "__main__":
+    main()

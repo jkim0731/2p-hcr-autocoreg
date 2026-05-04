@@ -1,0 +1,140 @@
+"""
+Headless smoke test for the labelling GUI internals:
+  - sample uncertain ROIs (no display)
+  - load 3-D crops and render the three orthoview planes (single-slice
+    + MIP, on each channel) to a matplotlib figure (no display)
+  - simulate good/bad/unsure/undo, confirm JSONL log is written and
+    `label_progress()` reflects it.
+
+Run::
+
+    python code/sessions/v3_S11_roi_quality/test_gui_smoke.py
+"""
+from __future__ import annotations
+
+import json
+import sys
+import shutil
+import tempfile
+from pathlib import Path
+
+import matplotlib
+matplotlib.use("Agg")  # headless
+import matplotlib.pyplot as plt
+import numpy as np
+
+HERE = Path("/root/capsule/code/sessions/v3_S11_roi_quality")
+sys.path.insert(0, str(HERE))
+
+import gui as G  # noqa: E402
+
+SID = "788406"
+
+
+def main() -> None:
+    # Redirect the label log to a temp dir so we don't touch real outputs.
+    tmp = Path(tempfile.mkdtemp(prefix="s11_smoke_"))
+    G.OUTPUTS = tmp
+    G.LABEL_LOG = tmp / "roi_qc_actions.jsonl"
+    print(f"using temp log at {G.LABEL_LOG}")
+
+    rng = np.random.default_rng(0)
+    rois = G._sample_uncertain(
+        SID, n_rois=5, score_band=(0.3, 0.7), rng=rng, skip_hcr_ids=set()
+    )
+    assert len(rois) == 5, f"expected 5, got {len(rois)}"
+    print("sampled 5 ROIs (uncertain band):")
+    for r in rois:
+        print(f"  hcr_id={r.hcr_id}  score={r.score:.3f}  bbox_z={r.bbox[1]-r.bbox[0]}  "
+              f"bbox_y={r.bbox[3]-r.bbox[2]}  bbox_x={r.bbox[5]-r.bbox[4]}")
+
+    # Render one ROI's three orthoview planes to confirm zarr crops +
+    # mask outline overlays + matplotlib + per-volume normalisation all
+    # work end-to-end.
+    crops = G._load_roi_crops(rois[0])
+    Z, Y, X = crops.shape
+    print(f"loaded ROI crop hcr_id={rois[0].hcr_id}  shape (Z,Y,X)=({Z},{Y},{X})  "
+          f"anchor=(z={crops.z_anchor}, y={crops.y_anchor}, x={crops.x_anchor})  "
+          f"label_voxels={int(crops.label_mask.sum())}")
+    assert crops.img_405.shape == crops.img_488.shape == crops.label_mask.shape
+    assert 0.0 <= crops.img_405.min() <= crops.img_405.max() <= 1.0
+    assert crops.label_mask.any(), "active label has zero voxels in the crop"
+
+    # Both modes (single-slice and MIP) on each channel.
+    fig, axes = plt.subplots(2, 3, figsize=(11, 7))
+    for row, mip in enumerate([False, True]):
+        (xy_img, xy_mask), (xz_img, xz_mask), (yz_img, yz_mask) = G._planes_for_channel(
+            crops, channel="405", mip=mip, z_idx=crops.z_anchor
+        )
+        for ax, img, mask, ttl in [
+            (axes[row, 0], xy_img, xy_mask, f"xy {'MIP' if mip else f'z={crops.z_anchor}'}"),
+            (axes[row, 1], xz_img, xz_mask, f"xz {'MIP' if mip else f'y={crops.y_anchor}'}"),
+            (axes[row, 2], yz_img, yz_mask, f"yz {'MIP' if mip else f'x={crops.x_anchor}'}"),
+        ]:
+            ax.imshow(img, cmap="gray", vmin=0, vmax=1)
+            if mask.any():
+                ax.contour(mask.astype(np.uint8), levels=[0.5], colors="red", linewidths=1.0)
+            ax.set_title(ttl, fontsize=9)
+            ax.set_xticks([]); ax.set_yticks([])
+    fig.tight_layout()
+    out_png = tmp / "preview_orthoview.png"
+    fig.savefig(out_png, dpi=110, bbox_inches="tight")
+    print(f"rendered ortho preview -> {out_png}  ({out_png.stat().st_size} bytes)")
+
+    # Simulate writing a few labels (good, bad, unsure, then undo).
+    for label, roi in zip(["good", "bad", "unsure"], rois[:3]):
+        G._append_label(
+            {
+                "ts": "2026-04-29T00:00:00Z",
+                "sid": roi.sid,
+                "hcr_id": roi.hcr_id,
+                "label": label,
+                "stage1_score": roi.score,
+                "reviewer": "smoke",
+                "session_token": "test",
+            }
+        )
+    # Undo the last (unsure) record
+    last_record = {
+        "sid": rois[2].sid,
+        "hcr_id": rois[2].hcr_id,
+        "label": "unsure",
+    }
+    G._append_label(
+        {
+            "ts": "2026-04-29T00:01:00Z",
+            "sid": rois[2].sid,
+            "hcr_id": rois[2].hcr_id,
+            "label": "_undone_",
+            "undoes": last_record,
+            "reviewer": "smoke",
+            "session_token": "test",
+        }
+    )
+
+    progress = G.label_progress()
+    print("\nlabel_progress():")
+    print(progress.to_string(index=False))
+
+    # Verify undo removed the unsure
+    row = progress[progress["sid"] == SID].iloc[0]
+    assert row["good"] == 1, row
+    assert row["bad"] == 1, row
+    assert row["unsure"] == 0, row  # undone
+    assert row["total"] == 2, row
+    print("\nundo accounting: OK")
+
+    # Resume guard: re-sample with the previously-labelled ids in skip set
+    rng2 = np.random.default_rng(0)
+    skip = {rois[0].hcr_id, rois[1].hcr_id, rois[2].hcr_id}
+    rois2 = G._sample_uncertain(SID, n_rois=10, score_band=(0.3, 0.7), rng=rng2,
+                                skip_hcr_ids=skip)
+    assert all(r.hcr_id not in skip for r in rois2), "skip set was ignored"
+    print(f"resume guard: {len(rois2)} new ROIs, none overlap with previously labelled set")
+
+    shutil.rmtree(tmp)
+    print("\nALL SMOKE CHECKS PASSED")
+
+
+if __name__ == "__main__":
+    main()

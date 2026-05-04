@@ -1,0 +1,91 @@
+# v3-S09 — Constellation match (TPS + dilated-hull volume NCC)
+
+Build on the locked-prior warm-start + Stage-B sz alignment to find a
+small set of CZ↔HCR anchor cell pairs in the top 100 µm slab, fit a
+3-D thin-plate spline, and accept the constellation only if the
+volume-to-volume NCC inside the (7.5 %-dilated) convex hull of the
+anchors exceeds threshold AND every anchor passes a strict
+leave-one-out test (dropping it must reduce hull NCC).
+
+## Pipeline (`match_constellation.py`)
+
+1. Top-100-µm slab on both modalities (CZ pia / HCR top surface).
+2. CZ ROIs from `cz_voronoi_labels`; HCR GFP+ from
+   `centroid_helpers.centroids_um(s, "hcr_gfp")`.
+3. HCR GFP+ ROIs gated by `roi_quality_v5d.predict_subject` ≥ 0.5.
+4. Per-cell IoU on a common 1.5 µm HCR-µm grid + xy-MIP IoU
+   (CZ centroid first warped through `apply_to_cz_um(lp, ·)` with
+   sz pinned to `get_sz` Stage B).
+5. Centroid prefilter: pairs only between CZ and HCR cells with
+   xy distance ≤ 60 µm (HCR µm) — keeps mask-IoU loop tractable.
+6. Pool selection: filter pairs by (IoU ≥ τ, dz ≤ Δz) sweeping
+   τ ∈ {0.50, 0.40, 0.30, 0.20} × Δz ∈ {30, 50, 80} µm; accept the
+   first combo with ≥ 6 pairs.  Fallback: top-N by IoU+dz score.
+7. K-subset search over K ∈ {4, 5, 6}; subsets ranked by 3-D
+   compactness (mean inter-anchor distance).  Up to 20 subsets/K
+   evaluated.
+8. For each subset: TPS warp from CZ-warped → HCR µm; sample CZ
+   raw zstack at TPS⁻¹(grid) and HCR ch488 (level-4) at grid
+   (4 µm spacing) inside the dilated hull; compute NCC.
+9. Acceptance: NCC_tps ≥ 0.10 AND all K LOO drops show ΔNCC < 0
+   (hull held fixed at the K-anchor convex hull).
+10. Among accepted, pick the highest NCC_tps.
+
+## Inputs / outputs per subject
+
+* `match_<sid>.json` — chosen anchors, ncc_tps/ncc_base/Δ, LOO array,
+  pool meta, rejection counts.
+* `pairs_<sid>.csv` — full candidate-pair table for diagnostics.
+* `figures/match_<sid>.png` — 6-panel visualisation.
+* `match_summary.csv` — one-row-per-subject summary.
+
+## Result
+
+6/6 subjects accepted a constellation (every reported anchor passed
+LOO; NCC_tps well above the 0.10 floor).
+
+| sid    | K | NCC_tps | NCC_base | ΔNCC    | pool meta                         |
+|--------|---|---------|----------|---------|-----------------------------------|
+| 755252 | 4 | +0.3842 | +0.1448  | +0.2394 | fallback_topN, dz≤80 µm           |
+| 767018 | 4 | +0.5174 | +0.0719  | +0.4455 | fallback_topN, dz≤80 µm           |
+| 767022 | 5 | +0.5138 | +0.0628  | +0.4510 | fallback_topN, dz≤80 µm           |
+| 782149 | 6 | +0.1695 | +0.0798  | +0.0896 | fallback_topN, dz≤80 µm           |
+| 788406 | 4 | +0.6857 | +0.7985  | −0.1127 | iou≥0.50, dz≤30 µm  (7 pairs)     |
+| 790322 | 4 | +0.4705 | +0.1714  | +0.2991 | fallback_topN, dz≤80 µm           |
+
+## Observations
+
+* TPS improves over the warm-start hull NCC for 5/6 subjects.
+* 788406 is the exception: rough-aligned NCC inside the *small* tight
+  hull (4 IoU≥0.5 anchors clustered together) is already 0.80; TPS
+  through 4 nearby anchors slightly distorts the surrounding voxels
+  and drops to 0.69.  Still passes LOO and the 0.10 acceptance floor.
+* Only 788406 produced a non-fallback pool; all other subjects had
+  max IoU well below 0.50 in the 100-µm slab and fell back to the
+  top-N pool with a dz≤80 µm constraint.  This suggests the IoU bar
+  is the main bottleneck at 100 µm slab depth — most HCR ROIs are
+  smaller than the warm-start residual permits matching.
+* Hull dilation 7.5 % is comfortable: keeps the NCC region anchored
+  to anchor cells, avoids extrapolation past the anchor cloud.
+
+## What's next
+
+* Run constellation-anchor TPS as the v3 §4.5 "seed expansion" step:
+  feed accepted anchors into a global CZ↔HCR TPS, then revisit cell
+  matching with refined coordinates.
+* Look at why 782149 NCC_tps is much lower (0.17 vs 0.4–0.5 elsewhere)
+  — likely the anchor field is large but image content within the
+  hull is dim / texture-poor at 100 µm.
+* Promote the IoU/dz pool builder (`build_candidate_pairs`) and the
+  K-subset search into `code/dev_code/` if used downstream.
+
+## Files
+
+```
+match_constellation.py        # main pipeline
+render_match.py               # 6-panel figures
+match_summary.csv             # per-subject one-row summary
+match_<sid>.json              # accepted constellation per subject
+pairs_<sid>.csv               # candidate-pair table per subject
+figures/match_<sid>.png       # 6-panel overlay per subject
+```

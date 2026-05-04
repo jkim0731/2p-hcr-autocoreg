@@ -1,0 +1,804 @@
+"""v3-S09 — Constellation match: CZ ROI binary MIP ↔ HCR GFP+ good-quality ROIs.
+
+Continues session 08 (surface-vascular match) but operates inside the locked
+overlap crop and uses the v5d ROI quality classifier to gate HCR candidates.
+
+Pipeline (per subject)
+----------------------
+1. Locked frame: `compute_locked_prior_warm_start(s, sz_init=sz_pin)` plus
+   Stage B sz from `sz_estimator.get_sz(s)` to warp CZ → HCR µm.
+2. Top slab (0-100 µm beneath surface):
+   - CZ side: CZ active centroids whose depth-below-CZ-pia ≤ 100 µm.
+   - HCR side: HCR cells (`hcr_centroids`) that are GFP+
+     (`s.hcr_gfp_df`) AND `roi_quality_v5d` binary score ≥ 0.5,
+     filtered to depth-below-HCR-top ≤ 100 µm.
+3. Build per-cell ROI MIP IoU pairs:
+   - CZ ROI mask volume from `cz_voronoi_labels`.
+   - HCR ROI mask volume from `cell_body_segmentation/segmentation_mask.zarr`
+     (tight-bbox cache).
+   - Resample both to a common 1.5 µm HCR-µm grid via the LP, project to
+     z-MIP within the slab, compute 2D IoU.
+   - Keep pairs with iou_xy ≥ 0.5; if < 6 such pairs found across the
+     subject, lower threshold to 0.4 / 0.3 / 0.2 in turn until ≥ 6.
+4. z-proximity: among kept pairs, require |dz_centroid| ≤ 30 µm. If < 6
+   survive, soften to 50 µm, then 80 µm.
+5. Constellation search: enumerate K-subsets (K∈{4,5,6}) of the candidate
+   pool, sorted by overall closeness (sum of pair-pair distances within
+   the subset). For each subset:
+     a. Fit thin-plate spline (RBF) src=cz_warp_xyz_um, dst=hcr_xyz_um.
+     b. Convex hull of the src anchors, dilated by FRAC = 0.075 (7.5 %).
+     c. Sample CZ raw zstack inside hull (via inverse LP).
+     d. Sample HCR 488 raw at the TPS-warped target points.
+     e. Compute volume-volume NCC (normalised cross-correlation, voxel-wise
+        between the two sample arrays).
+     f. Accept if NCC ≥ NCC_ACCEPT (default 0.10 — much higher than what
+        we get out of band-baseline; tunable).
+     g. Run LOO test: drop each anchor in turn, re-fit TPS on K-1
+        anchors, re-sample inside the FULL hull → NCC_LOO.  Require
+        NCC_LOO < NCC_full for ALL anchors (every landmark must
+        contribute).
+6. Among accepted constellations, keep the one with maximum NCC. Save
+   per-subject JSON + summary CSV + a 6-panel figure mirroring
+   session 08's `register_constellation_*.png`.
+
+Outputs (per subject, all under `figures/` and the session dir):
+  - `match_{sid}.json`          — chosen constellation, NCCs, LOO table
+  - `figures/match_{sid}.png`    — 6-panel result figure
+  - `match_summary.csv`          — one row per subject
+
+Run: `python /root/capsule/code/sessions/v3_S09_constellation_match/match_constellation.py`
+"""
+from __future__ import annotations
+
+import glob
+import json
+import os
+import pickle
+import sys
+import time
+from itertools import combinations
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import zarr
+from scipy.interpolate import RBFInterpolator
+from scipy.ndimage import binary_fill_holes, map_coordinates
+from scipy.spatial import ConvexHull, Delaunay
+
+sys.path.insert(0, "/root/capsule/code/dev_code")
+sys.path.insert(0, "/root/capsule/data/claude_data/full_automatic_execution_01")
+
+from benchmark_analysis import (  # type: ignore  # noqa: E402
+    depth_from_surface,
+    load_hcr_volume,
+)
+from benchmark_data_loader import (  # type: ignore  # noqa: E402
+    HCR_SEG_XY_DOWNSAMPLE,
+    cz_px_to_um,
+    hcr_px_to_um,
+    load_subject,
+)
+import lib.cz_labels as cz_labels_mod  # type: ignore  # noqa: E402
+import lib.centroid_helpers as ch  # type: ignore  # noqa: E402
+from locked_prior_warm import (  # type: ignore  # noqa: E402
+    apply_to_cz_um,
+    compute_locked_prior_warm_start,
+)
+from sz_estimator import get_sz  # type: ignore  # noqa: E402
+from surfaces_iter08 import (  # type: ignore  # noqa: E402
+    get_cz_surface_iter08,
+    get_hcr_top_surface_iter07,
+)
+
+
+HERE = Path(__file__).resolve().parent
+FIG = HERE / "figures"
+FIG.mkdir(parents=True, exist_ok=True)
+
+SUBJECTS_ALL = ["755252", "767018", "767022", "782149", "788406", "790322"]
+
+# ---- Parameters ---------------------------------------------------------
+SLAB_DEPTH_UM = 100.0           # 100 µm top slab beneath the surface
+ROI_QUALITY_THRESHOLD = 0.5     # roi_quality_v5d binary score gate
+IOU_THRESHOLDS = (0.50, 0.40, 0.30, 0.20)  # try in order if not enough
+DZ_THRESHOLDS_UM = (30.0, 50.0, 80.0)       # ditto for z-distance
+MIN_CANDIDATE_PAIRS = 6
+TOP_N_POOL = 8                  # top-N candidates fed to subset search
+K_VALUES = (4, 5, 6)
+HULL_DILATION_FRAC = 0.075       # 7.5% expansion of convex hull
+HULL_GRID_SPACING_UM = 4.0
+NCC_ACCEPT = 0.10
+LOO_REQUIRE_DROP = True         # require LOO NCC < full NCC for ALL anchors
+R_XY_UM = 60.0                  # centroid pre-filter window
+IOU_GRID_UM = 1.5
+PAIR_SCORE_W_IOU = 1.0
+PAIR_SCORE_W_DXY = 1.0 / R_XY_UM
+PAIR_SCORE_W_DZ = 1.0 / 30.0
+
+
+# 767018 zstack fallback (preserves the same patch as session iter8)
+_orig_load_zstack = cz_labels_mod._load_zstack
+
+
+def _patched_load_zstack(s):
+    try:
+        return _orig_load_zstack(s)
+    except StopIteration:
+        import tifffile
+        zs_path = next(Path(s.coreg_dir).glob("*_zstack.tif"))
+        return tifffile.imread(zs_path).astype(np.float32)
+
+
+cz_labels_mod._load_zstack = _patched_load_zstack
+
+
+def _hcr_seg_zarr_path(sid: str) -> Path:
+    hits = sorted(glob.glob(
+        f"/root/capsule/data/HCR_{sid}_*/cell_body_segmentation/segmentation_mask.zarr"
+    ))
+    if not hits:
+        raise FileNotFoundError(f"HCR segmentation zarr for {sid}")
+    return Path(hits[-1])
+
+
+def _hcr_metrics_path(sid: str) -> Path | None:
+    hits = sorted(glob.glob(
+        f"/root/capsule/data/HCR_{sid}_*/cell_body_segmentation/metrics.pickle"
+    ))
+    return Path(hits[-1]) if hits else None
+
+
+# ----------------------------------------------------------------------
+# ROI quality gate (cached parquet from roi_quality_v5d)
+# ----------------------------------------------------------------------
+ROI_QUALITY_CACHE = Path("/root/capsule/code/dev_code/cached_roi_quality")
+
+
+def _load_quality_scores(sid: str) -> pd.DataFrame:
+    """Load v5d binary scores; fall back to predict_subject if missing."""
+    p = ROI_QUALITY_CACHE / f"{sid}_stage2_binary_score_v5d.parquet"
+    if p.exists():
+        df = pd.read_parquet(p)
+        return df[["hcr_id", "score"]].rename(columns={"score": "roi_quality"})
+    # Fallback: compute on the fly
+    sys.path.insert(0, "/root/capsule/code/dev_code")
+    from roi_quality_v5d import predict_subject  # type: ignore
+    pred = predict_subject(sid)
+    return pred[["hcr_id", "binary_score"]].rename(
+        columns={"binary_score": "roi_quality"})
+
+
+# ----------------------------------------------------------------------
+# Per-cell mask helpers (from iter8_match_pairs)
+# ----------------------------------------------------------------------
+def _cz_per_cell_masks(s, cz_ids):
+    """Crop cz_voronoi_labels to each cell's bbox.
+    Returns {cz_id: (mask_zyx_local uint8, origin_zyx_vox)} in CZ vox."""
+    labels = cz_labels_mod.cz_voronoi_labels(s)
+    out = {}
+    for cid in cz_ids:
+        cid = int(cid)
+        loc = np.where(labels == cid)
+        if len(loc[0]) == 0:
+            continue
+        z0, z1 = int(loc[0].min()), int(loc[0].max()) + 1
+        y0, y1 = int(loc[1].min()), int(loc[1].max()) + 1
+        x0, x1 = int(loc[2].min()), int(loc[2].max()) + 1
+        m = (labels[z0:z1, y0:y1, x0:x1] == cid).astype(np.uint8)
+        out[cid] = (m, (z0, y0, x0))
+    return out
+
+
+def _gfp_per_cell_masks(sid, gfp_ids):
+    """Read level-0 segmentation_mask.zarr per-cell; returns
+    {gfp_id: (mask_zyx_local uint8, origin_zyx_vox_level0)}."""
+    z = zarr.open(str(_hcr_seg_zarr_path(sid)))["0"]
+    Z, Y, X = z.shape[-3:]
+
+    metrics_path = _hcr_metrics_path(sid)
+    if metrics_path is not None:
+        with open(metrics_path, "rb") as f:
+            metrics = pickle.load(f)
+        bbox_lookup = {int(k): np.asarray(metrics[k]["global_bbox"], int)
+                       for k in metrics}
+    else:
+        cc_path = sorted(glob.glob(
+            f"/root/capsule/data/HCR_{sid}_*/cell_body_segmentation/cell_centroids.npy"
+        ))[-1]
+        cc = np.load(cc_path)
+        cz_ = cc[:, 0].astype(int)
+        cy_ = (cc[:, 1] * HCR_SEG_XY_DOWNSAMPLE).astype(int)
+        cx_ = (cc[:, 2] * HCR_SEG_XY_DOWNSAMPLE).astype(int)
+        cid = cc[:, 3].astype(int)
+        cm = {int(i): (int(cz_[k]), int(cy_[k]), int(cx_[k]))
+              for k, i in enumerate(cid)}
+        bbox_lookup = {}
+        for gid in gfp_ids:
+            gid = int(gid)
+            if gid not in cm:
+                continue
+            cz, cy, cx = cm[gid]
+            z0 = max(cz - 15, 0); z1 = min(cz + 16, Z)
+            y0 = max(cy - 60, 0); y1 = min(cy + 61, Y)
+            x0 = max(cx - 60, 0); x1 = min(cx + 61, X)
+            bbox_lookup[gid] = np.array([z0, y0, x0, z1 - 1, y1 - 1, x1 - 1])
+
+    out = {}
+    for gid in gfp_ids:
+        gid = int(gid)
+        bb = bbox_lookup.get(gid)
+        if bb is None:
+            continue
+        zlo, ylo, xlo, zhi, yhi, xhi = [int(v) for v in bb]
+        crop = np.asarray(z[0, 0, zlo:zhi + 1, ylo:yhi + 1, xlo:xhi + 1])
+        mask = (crop == gid).astype(np.uint8)
+        if mask.sum() == 0:
+            continue
+        zs, ys, xs = np.where(mask)
+        z0_loc, z1_loc = int(zs.min()), int(zs.max()) + 1
+        y0_loc, y1_loc = int(ys.min()), int(ys.max()) + 1
+        x0_loc, x1_loc = int(xs.min()), int(xs.max()) + 1
+        out[gid] = (mask[z0_loc:z1_loc, y0_loc:y1_loc, x0_loc:x1_loc],
+                    (zlo + z0_loc, ylo + y0_loc, xlo + x0_loc))
+    return out
+
+
+# ----------------------------------------------------------------------
+# Geometry helpers
+# ----------------------------------------------------------------------
+def _cz_mask_to_hcr_um_bbox(cz_mask, cz_origin_vox, cz_xy_um, cz_z_um, lp):
+    z0, y0, x0 = cz_origin_vox
+    Dz, Dy, Dx = cz_mask.shape
+    cz_z_arr = np.array([z0, z0 + Dz - 1]) * cz_z_um
+    cz_y_arr = np.array([y0, y0 + Dy - 1]) * cz_xy_um
+    cz_x_arr = np.array([x0, x0 + Dx - 1]) * cz_xy_um
+    pts = np.array([[z, y, x] for z in cz_z_arr for y in cz_y_arr for x in cz_x_arr])
+    warped = apply_to_cz_um(lp, pts)
+    return (warped[:, 0].min(), warped[:, 1].min(), warped[:, 2].min(),
+            warped[:, 0].max(), warped[:, 1].max(), warped[:, 2].max())
+
+
+def _gfp_mask_hcr_um_bbox(gfp_mask, gfp_origin_vox, hcr_seg_xy_um, hcr_seg_z_um):
+    z0, y0, x0 = gfp_origin_vox
+    Dz, Dy, Dx = gfp_mask.shape
+    return (z0 * hcr_seg_z_um, y0 * hcr_seg_xy_um, x0 * hcr_seg_xy_um,
+            (z0 + Dz - 1) * hcr_seg_z_um, (y0 + Dy - 1) * hcr_seg_xy_um,
+            (x0 + Dx - 1) * hcr_seg_xy_um)
+
+
+def _aabb_overlap(a, b):
+    return (a[3] >= b[0] and a[0] <= b[3]
+            and a[4] >= b[1] and a[1] <= b[4]
+            and a[5] >= b[2] and a[2] <= b[5])
+
+
+def _aabb_union(a, b):
+    return (min(a[0], b[0]), min(a[1], b[1]), min(a[2], b[2]),
+            max(a[3], b[3]), max(a[4], b[4]), max(a[5], b[5]))
+
+
+def _inverse_lp_zyx(hcr_um_zyx, lp):
+    return (hcr_um_zyx - lp.translation) @ lp.R / lp.scales + lp.src_mean
+
+
+def _resample_to_hcr_um_grid(mask, origin_vox, vox_zyx_um, grid_origin_um,
+                              grid_shape, grid_spacing,
+                              transform_um_zyx=None):
+    Nz, Ny, Nx = grid_shape
+    kz, ky, kx = np.indices((Nz, Ny, Nx), dtype=np.float64)
+    z_um = grid_origin_um[0] + grid_spacing * kz
+    y_um = grid_origin_um[1] + grid_spacing * ky
+    x_um = grid_origin_um[2] + grid_spacing * kx
+    pts = np.stack([z_um.ravel(), y_um.ravel(), x_um.ravel()], axis=1)
+    if transform_um_zyx is not None:
+        pts = transform_um_zyx(pts)
+    vz, vy, vx = vox_zyx_um
+    z0, y0, x0 = origin_vox
+    src_z = pts[:, 0] / vz - z0
+    src_y = pts[:, 1] / vy - y0
+    src_x = pts[:, 2] / vx - x0
+    coords = np.stack([src_z, src_y, src_x], axis=0)
+    sampled = map_coordinates(mask, coords, order=0, mode="constant", cval=0)
+    return sampled.reshape(Nz, Ny, Nx).astype(np.uint8)
+
+
+def _ncc(a, b):
+    a = a.astype(np.float64).ravel(); b = b.astype(np.float64).ravel()
+    a = a - a.mean(); b = b - b.mean()
+    den = float(np.sqrt((a * a).sum() * (b * b).sum()))
+    return float((a * b).sum() / den) if den > 0 else 0.0
+
+
+# ----------------------------------------------------------------------
+# Convex hull dilated by fraction (relative to centroid)
+# ----------------------------------------------------------------------
+def _hull_grid_dilated(src_xyz_anchor, dilate_frac, spacing):
+    """Return (Nz,Ny,Nx) grid of HCR-µm xyz points covering the
+    convex hull of `src_xyz_anchor` dilated outward by `dilate_frac` of
+    its centroid-radius.  Returns dict with `src_xyz` (M, 3 zyx convention
+    is xyz here? note: caller passes xyz so we keep xyz).
+    """
+    bb_min = src_xyz_anchor.min(0)
+    bb_max = src_xyz_anchor.max(0)
+    centre = src_xyz_anchor.mean(0)
+    # Pad bounding box by dilate_frac of half-extent
+    half = (bb_max - bb_min) * 0.5
+    pad = half * dilate_frac
+    bb_min -= pad
+    bb_max += pad
+    Nx = int(np.ceil((bb_max[0] - bb_min[0]) / spacing)) + 1
+    Ny = int(np.ceil((bb_max[1] - bb_min[1]) / spacing)) + 1
+    Nz = int(np.ceil((bb_max[2] - bb_min[2]) / spacing)) + 1
+    if min(Nx, Ny, Nz) < 2:
+        return None
+    kz, ky, kx = np.indices((Nz, Ny, Nx), dtype=np.float64)
+    sx = bb_min[0] + spacing * kx
+    sy = bb_min[1] + spacing * ky
+    sz = bb_min[2] + spacing * kz
+    src_xyz = np.stack([sx, sy, sz], axis=-1).reshape(-1, 3)
+
+    try:
+        hull_pts = src_xyz_anchor.copy()
+        rng = hull_pts.max(0) - hull_pts.min(0)
+        for ax in range(3):
+            if rng[ax] < 1e-3:
+                hull_pts = np.vstack([
+                    hull_pts,
+                    hull_pts[0] + np.eye(3)[ax] * 1.0,
+                    hull_pts[0] - np.eye(3)[ax] * 1.0,
+                ])
+        # Dilate hull radially by dilate_frac about its centroid.
+        c = hull_pts.mean(0)
+        v_h = hull_pts - c
+        hull_pts_dil = c + v_h * (1.0 + dilate_frac)
+        hull = Delaunay(hull_pts_dil)
+        inside = hull.find_simplex(src_xyz) >= 0
+    except Exception:
+        inside = np.ones(len(src_xyz), bool)
+
+    return dict(src_xyz=src_xyz, inside=inside,
+                shape=(Nz, Ny, Nx), bb_min=bb_min, bb_max=bb_max)
+
+
+def _sample_hcr_488(hcr_vol, hcr_xy_um, hcr_z_um, target_xyz):
+    z = target_xyz[:, 2] / hcr_z_um
+    y = target_xyz[:, 1] / hcr_xy_um
+    x = target_xyz[:, 0] / hcr_xy_um
+    coords = np.stack([z, y, x], axis=0)
+    return map_coordinates(hcr_vol.astype(np.float32), coords,
+                           order=1, mode="constant", cval=0.0)
+
+
+def _sample_cz_img_at_src(cz_img_zyx, cz_xy_um, cz_z_um, src_xyz, lp):
+    src_zyx = src_xyz[:, ::-1]
+    cz_um_zyx = _inverse_lp_zyx(src_zyx, lp)
+    cz_vox = (cz_um_zyx / np.array([cz_z_um, cz_xy_um, cz_xy_um])).T
+    return map_coordinates(cz_img_zyx, cz_vox, order=1,
+                           mode="constant", cval=0.0)
+
+
+def _ncc_for_subset(src_anchor, dst_anchor, grid, lp,
+                     cz_img_zyx, cz_xy_um, cz_z_um,
+                     hcr_vol, hcr_xy_um, hcr_z_um):
+    inside = grid["inside"]
+    if inside.sum() < 16:
+        return None
+    src_xyz = grid["src_xyz"][inside]
+    cz_samples = _sample_cz_img_at_src(cz_img_zyx, cz_xy_um, cz_z_um, src_xyz, lp)
+    try:
+        if len(src_anchor) >= 4:
+            tps = RBFInterpolator(src_anchor, dst_anchor,
+                                   kernel="thin_plate_spline")
+        else:
+            tps = RBFInterpolator(src_anchor, dst_anchor,
+                                   kernel="thin_plate_spline", degree=0)
+        tgt_xyz = tps(src_xyz)
+    except Exception as e:
+        print(f"      [_ncc_for_subset] TPS failed: {e}", flush=True)
+        return None
+    hcr_samples = _sample_hcr_488(hcr_vol, hcr_xy_um, hcr_z_um, tgt_xyz)
+    hcr_base = _sample_hcr_488(hcr_vol, hcr_xy_um, hcr_z_um, src_xyz)
+    return {
+        "n_voxels": int(inside.sum()),
+        "ncc_tps": _ncc(cz_samples, hcr_samples),
+        "ncc_base": _ncc(cz_samples, hcr_base),
+    }
+
+
+# ----------------------------------------------------------------------
+# Build candidate pairs
+# ----------------------------------------------------------------------
+def build_candidate_pairs(sid, t_start):
+    print(f"\n=== {sid} ===", flush=True)
+    s = load_subject(sid)
+
+    sz_dict = get_sz(s)
+    sz_pin = float(sz_dict.get("sz_best") or sz_dict.get("sz") or 1.0)
+    print(f"  sz_pin = {sz_pin:.4f}", flush=True)
+    lp = compute_locked_prior_warm_start(s, sz_init=sz_pin)
+
+    # Centroids in µm (zyx)
+    cz_um, cz_ids = ch.centroids_um(s, "cz")
+    gfp_um_all, gfp_ids_all = ch.centroids_um(s, "hcr_gfp")
+    print(f"  CZ active cells: {len(cz_ids)}; GFP+ cells: {len(gfp_ids_all)}",
+          flush=True)
+
+    # ROI quality gate
+    qual_df = _load_quality_scores(sid)
+    qmap = qual_df.set_index("hcr_id")["roi_quality"].to_dict()
+    quality = np.array([qmap.get(int(i), np.nan) for i in gfp_ids_all])
+    keep_q = np.isfinite(quality) & (quality >= ROI_QUALITY_THRESHOLD)
+    gfp_um_q = gfp_um_all[keep_q]
+    gfp_ids_q = gfp_ids_all[keep_q]
+    quality_q = quality[keep_q]
+    print(f"  GFP+ ∩ quality≥{ROI_QUALITY_THRESHOLD}: "
+          f"{len(gfp_ids_q)}/{len(gfp_ids_all)}", flush=True)
+
+    # Top-slab depth filter (CZ side: depth-below-CZ-pia; HCR side: depth-below-HCR-top)
+    cz_surf = get_cz_surface_iter08(s)
+    hcr_surf = get_hcr_top_surface_iter07(s)
+
+    cz_xyz_cz = cz_um[:, [2, 1, 0]]
+    cz_depth = depth_from_surface(cz_xyz_cz, cz_surf)
+    in_slab_cz = (cz_depth >= 0.0) & (cz_depth <= SLAB_DEPTH_UM)
+
+    gfp_xyz_hcr = gfp_um_q[:, [2, 1, 0]]
+    gfp_depth = depth_from_surface(gfp_xyz_hcr, hcr_surf)
+    in_slab_gfp = (gfp_depth >= 0.0) & (gfp_depth <= SLAB_DEPTH_UM)
+
+    cz_um = cz_um[in_slab_cz]; cz_ids = cz_ids[in_slab_cz]
+    gfp_um = gfp_um_q[in_slab_gfp]; gfp_ids = gfp_ids_q[in_slab_gfp]
+    quality_kept = quality_q[in_slab_gfp]
+    print(f"  in slab (≤{SLAB_DEPTH_UM:.0f}µm): cz={len(cz_ids)}  "
+          f"gfp={len(gfp_ids)}", flush=True)
+    if len(cz_ids) == 0 or len(gfp_ids) == 0:
+        return None
+
+    # Warm-start CZ centroids in HCR µm
+    cz_warp = apply_to_cz_um(lp, cz_um)
+    # Centroid pre-filter (within R_XY_UM, dz unbounded for now — z-window
+    # is applied later as a tightening step).
+    pairs = []
+    for i, cid in enumerate(cz_ids):
+        cw = cz_warp[i]
+        dxy = np.hypot(gfp_um[:, 1] - cw[1], gfp_um[:, 2] - cw[2])
+        dz = np.abs(gfp_um[:, 0] - cw[0])
+        in_box = dxy <= R_XY_UM
+        for j in np.where(in_box)[0]:
+            pairs.append({
+                "cz_id": int(cid),
+                "gfp_id": int(gfp_ids[j]),
+                "cz_warp_z_um": float(cw[0]), "cz_warp_y_um": float(cw[1]),
+                "cz_warp_x_um": float(cw[2]),
+                "gfp_z_um": float(gfp_um[j, 0]),
+                "gfp_y_um": float(gfp_um[j, 1]),
+                "gfp_x_um": float(gfp_um[j, 2]),
+                "d_xy_um": float(dxy[j]), "d_z_um": float(dz[j]),
+                "roi_quality": float(quality_kept[j]),
+            })
+    print(f"  {len(pairs)} centroid-prefilter pairs", flush=True)
+    if not pairs:
+        return None
+
+    # Per-cell IoU on common 1.5 µm grid
+    cz_unique = sorted({p["cz_id"] for p in pairs})
+    gfp_unique = sorted({p["gfp_id"] for p in pairs})
+    t0 = time.time()
+    cz_masks = _cz_per_cell_masks(s, cz_unique)
+    print(f"  CZ masks: {len(cz_masks)}/{len(cz_unique)} "
+          f"+{time.time()-t0:.1f}s", flush=True)
+    t0 = time.time()
+    gfp_masks = _gfp_per_cell_masks(sid, gfp_unique)
+    print(f"  GFP masks: {len(gfp_masks)}/{len(gfp_unique)} "
+          f"+{time.time()-t0:.1f}s", flush=True)
+
+    cz_xy_um = float(s.cz_xy_um); cz_z_um = float(s.cz_z_um)
+    seg_xy_um = float(s.hcr_seg_xy_um); seg_z_um = float(s.hcr_seg_z_um)
+
+    rows = []
+    t0 = time.time()
+    for k, p in enumerate(pairs):
+        cid = p["cz_id"]; gid = p["gfp_id"]
+        if cid not in cz_masks or gid not in gfp_masks:
+            continue
+        czm, czo = cz_masks[cid]; gpm, gpo = gfp_masks[gid]
+        czbb = _cz_mask_to_hcr_um_bbox(czm, czo, cz_xy_um, cz_z_um, lp)
+        gpbb = _gfp_mask_hcr_um_bbox(gpm, gpo, seg_xy_um, seg_z_um)
+        if not _aabb_overlap(czbb, gpbb):
+            iou = 0.0; iou_xy = 0.0
+        else:
+            u = _aabb_union(czbb, gpbb)
+            pad = 2.0
+            grid_origin = (u[0] - pad, u[1] - pad, u[2] - pad)
+            grid_max = (u[3] + pad, u[4] + pad, u[5] + pad)
+            Nz = int(np.ceil((grid_max[0] - grid_origin[0]) / IOU_GRID_UM)) + 1
+            Ny = int(np.ceil((grid_max[1] - grid_origin[1]) / IOU_GRID_UM)) + 1
+            Nx = int(np.ceil((grid_max[2] - grid_origin[2]) / IOU_GRID_UM)) + 1
+            shp = (Nz, Ny, Nx)
+            cz_grid = _resample_to_hcr_um_grid(
+                czm, czo, (cz_z_um, cz_xy_um, cz_xy_um),
+                grid_origin, shp, IOU_GRID_UM,
+                transform_um_zyx=lambda pts: _inverse_lp_zyx(pts, lp),
+            )
+            gfp_grid = _resample_to_hcr_um_grid(
+                gpm, gpo, (seg_z_um, seg_xy_um, seg_xy_um),
+                grid_origin, shp, IOU_GRID_UM,
+                transform_um_zyx=None,
+            )
+            cb = cz_grid > 0; gb = gfp_grid > 0
+            inter = np.logical_and(cb, gb).sum()
+            uni = np.logical_or(cb, gb).sum()
+            iou = float(inter) / float(uni) if uni > 0 else 0.0
+            cz_xy_mip = cb.max(axis=0); gfp_xy_mip = gb.max(axis=0)
+            inter_xy = np.logical_and(cz_xy_mip, gfp_xy_mip).sum()
+            uni_xy = np.logical_or(cz_xy_mip, gfp_xy_mip).sum()
+            iou_xy = float(inter_xy) / float(uni_xy) if uni_xy > 0 else 0.0
+        rows.append({**p, "iou": iou, "iou_xy": iou_xy})
+        if (k + 1) % 200 == 0:
+            print(f"    pair {k+1}/{len(pairs)}  +{time.time()-t0:.1f}s",
+                  flush=True)
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return None
+    df["pair_score"] = (
+        PAIR_SCORE_W_IOU * df["iou_xy"]
+        + (1.0 - PAIR_SCORE_W_DXY * df["d_xy_um"]).clip(0)
+        + (1.0 - PAIR_SCORE_W_DZ * df["d_z_um"]).clip(0)
+    )
+    df = df.sort_values(["cz_id", "iou_xy", "pair_score"],
+                         ascending=[True, False, False])
+    df["rank_in_cz"] = df.groupby("cz_id").cumcount() + 1
+    print(f"  pair table: {len(df)} rows  "
+          f"max iou_xy={df['iou_xy'].max():.3f}  "
+          f"top-1 iou_xy>0: "
+          f"{int((df[df.rank_in_cz==1]['iou_xy']>0).sum())}",
+          flush=True)
+    df.to_csv(HERE / f"pairs_{sid}.csv", index=False)
+    return dict(s=s, lp=lp, df=df)
+
+
+# ----------------------------------------------------------------------
+# Filter pool by IoU + z thresholds (with adaptive softening)
+# ----------------------------------------------------------------------
+def select_pool(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+    """Pick the candidate pool of (cz_id, gfp_id) pairs by trying IoU and
+    dz thresholds in order until ≥ MIN_CANDIDATE_PAIRS pairs survive.
+    """
+    base = df[df.rank_in_cz == 1].copy()
+    used = {}
+    for iou_thr in IOU_THRESHOLDS:
+        for dz_thr in DZ_THRESHOLDS_UM:
+            sub = base[(base["iou_xy"] >= iou_thr) & (base["d_z_um"] <= dz_thr)]
+            if len(sub) >= MIN_CANDIDATE_PAIRS:
+                used = {"iou_thr": float(iou_thr), "dz_thr_um": float(dz_thr),
+                        "n_after_filter": int(len(sub))}
+                # Take top-N by iou_xy then pair_score
+                sub = sub.sort_values(["iou_xy", "pair_score"],
+                                       ascending=[False, False])
+                return sub.head(TOP_N_POOL).reset_index(drop=True), used
+    # Total fallback: top-N by iou_xy regardless
+    sub = base.sort_values(["iou_xy", "pair_score"],
+                            ascending=[False, False]).head(TOP_N_POOL)
+    used = {"iou_thr": "fallback_topN", "dz_thr_um": float(DZ_THRESHOLDS_UM[-1]),
+            "n_after_filter": int(len(sub))}
+    return sub.reset_index(drop=True), used
+
+
+# ----------------------------------------------------------------------
+# Subset search — closeness-first ordering
+# ----------------------------------------------------------------------
+def _subset_compactness(src_xyz_anchor):
+    """Lower = more compact: mean pairwise distance among anchors."""
+    K = len(src_xyz_anchor)
+    if K < 2:
+        return 0.0
+    d = 0.0; n = 0
+    for i in range(K):
+        for j in range(i + 1, K):
+            d += float(np.linalg.norm(src_xyz_anchor[i] - src_xyz_anchor[j]))
+            n += 1
+    return d / max(n, 1)
+
+
+def search_constellations(state, t_start):
+    pool_df, pool_meta = select_pool(state["df"])
+    print(f"\n  pool: n={len(pool_df)}  meta={pool_meta}", flush=True)
+    if len(pool_df) < min(K_VALUES):
+        print("  pool too small; skip", flush=True)
+        return None, pool_df, pool_meta
+
+    s = state["s"]; lp = state["lp"]
+    cz_xy_um = float(s.cz_xy_um); cz_z_um = float(s.cz_z_um)
+
+    print("  loading CZ z-stack ...", flush=True)
+    cz_img = cz_labels_mod._load_zstack(s).astype(np.float32)
+    p_lo, p_hi = np.percentile(cz_img, [1.0, 99.0])
+    cz_img_n = np.clip((cz_img - p_lo) / max(p_hi - p_lo, 1e-6), 0, 1).astype(np.float32)
+
+    print("  loading HCR 488 (level=4) ...", flush=True)
+    hcr_vol, hcr_xy_um, hcr_z_um = load_hcr_volume(s, channel="488", level=4)
+    p_lo, p_hi = np.percentile(hcr_vol, [1.0, 99.0])
+    hcr_n = np.clip((hcr_vol - p_lo) / max(p_hi - p_lo, 1e-6), 0, 1).astype(np.float32)
+
+    src_pool = pool_df[["cz_warp_x_um", "cz_warp_y_um", "cz_warp_z_um"]].to_numpy()
+    dst_pool = pool_df[["gfp_x_um", "gfp_y_um", "gfp_z_um"]].to_numpy()
+    cz_pool = pool_df["cz_id"].to_numpy().astype(int)
+    gfp_pool = pool_df["gfp_id"].to_numpy().astype(int)
+    iou_pool = pool_df["iou_xy"].to_numpy()
+    qual_pool = pool_df["roi_quality"].to_numpy()
+
+    # Build (K, idx, compactness) candidates, sort by compactness ascending
+    candidates = []
+    for K in K_VALUES:
+        if K > len(pool_df):
+            continue
+        for combo in combinations(range(len(pool_df)), K):
+            idx = list(combo)
+            if len(set(gfp_pool[idx])) < K:
+                continue
+            comp = _subset_compactness(src_pool[idx])
+            candidates.append((K, comp, idx))
+    candidates.sort(key=lambda t: t[1])  # most compact first
+    print(f"  {len(candidates)} candidate subsets to evaluate "
+          f"(K∈{K_VALUES}, sorted by compactness)", flush=True)
+
+    accepted = []
+    rejected_reasons = {"low_ncc": 0, "loo_failed": 0, "tps_failed": 0,
+                        "no_voxels": 0}
+    t0 = time.time()
+    for ci, (K, comp, idx) in enumerate(candidates):
+        src_a = src_pool[idx]; dst_a = dst_pool[idx]
+        grid = _hull_grid_dilated(src_a, HULL_DILATION_FRAC, HULL_GRID_SPACING_UM)
+        if grid is None:
+            rejected_reasons["no_voxels"] += 1
+            continue
+        r = _ncc_for_subset(src_a, dst_a, grid, lp,
+                             cz_img_n, cz_xy_um, cz_z_um,
+                             hcr_n, hcr_xy_um, hcr_z_um)
+        if r is None:
+            rejected_reasons["tps_failed"] += 1
+            continue
+        if r["ncc_tps"] < NCC_ACCEPT:
+            rejected_reasons["low_ncc"] += 1
+            continue
+        # LOO test: drop each anchor, refit TPS, NCC inside FULL hull
+        loo = []
+        loo_pass = True
+        for i in range(K):
+            keep = [j for j in range(K) if j != i]
+            r_loo = _ncc_for_subset(src_a[keep], dst_a[keep], grid, lp,
+                                     cz_img_n, cz_xy_um, cz_z_um,
+                                     hcr_n, hcr_xy_um, hcr_z_um)
+            if r_loo is None:
+                loo_pass = False
+                loo.append({"drop_idx": i, "ncc": np.nan})
+                continue
+            drop_better = r_loo["ncc_tps"] >= r["ncc_tps"]
+            loo.append({"drop_idx": i, "ncc": r_loo["ncc_tps"],
+                        "delta": r_loo["ncc_tps"] - r["ncc_tps"]})
+            if LOO_REQUIRE_DROP and drop_better:
+                loo_pass = False
+        if not loo_pass:
+            rejected_reasons["loo_failed"] += 1
+            continue
+        accepted.append({
+            "K": K, "compactness_um": comp, "idx": idx,
+            "ncc_tps": r["ncc_tps"], "ncc_base": r["ncc_base"],
+            "n_voxels": r["n_voxels"], "loo": loo,
+        })
+        if (ci + 1) % 50 == 0 or ci == len(candidates) - 1:
+            print(f"    eval {ci+1}/{len(candidates)}  "
+                  f"accepted={len(accepted)}  "
+                  f"+{time.time()-t0:.1f}s", flush=True)
+
+    print(f"  rejection counts: {rejected_reasons}", flush=True)
+    if not accepted:
+        return None, pool_df, pool_meta
+
+    accepted.sort(key=lambda r: r["ncc_tps"], reverse=True)
+    best = accepted[0]
+    idx = best["idx"]
+    out = {
+        "K": best["K"], "idx": idx,
+        "cz_ids": [int(cz_pool[i]) for i in idx],
+        "gfp_ids": [int(gfp_pool[i]) for i in idx],
+        "iou_per_anchor": [float(iou_pool[i]) for i in idx],
+        "roi_quality_per_anchor": [float(qual_pool[i]) for i in idx],
+        "src_xyz_um": src_pool[idx].tolist(),
+        "dst_xyz_um": dst_pool[idx].tolist(),
+        "ncc_tps": float(best["ncc_tps"]),
+        "ncc_base": float(best["ncc_base"]),
+        "delta_ncc": float(best["ncc_tps"] - best["ncc_base"]),
+        "compactness_um": float(best["compactness_um"]),
+        "n_voxels": int(best["n_voxels"]),
+        "loo": best["loo"],
+        "n_accepted": len(accepted),
+        "n_evaluated": len(candidates),
+        "rejection_reasons": rejected_reasons,
+        "pool_meta": pool_meta,
+    }
+    print(f"  BEST: K={best['K']}  cz={out['cz_ids']}  gfp={out['gfp_ids']}",
+          flush=True)
+    print(f"        ncc_tps={best['ncc_tps']:+.4f}  "
+          f"ncc_base={best['ncc_base']:+.4f}  "
+          f"Δ={best['ncc_tps']-best['ncc_base']:+.4f}",
+          flush=True)
+    return out, pool_df, pool_meta
+
+
+# ----------------------------------------------------------------------
+# Per-subject driver
+# ----------------------------------------------------------------------
+def run_subject(sid: str, t_start: float) -> dict | None:
+    state = build_candidate_pairs(sid, t_start)
+    if state is None:
+        return None
+    chosen, pool_df, pool_meta = search_constellations(state, t_start)
+    if chosen is None:
+        out = {
+            "subject_id": sid,
+            "ok": False,
+            "pool_meta": pool_meta,
+            "n_pool": int(len(pool_df)),
+            "elapsed_s": round(time.time() - t_start, 1),
+        }
+    else:
+        out = {
+            "subject_id": sid,
+            "ok": True,
+            "n_pool": int(len(pool_df)),
+            **chosen,
+            "elapsed_s": round(time.time() - t_start, 1),
+        }
+    out_json = HERE / f"match_{sid}.json"
+    out_json.write_text(json.dumps(out, indent=2, default=float))
+    print(f"  → {out_json.name}  [{time.time()-t_start:.1f}s total]",
+          flush=True)
+    return out
+
+
+def main():
+    requested = os.environ.get("SUBJECTS")
+    subjects = requested.split(",") if requested else SUBJECTS_ALL
+    rows = []
+    t0 = time.time()
+    for sid in subjects:
+        try:
+            res = run_subject(sid, t0)
+        except Exception as e:
+            print(f"  ERROR {sid}: {e}", flush=True)
+            import traceback; traceback.print_exc()
+            res = {"subject_id": sid, "ok": False, "error": str(e)}
+            (HERE / f"match_{sid}.json").write_text(
+                json.dumps(res, indent=2, default=float)
+            )
+        if res is None:
+            continue
+        flat = {
+            "subject_id": sid,
+            "ok": bool(res.get("ok", False)),
+            "K": res.get("K"),
+            "cz_ids": ",".join(str(x) for x in res.get("cz_ids", [])),
+            "gfp_ids": ",".join(str(x) for x in res.get("gfp_ids", [])),
+            "ncc_tps": res.get("ncc_tps"),
+            "ncc_base": res.get("ncc_base"),
+            "delta_ncc": res.get("delta_ncc"),
+            "n_voxels": res.get("n_voxels"),
+            "n_accepted": res.get("n_accepted"),
+            "n_evaluated": res.get("n_evaluated"),
+            "iou_thr": (res.get("pool_meta") or {}).get("iou_thr"),
+            "dz_thr_um": (res.get("pool_meta") or {}).get("dz_thr_um"),
+            "elapsed_s": res.get("elapsed_s"),
+        }
+        rows.append(flat)
+    df_sum = pd.DataFrame(rows)
+    out_csv = HERE / "match_summary.csv"
+    df_sum.to_csv(out_csv, index=False)
+    print(f"\nwrote {out_csv}\n{df_sum.to_string(index=False)}\n"
+          f"[done in {time.time()-t0:.1f}s]")
+
+
+if __name__ == "__main__":
+    main()

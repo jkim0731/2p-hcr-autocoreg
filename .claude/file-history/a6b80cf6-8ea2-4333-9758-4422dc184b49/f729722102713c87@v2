@@ -1,0 +1,180 @@
+# v3-S12 — FPFH descriptor feasibility (Grand Plan v3 §4.1 follow-up)
+
+**Date opened:** 2026-05-02
+**Plan reference:** Grand Plan v3 §4.1 (P15 = FPFH+RANSAC was deferred in S10
+on LP-residual-ceiling grounds; this session checks whether the *descriptor
+itself* discriminates GT-paired HCR cells from close-but-wrong neighbours
+under a clean alignment, before investing in the full P15 pipeline).
+
+## Question
+
+Under a clean alignment (GT-TPS) and a realistic HCR cell pool
+(strict-GFP+ ∩ ROI-quality ≥ 0.5 ∩ bbox-of-warped-CZ), does any of
+{FPFH, PPF, k-NN-distance histogram} discriminate the GT-paired HCR
+cell from close-but-wrong neighbours better than centroid distance
+under LP?
+
+If no descriptor clears AUC ≥ 0.85 on ≥4/6 subjects AND beats
+centroid-LP, FPFH+RANSAC promotion is not earned and the §4.1
+deferral stands.
+
+## Setup
+
+* **Alignment for descriptors**: GT-TPS — fit `Rbf(thin_plate)` on
+  GT (cz_zyx_um → hcr_zyx_um) and warp the full CZ centroid set.  Using
+  the GT directly isolates "is the descriptor doing work?" from "did
+  the pose converge?".
+* **Pia normals**: per cell, analytic gradient of the cached HCR pia
+  surface (`surfaces_iter08.get_hcr_top_surface_iter07`) at each cell's
+  (x, y).  Same surface used for CZ-warped and HCR cells, so normals
+  are cross-modally consistent.
+* **HCR cell pool**:
+  - **strict-GFP+** from GMM-intersection cutoff (cached at
+    `data/claude_data/sessions/07b_scale_clean_gfp/gmm_threshold_results.json`).
+    Spot subjects: cutoff on `density`; intensity subjects: cutoff on
+    `mean_minus_bg`.
+  - intersected with `roi_quality_stage2_binary_score_v5d ≥ 0.5`
+  - clipped to bbox of GT-TPS-warped CZ centroids + 30 µm.
+* **Centroid-LP baseline**: realistic deployment reference — CZ centroids
+  warped via the locked-prior warm-start (sz pinned to iter-7) and ranked
+  by Euclidean distance.
+
+## Filter accounting (per subject)
+
+| sid    | n_GT | strict-GFP+ | bbox∩strict | ∩quality (HCR pool) | n_GT_kept | strict GT-cov |
+|--------|-----:|-----------:|-----------:|-------------------:|---------:|-------------:|
+| 755252 |  639 |       5402 |       5262 |               4121 |     363  |        0.701 |
+| 767018 |  273 |       8114 |       1394 |               1177 |     228  |        0.982 |
+| 767022 |  793 |       6341 |       6314 |               5527 |     642  |        0.878 |
+| 782149 |  303 |       3450 |        674 |                529 |     238  |        0.967 |
+| 788406 |  787 |      10729 |       1772 |               1680 |     709  |        0.943 |
+| 790322 |  778 |       9675 |       1284 |               1196 |     721  |        0.976 |
+
+`n_GT_kept` is the number of GT pairs whose HCR partner survives the full
+filter (strict-GFP+ ∩ ROI-quality ≥ 0.5 ∩ bbox).  755252 takes the biggest
+hit (57 % survival) — strict cutoff drops 30 % of GT cells on this subject
+(coreg_coverage_strict = 0.701).
+
+## Descriptors
+
+| name        | dim | params |
+|-------------|----:|--------|
+| FPFH        |  33 | radius = 120 µm, max_nn = 30 (Open3D) |
+| PPF         |  20 | radius = 120 µm, 4 features × 5 bins (marginal histograms; Drost 2010) |
+| kNN-dist    |  16 | k = 12, hist on [0, 200] µm (rotation/translation invariant) |
+| centroid_LP |   3 | LP-warm-started CZ → HCR Euclidean distance |
+| centroid_GT_TPS |   3 | sanity floor — degenerate ≈0 for GT pairs |
+
+## Results
+
+### AUC vs hard near-miss (R = 50 µm)
+
+| sid    | FPFH | PPF  | kNN-dist | centroid_LP | centroid_GT_TPS |
+|--------|-----:|-----:|---------:|------------:|----------------:|
+| 755252 | 0.619 | 0.662 | 0.653 | 0.583 | 1.000 |
+| 767018 | 0.662 | 0.722 | 0.688 | 0.617 | 1.000 |
+| 767022 | 0.677 | 0.736 | 0.680 | 0.667 | 1.000 |
+| 782149 | 0.576 | 0.701 | 0.705 | 0.563 | 1.000 |
+| 788406 | 0.689 | 0.795 | 0.752 | 0.604 | 1.000 |
+| 790322 | 0.748 | 0.814 | 0.787 | 0.754 | 1.000 |
+| **mean** | **0.662** | **0.738** | **0.711** | **0.631** | **1.000** |
+
+PPF leads the descriptor family on AUC; FPFH is consistently weakest.
+None tops the 0.85 bar on any subject.  R = 30 µm and R = 100 µm tables
+(in `fpfh_feasibility_results.csv`) show the same ranking.
+
+### recall@K (rank of true HCR partner among full filtered pool)
+
+`recall@5`:
+
+| sid    | FPFH | PPF  | kNN-dist | centroid_LP |
+|--------|-----:|-----:|---------:|------------:|
+| 755252 | 0.072 | 0.066 | 0.019 | **0.678** |
+| 767018 | 0.197 | 0.162 | 0.110 | **0.860** |
+| 767022 | 0.129 | 0.115 | 0.036 | **0.913** |
+| 782149 | 0.092 | 0.206 | 0.143 | **0.689** |
+| 788406 | 0.120 | 0.275 | 0.126 | **0.633** |
+| 790322 | 0.521 | 0.368 | 0.259 | **0.994** |
+| **mean** | **0.189** | **0.199** | **0.115** | **0.795** |
+
+`recall@20`:
+
+| sid    | FPFH | PPF  | kNN-dist | centroid_LP |
+|--------|-----:|-----:|---------:|------------:|
+| 755252 | 0.146 | 0.138 | 0.069 | 0.970 |
+| 767018 | 0.346 | 0.329 | 0.263 | 1.000 |
+| 767022 | 0.249 | 0.187 | 0.075 | 0.933 |
+| 782149 | 0.282 | 0.424 | 0.277 | 1.000 |
+| 788406 | 0.289 | 0.447 | 0.254 | 0.894 |
+| 790322 | 0.696 | 0.558 | 0.406 | 1.000 |
+
+`centroid_LP` dominates recall@K by a wide margin on every subject.
+
+## Verdict
+
+**FPFH+RANSAC promotion is not earned.**
+
+* No descriptor clears AUC ≥ 0.85 on any subject; mean AUC@R=50µm tops out
+  at 0.738 (PPF).
+* `centroid_LP` *recall@K* dominates every feature descriptor — the LP
+  warm-start already places the true partner inside the top 5 candidates
+  on average **80 %** of the time, top 20 on **95 %** of GT pairs.  The
+  feature descriptors fail to localise the true partner because cell
+  geometry alone (with smooth pia normals) is insufficiently distinctive
+  in 3D centroid clouds at this density.
+* The AUC-vs-recall split is informative: PPF's higher AUC says it
+  separates *true partner* from *near-miss within 50 µm* slightly better
+  than chance; but the descriptor distance is dominated by far-away
+  HCR cells that happen to share local geometry, so global ranking
+  collapses.  This is a known FPFH/PPF failure mode for sparse irregular
+  point clouds — they were designed for dense surface scans.
+* On 790322 (the cleanest LP, frac<20µm = 0.144), FPFH catches up
+  somewhat (recall@5 = 0.52) but `centroid_LP` already gets recall@5 =
+  0.99 — there is nothing left to improve.
+
+§4.1 stop rule applied: P15 = FPFH+RANSAC stays deferred / closed.
+The pose-only matcher family (Hungarian, TEASER, FPFH+RANSAC) is
+**closed** — none of its members tie the v2 gated ensemble's 2.95.
+The lift identified in S10 (crop + LP narrows the candidate set so
+`centroid_LP` recall@5 ≈ 0.8) is the right hand-off into §4.2/4.3
+(per-pair classifier on the top-K shortlist) and §4.5 (TPS expansion
+seeded by anchor pairs from the classifier), where the *classifier* —
+not the descriptor — supplies the tie-breaking signal.
+
+## Concerns / caveats
+
+* **Strict-GFP+ on 755252** keeps only 70 % of GT cells (coreg_coverage =
+  0.701).  This subject's diagnostic is noisier than the others — re-run
+  with v2.2 looser threshold would add ~30 % more GT pairs but the AUC
+  pattern is unlikely to change.
+* **Pia-projected normals** carry only mean cortical-curvature direction;
+  they do not reflect per-cell shape.  This was a deliberate choice (the
+  user asked for HCR-surface normals over PCA-of-neighbours).  PCA-normal
+  FPFH would be a different, possibly stronger descriptor — but PCA
+  normals on sparse centroid clouds are notoriously noisy, so they were
+  not tested here.
+* The 4-feature PPF marginal-histogram form is a simplification of the
+  full Drost descriptor (4D joint histogram, ~625 bins).  A larger PPF
+  with joint binning could marginally improve AUC but the recall@K gap
+  vs `centroid_LP` is large (~0.6) — joint PPF would not close it.
+
+## Hand-off
+
+* `centroid_LP` recall@5 ≈ 0.6–0.99 is the actionable result: the
+  **top-5 LP-distance shortlist contains the true partner most of the
+  time**.  This is the natural input to §4.2/4.3 per-pair classifier:
+  for each CZ cell, score the top-K HCR candidates and let the
+  classifier pick.
+* §4.5 TPS expansion seeded from anchor pairs is the natural next step
+  for the deeper-LP-residual subjects (755252, 782149) where even the
+  shortlist is incomplete.
+
+## Files
+
+| file | purpose |
+|------|---------|
+| `run_fpfh_feasibility.py`        | driver — GT-TPS + LP + strict-GFP+ + ROI-quality + 4 descriptors |
+| `fpfh_feasibility_results.csv`   | per (subject, descriptor) AUC + recall@K + n |
+| `subject_summary.csv`            | per-subject filter accounting |
+| `run_log.txt`                    | full stdout from `main()` |
+| `log.md`                         | this log |

@@ -48,7 +48,9 @@ import pandas as pd
 import tifffile
 
 _ROOT = Path("/root/capsule")
-_SESSION = _ROOT / "code" / "sessions" / "03c_onset_features" / "iterations"
+# The 03c session was archived to data/claude_data/ on 2026-04-28; the old
+# code/sessions/ path no longer exists.
+_SESSION = _ROOT / "data" / "claude_data" / "sessions" / "03c_onset_features" / "iterations"
 if str(_SESSION) not in sys.path:
     sys.path.insert(0, str(_SESSION))
 

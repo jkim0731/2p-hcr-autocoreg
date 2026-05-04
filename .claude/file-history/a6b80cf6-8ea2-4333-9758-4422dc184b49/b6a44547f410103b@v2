@@ -1,0 +1,492 @@
+"""v3-S10 constrained revival of v1 candidates (Grand Plan v3 §4.1).
+
+Operating constraints (per user, 2026-04-30):
+  * Locked frame from Stage A + Stage B = LP with sz_init = sz_peak (iter-7).
+    Pins (R, sxy, sz, t_x, t_y) and the t_z anchor.
+  * HCR centroids restricted to the overlap volume defined by the
+    warped-CZ bbox in HCR µm (zyx) plus a small expand_um margin.
+  * "Valid" HCR ROIs only — Stage-2 binary classifier predicts
+    {good, bad_ok}=1 vs {bad, merged}=0; cells with score >= τ are kept.
+    Threshold τ = 0.5 (acc@0.5 = 0.846, mean AUC 0.895 per S11 Step 5).
+
+Candidates run in this session:
+  * P14 — Hungarian baseline on Euclidean distance (cheapest sanity floor).
+  * P1  — TEASER++ / GNC-TLS at small K with crop-local features.
+
+The matchers are reimplemented as standalone functions that take filtered
+(cz_warmed, hcr_kept) point clouds (and HCR feature blocks for P1), so the
+v1 candidate machinery (`run_candidate`) is bypassed; that machinery
+operates on full HCR and there is no clean hook to swap in a filtered set.
+
+Output: per-subject CSV with n_kept HCR cells, r@5/10/20/30, median error.
+"""
+from __future__ import annotations
+
+import argparse
+import sys
+import time
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+from scipy.optimize import linear_sum_assignment
+from scipy.spatial.distance import cdist
+from scipy.interpolate import Rbf
+
+_V1 = "/root/capsule/data/claude_data/full_automatic_execution_01"
+_V2_LIB = "/root/capsule/data/claude_data/full_automatic_execution_02/lib"
+_DEV = "/root/capsule/code/dev_code"
+_ITER = "/root/capsule/data/claude_data/sessions/03c_onset_features/iterations"
+_SURF8 = "/root/capsule/data/claude_data/sessions/08_surface_vascular_match"
+for _p in (_V2_LIB, _V1, _DEV, _ITER, _SURF8):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
+import bench_harness_patch  # noqa: E402
+
+bench_harness_patch.patch()
+
+from benchmark_data_loader import BENCHMARK_SUBJECTS, load_subject  # noqa: E402
+from locked_prior_warm import (  # noqa: E402
+    apply_to_cz_um,
+    compute_locked_prior_warm_start,
+)
+from lib.centroid_helpers import centroids_um  # noqa: E402
+from lib.cell_features import (  # noqa: E402
+    extract_cell_features,
+    invariant_feature_mask,
+)
+from bench.harness import compare_to_gt  # noqa: E402
+from benchmark_analysis import fit_anisotropic_similarity  # noqa: E402
+from lib.centroid_helpers import apply_aniso_fit  # noqa: E402
+
+# Stage-A + Stage-B sz pin (iter-7 image NCC sweep, 6/6 within ±0.30 of GT)
+SZ_TABLE = Path(
+    "/root/capsule/data/claude_data/full_automatic_execution_02/sessions/"
+    "v2_S02_sz_image_sweep/results_iter7_summary.csv"
+)
+ROI_QUALITY_DIR = Path("/root/capsule/code/dev_code/cached_roi_quality")
+OUT_DIR = Path("/root/capsule/code/sessions/v3_S10_revival_pass")
+OUT_DIR.mkdir(parents=True, exist_ok=True)
+
+ROI_THR_DEFAULT = 0.5  # binary classifier acc@0.5 = 0.846 (good+bad_ok positive)
+EXPAND_UM_DEFAULT = 30.0  # margin around warped-CZ bbox in HCR µm
+ACCEPT_RADIUS_DEFAULT = 50.0
+
+
+# --------------------------------------------------------------------------- #
+# helpers
+# --------------------------------------------------------------------------- #
+def load_sz_pins() -> dict[str, float]:
+    df = pd.read_csv(SZ_TABLE)
+    df["subject_id"] = df["subject_id"].astype(str)
+    return dict(zip(df["subject_id"], df["sz_peak"].astype(float)))
+
+
+def load_roi_quality(sid: str) -> pd.Series:
+    """Per-HCR-id binary roi-quality score (Stage-2 v5d).
+
+    Index: hcr_id (int).  Value: P({good, bad_ok}) ∈ [0, 1].
+    """
+    p = ROI_QUALITY_DIR / f"{sid}_stage2_binary_score_v5d.parquet"
+    df = pd.read_parquet(p)
+    df["hcr_id"] = df["hcr_id"].astype(int)
+    return df.set_index("hcr_id")["score"]
+
+
+def overlap_filter(
+    cz_warm_zyx: np.ndarray,
+    hcr_zyx: np.ndarray,
+    hcr_ids: np.ndarray,
+    *,
+    expand_um: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Keep HCR cells inside the (warped-CZ bbox + expand_um) volume."""
+    lo = cz_warm_zyx.min(axis=0) - expand_um
+    hi = cz_warm_zyx.max(axis=0) + expand_um
+    in_bbox = ((hcr_zyx >= lo) & (hcr_zyx <= hi)).all(axis=1)
+    return in_bbox, lo, hi
+
+
+def quality_filter(
+    hcr_ids: np.ndarray, roi_q: pd.Series, *, thr: float
+) -> np.ndarray:
+    """Per-HCR-id mask: True iff stage-2 binary score >= thr.
+
+    Cells missing from `roi_q` (rare; v3_S11 reports ~7-9 % not_found_in_seg)
+    are treated as low-quality and rejected.
+    """
+    scores = roi_q.reindex(hcr_ids.astype(int)).to_numpy(dtype=float)
+    scores = np.where(np.isnan(scores), 0.0, scores)
+    return scores >= thr
+
+
+# --------------------------------------------------------------------------- #
+# constrained P14 — Hungarian on Euclidean distance only
+# --------------------------------------------------------------------------- #
+def constrained_p14(
+    cz_warm_zyx: np.ndarray,
+    cz_ids: np.ndarray,
+    cz_um_zyx: np.ndarray,
+    hcr_kept_zyx: np.ndarray,
+    hcr_kept_ids: np.ndarray,
+    *,
+    accept_radius_um: float,
+) -> tuple[pd.DataFrame, dict]:
+    Nc, Nh = len(cz_warm_zyx), len(hcr_kept_zyx)
+    diag = dict(n_cz=int(Nc), n_hcr_kept=int(Nh))
+    if Nc == 0 or Nh == 0:
+        return pd.DataFrame(), diag
+    D = cdist(cz_warm_zyx, hcr_kept_zyx)
+    row_ind, col_ind = linear_sum_assignment(D)
+    rows = []
+    for i, j in zip(row_ind, col_ind):
+        d = float(D[i, j])
+        if d > accept_radius_um:
+            continue
+        rows.append(dict(
+            cz_id=int(cz_ids[i]), hcr_id=int(hcr_kept_ids[j]),
+            confidence=float(1.0 / (1.0 + np.exp((d - 30.0) / 10.0))),
+            cz_x_um=float(cz_um_zyx[i, 2]),
+            cz_y_um=float(cz_um_zyx[i, 1]),
+            cz_z_um=float(cz_um_zyx[i, 0]),
+            hcr_x_um=float(hcr_kept_zyx[j, 2]),
+            hcr_y_um=float(hcr_kept_zyx[j, 1]),
+            hcr_z_um=float(hcr_kept_zyx[j, 0]),
+        ))
+    df = pd.DataFrame(rows)
+    if len(df):
+        df = df.sort_values("confidence", ascending=False)
+        df = df.drop_duplicates("hcr_id", keep="first")
+        df = df.sort_values("cz_id").reset_index(drop=True)
+    diag["n_pairs"] = int(len(df))
+    return df, diag
+
+
+# --------------------------------------------------------------------------- #
+# constrained P1 — TEASER++ / GNC-TLS at small K with crop-local features
+# --------------------------------------------------------------------------- #
+def _seed_putative(cz_um, hcr_um, Fcn, Fgn, K=5):
+    D = cdist(cz_um, hcr_um)
+    cosS = Fcn @ Fgn.T
+    score = D - 25.0 * cosS
+    order = np.argsort(score, axis=1)[:, : min(K, hcr_um.shape[0])]
+    return order, D, cosS
+
+
+def _gnc_tls(A, B, c_bar=15.0, mu=1.4, n_iter=50):
+    N = len(A)
+    if N < 4:
+        return None, np.zeros(N), np.zeros(N, bool)
+    w = np.ones(N)
+    mu_t = 1e-4
+    fit = None
+    for _ in range(n_iter):
+        if w.sum() < 4:
+            break
+        sel = w > 1e-3
+        try:
+            fit = fit_anisotropic_similarity(A[sel], B[sel])
+        except Exception:
+            break
+        B_pred = apply_aniso_fit(A, fit)
+        r2 = np.sum((B_pred - B) ** 2, axis=1)
+        c_bar2 = c_bar ** 2
+        w_new = (mu_t * c_bar2 / (r2 + mu_t * c_bar2)) ** 2
+        if np.allclose(w_new, w, atol=1e-4):
+            w = w_new
+            break
+        w = w_new
+        mu_t = min(1.0, mu_t * mu)
+    if fit is None:
+        return None, np.zeros(N), np.zeros(N, bool)
+    B_pred = apply_aniso_fit(A, fit)
+    r = np.linalg.norm(B_pred - B, axis=1)
+    inliers = r < c_bar
+    return fit, w, inliers
+
+
+def constrained_p1(
+    s,
+    cz_warm_zyx: np.ndarray,
+    cz_ids: np.ndarray,
+    cz_um_zyx: np.ndarray,
+    hcr_kept_zyx: np.ndarray,
+    hcr_kept_ids: np.ndarray,
+    *,
+    K: int = 5,
+    c_bar: float = 15.0,
+) -> tuple[pd.DataFrame, dict]:
+    """Per Grand Plan v3 §4.1: P1 at K=5 with crop-local HCR features."""
+    Nc, Nh = len(cz_warm_zyx), len(hcr_kept_zyx)
+    diag = dict(n_cz=int(Nc), n_hcr_kept=int(Nh), K=int(K), c_bar=float(c_bar))
+    if Nc == 0 or Nh < 4:
+        return pd.DataFrame(), diag
+
+    Fc, names, _ = extract_cell_features(s, "cz")
+    Fg_full, _, _ = extract_cell_features(s, "hcr_gfp")
+    inv = invariant_feature_mask(names)
+    keep_cols = inv & ~np.isnan(Fc).any(0) & ~np.isnan(Fg_full).any(0)
+
+    # Match HCR features to the kept-id ordering (centroids_um("hcr_gfp") and
+    # extract_cell_features(s,"hcr_gfp") return rows in the same order).
+    _, hcr_gfp_ids = centroids_um(s, "hcr_gfp")
+    pos = pd.Series(np.arange(len(hcr_gfp_ids)), index=hcr_gfp_ids.astype(int))
+    Fg = Fg_full[pos.reindex(hcr_kept_ids.astype(int)).to_numpy(int), :]
+
+    Fc_k = Fc[:, keep_cols]
+    Fg_k = Fg[:, keep_cols]
+    mu = np.nanmean(Fg_k, 0)
+    sd = np.nanstd(Fg_k, 0) + 1e-6
+    Fcn = (Fc_k - mu) / sd
+    Fgn = (Fg_k - mu) / sd
+    Fcn = Fcn / (np.linalg.norm(Fcn, axis=1, keepdims=True) + 1e-9)
+    Fgn = Fgn / (np.linalg.norm(Fgn, axis=1, keepdims=True) + 1e-9)
+
+    order, D, cosS = _seed_putative(cz_warm_zyx, hcr_kept_zyx, Fcn, Fgn, K=K)
+    pair_cz, pair_hcr = [], []
+    for i in range(Nc):
+        for j in order[i]:
+            pair_cz.append(i)
+            pair_hcr.append(int(j))
+    A = cz_warm_zyx[pair_cz]
+    B = hcr_kept_zyx[pair_hcr]
+
+    fit, w, inliers = _gnc_tls(A, B, c_bar=c_bar)
+    if fit is None:
+        diag["error"] = "gnc_tls_failed"
+        return pd.DataFrame(), diag
+
+    B_pred = apply_aniso_fit(cz_warm_zyx, fit)
+    inl_A = A[inliers]
+    inl_B = B[inliers]
+    if len(inl_A) >= 8:
+        try:
+            deltas = np.zeros_like(B_pred)
+            src = apply_aniso_fit(inl_A, fit)
+            dst = inl_B - src
+            for axis in range(3):
+                rbf = Rbf(
+                    src[:, 0], src[:, 1], src[:, 2], dst[:, axis],
+                    function="thin_plate", smooth=1.0,
+                )
+                deltas[:, axis] = rbf(B_pred[:, 0], B_pred[:, 1], B_pred[:, 2])
+            B_pred_tps = B_pred + deltas
+        except Exception:
+            B_pred_tps = B_pred
+    else:
+        B_pred_tps = B_pred
+
+    rows = []
+    for i in range(Nc):
+        js = order[i]
+        d = np.linalg.norm(B_pred_tps[i][None] - hcr_kept_zyx[js], axis=1)
+        k = int(np.argmin(d))
+        j = int(js[k])
+        r = float(d[k])
+        cos = float(cosS[i, j])
+        cert = r < c_bar
+        conf = (1.0 / (1.0 + np.exp((r - c_bar * 0.66) / (c_bar * 0.33)))) * (
+            0.5 + 0.5 * cos
+        )
+        rows.append(dict(
+            cz_id=int(cz_ids[i]), hcr_id=int(hcr_kept_ids[j]),
+            confidence=float(conf),
+            residual_um=r, cos_sim=cos, certified=bool(cert),
+            cz_x_um=float(cz_um_zyx[i, 2]),
+            cz_y_um=float(cz_um_zyx[i, 1]),
+            cz_z_um=float(cz_um_zyx[i, 0]),
+            hcr_x_um=float(hcr_kept_zyx[j, 2]),
+            hcr_y_um=float(hcr_kept_zyx[j, 1]),
+            hcr_z_um=float(hcr_kept_zyx[j, 0]),
+        ))
+    df = pd.DataFrame(rows)
+    if len(df):
+        df = df.sort_values("confidence", ascending=False)
+        df = df.drop_duplicates("hcr_id", keep="first")
+        df = df.sort_values("cz_id").reset_index(drop=True)
+    diag.update(
+        n_inliers=int(inliers.sum()),
+        n_putative=int(len(A)),
+        n_pairs=int(len(df)),
+    )
+    return df, diag
+
+
+# --------------------------------------------------------------------------- #
+# driver
+# --------------------------------------------------------------------------- #
+def run_one_subject(
+    sid: str,
+    sz_pin: float,
+    *,
+    expand_um: float,
+    roi_thr: float,
+    accept_radius: float,
+    methods: list[str],
+) -> dict:
+    s = load_subject(sid)
+    print(f"\n=== {sid}  sz_pin={sz_pin:.3f} ===", flush=True)
+
+    t0 = time.time()
+    lp = compute_locked_prior_warm_start(s, sz_init=sz_pin)
+    cz_um, cz_ids = centroids_um(s, "cz")
+    hcr_gfp_um, hcr_gfp_ids = centroids_um(s, "hcr_gfp")
+    cz_warm = apply_to_cz_um(lp, cz_um)
+    t_lp = time.time() - t0
+
+    in_bbox, lo, hi = overlap_filter(cz_warm, hcr_gfp_um, hcr_gfp_ids,
+                                     expand_um=expand_um)
+    roi_q = load_roi_quality(sid)
+    valid = quality_filter(hcr_gfp_ids, roi_q, thr=roi_thr)
+    keep = in_bbox & valid
+
+    print(
+        f"  LP sxy={lp.sxy_value:.3f} sz={lp.scales[0]:.3f} "
+        f"t=(z={lp.translation[0]:+.0f}, y={lp.translation[1]:+.0f}, "
+        f"x={lp.translation[2]:+.0f})  pwr_ncc={lp.pwr_ncc:.3f}",
+        flush=True,
+    )
+    print(
+        f"  HCR_gfp+ N={len(hcr_gfp_ids):d}  in_bbox={int(in_bbox.sum()):d}  "
+        f"valid_roi={int(valid.sum()):d}  kept={int(keep.sum()):d}  "
+        f"({100.0 * keep.sum() / max(1, len(hcr_gfp_ids)):.1f} %)",
+        flush=True,
+    )
+
+    hcr_kept_um = hcr_gfp_um[keep]
+    hcr_kept_ids = hcr_gfp_ids[keep]
+
+    base_row = dict(
+        subject_id=sid,
+        sz_pin=float(sz_pin),
+        n_cz=int(len(cz_ids)),
+        n_hcr_gfp=int(len(hcr_gfp_ids)),
+        n_in_bbox=int(in_bbox.sum()),
+        n_valid_roi=int(valid.sum()),
+        n_kept=int(keep.sum()),
+        roi_thr=float(roi_thr),
+        expand_um=float(expand_um),
+        accept_radius_um=float(accept_radius),
+        lp_pwr_ncc=float(lp.pwr_ncc),
+        lp_sxy=float(lp.sxy_value),
+        lp_sz=float(lp.scales[0]),
+        runtime_lp_s=round(t_lp, 1),
+    )
+
+    rows = []
+    for mid in methods:
+        t0 = time.time()
+        try:
+            if mid == "P14":
+                pairs_df, diag = constrained_p14(
+                    cz_warm, cz_ids, cz_um,
+                    hcr_kept_um, hcr_kept_ids,
+                    accept_radius_um=accept_radius,
+                )
+            elif mid == "P14_full":
+                # Reference: same as P14 but no quality filter (overlap only).
+                keep2 = in_bbox
+                pairs_df, diag = constrained_p14(
+                    cz_warm, cz_ids, cz_um,
+                    hcr_gfp_um[keep2], hcr_gfp_ids[keep2],
+                    accept_radius_um=accept_radius,
+                )
+            elif mid == "P1":
+                pairs_df, diag = constrained_p1(
+                    s, cz_warm, cz_ids, cz_um,
+                    hcr_kept_um, hcr_kept_ids,
+                    K=5, c_bar=15.0,
+                )
+            else:
+                raise ValueError(f"unknown method {mid}")
+            scores = compare_to_gt(pairs_df, s)
+        except Exception as e:
+            print(f"  {mid:8s} FAILED: {type(e).__name__}: {e}", flush=True)
+            scores = {}
+            diag = {"error": f"{type(e).__name__}: {e}"}
+            pairs_df = pd.DataFrame()
+        dt = time.time() - t0
+        row = {
+            **base_row,
+            "method": mid,
+            "n_pred": int(len(pairs_df)),
+            "recall_at_5um": float(scores.get("recall_at_5um", 0.0)),
+            "recall_at_10um": float(scores.get("recall_at_10um", 0.0)),
+            "recall_at_20um": float(scores.get("recall_at_20um", 0.0)),
+            "recall_at_30um": float(scores.get("recall_at_30um", 0.0)),
+            "median_error_um": float(scores.get("median_error_um", float("nan"))),
+            "n_gt": int(scores.get("n_gt", 0)),
+            "runtime_method_s": round(dt, 1),
+        }
+        rows.append(row)
+        print(
+            f"  {mid:8s}: n_pred={row['n_pred']:4d}  "
+            f"r@10={row['recall_at_10um']:.3f}  "
+            f"r@20={row['recall_at_20um']:.3f}  "
+            f"r@30={row['recall_at_30um']:.3f}  "
+            f"med={row['median_error_um']:.1f}µm  ({dt:.1f}s)",
+            flush=True,
+        )
+        # Save pairs for the chosen run (small CSVs)
+        if len(pairs_df):
+            pairs_df.to_csv(
+                OUT_DIR / f"pairs_{sid}_{mid}.csv", index=False
+            )
+    return rows
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--subjects", nargs="*", default=None)
+    parser.add_argument("--methods", nargs="+",
+                        default=["P14_full", "P14", "P1"])
+    parser.add_argument("--roi-thr", type=float, default=ROI_THR_DEFAULT)
+    parser.add_argument("--expand-um", type=float, default=EXPAND_UM_DEFAULT)
+    parser.add_argument("--accept-radius", type=float,
+                        default=ACCEPT_RADIUS_DEFAULT)
+    args = parser.parse_args()
+
+    sz_pins = load_sz_pins()
+    sids = args.subjects or list(BENCHMARK_SUBJECTS)
+
+    print(f"sz pins (iter-7): {sz_pins}", flush=True)
+    print(
+        f"config: roi_thr={args.roi_thr} expand_um={args.expand_um} "
+        f"accept_radius={args.accept_radius} methods={args.methods}",
+        flush=True,
+    )
+
+    all_rows = []
+    for sid in sids:
+        if sid not in sz_pins:
+            print(f"!! no sz_pin for {sid}; skipping", flush=True)
+            continue
+        rows = run_one_subject(
+            sid, sz_pins[sid],
+            expand_um=args.expand_um,
+            roi_thr=args.roi_thr,
+            accept_radius=args.accept_radius,
+            methods=args.methods,
+        )
+        all_rows.extend(rows)
+
+    df = pd.DataFrame(all_rows)
+    out = OUT_DIR / "constrained_revival_results.csv"
+    df.to_csv(out, index=False)
+
+    print(f"\nSaved {len(df):d} rows -> {out}")
+    print("\n=== summary (r@20) ===")
+    pivot = df.pivot(index="subject_id", columns="method",
+                     values="recall_at_20um")
+    print(pivot.round(3).to_string())
+    print(f"\nsum r@20: {pivot.sum().round(3).to_dict()}")
+    print("\n=== summary (r@30) ===")
+    pivot30 = df.pivot(index="subject_id", columns="method",
+                       values="recall_at_30um")
+    print(pivot30.round(3).to_string())
+    print(f"\nsum r@30: {pivot30.sum().round(3).to_dict()}")
+
+
+if __name__ == "__main__":
+    main()

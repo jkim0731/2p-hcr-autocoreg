@@ -1,0 +1,9 @@
+{
+  "id": "10",
+  "subject": "Build S12 step-by-step notebook",
+  "description": "Write fpfh_walkthrough.ipynb that loads one subject, walks through filters → GT-TPS warp → pia normals → one example cell descriptor → ranks → aggregate AUC/recall plots → match vs near-miss distance histograms. Execute to populate outputs.",
+  "activeForm": "Building S12 step-by-step notebook",
+  "status": "in_progress",
+  "blocks": [],
+  "blockedBy": []
+}

@@ -1,0 +1,233 @@
+"""S11 / Step 2 — dump per-cell padded mask crops to a parquet cache, so
+future feature extraction (v4 onwards) skips the slow seg zarr label decode.
+
+For every owned cell in the z-strip pass, store its padded tight crop:
+  - raw mask (bool): cell-only segmentation (`seg == hid`)
+
+c405 is NOT cached — it's small per-strip and easily re-read from zarr.
+The expensive part of v3 was the seg-block read + per-cell label selection,
+which this cache eliminates.
+
+Output: /root/capsule/code/dev_code/cached_per_cell_crops/{sid}_per_cell_crops.parquet
+  One row per cell. Columns:
+    hcr_id            int64
+    z0_lvl2, y0_lvl2, x0_lvl2  int32 — global lvl2-voxel coords of crop origin
+    dz, dy, dx        int32  — *padded* crop shape (along z, y, x)
+    pad               int32  — voxel padding on each side (default 4)
+    mask_packed       binary — np.packbits(flat_bool).tobytes()
+
+Per-subject multiprocessing via spawn-Pool (one worker per subject).
+"""
+from __future__ import annotations
+
+import argparse
+import sys
+import time
+from multiprocessing import get_context
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
+import zarr
+
+ROOT = Path("/root/capsule")
+DEV = ROOT / "code/dev_code"
+SESS = ROOT / "code/sessions/v3_S11_roi_quality"
+OUT_DIR = Path("/root/capsule/code/dev_code/cached_per_cell_crops")
+OUT_DIR.mkdir(parents=True, exist_ok=True)
+
+sys.path.insert(0, str(DEV))
+
+SUBJECTS = ["755252", "767018", "767022", "782149", "788406", "790322"]
+TIGHT_BBOX = DEV / "cached_hcr_cell_tight_bbox"
+
+# Match the strip-pass shape of v3:
+STRIP_Z = 128
+Z_PAD = 24            # half-context for morphology — ≥ max half-z-extent + r
+PAD_VOX = 4           # padding around tight bbox written into the cache
+                      # (covers OPENING_RADIUS=3 + 1; enough for any future
+                      # morphology with r ≤ 3 voxels at lvl2)
+
+
+def _arrow_schema() -> pa.Schema:
+    return pa.schema([
+        ("hcr_id", pa.int64()),
+        ("z0_lvl2", pa.int32()),
+        ("y0_lvl2", pa.int32()),
+        ("x0_lvl2", pa.int32()),
+        ("dz", pa.int32()),
+        ("dy", pa.int32()),
+        ("dx", pa.int32()),
+        ("pad", pa.int32()),
+        ("mask_packed", pa.binary()),
+    ])
+
+
+def _dump_subject(sid: str) -> dict:
+    from benchmark_data_loader import load_subject  # noqa: PLC0415
+
+    out_path = OUT_DIR / f"{sid}_per_cell_crops.parquet"
+    if out_path.exists():
+        return {"sid": sid, "skipped": "exists", "path": str(out_path)}
+
+    s = load_subject(sid)
+    seg = zarr.open(
+        str(s.hcr_dir / "cell_body_segmentation/segmentation_mask_orig_res.zarr"),
+        mode="r",
+    )
+    _, _, Z_seg, Y_seg, X_seg = seg.shape
+
+    cent = s.hcr_centroids.set_index("hcr_id")
+    all_hids = s.hcr_centroids["hcr_id"].astype(int).tolist()
+    cent_z: dict[int, int] = {}
+    for hid in all_hids:
+        if hid in cent.index:
+            cent_z[hid] = int(round(float(cent.loc[hid]["z_px"])))
+    if not s.hcr_centroids.empty:
+        z_lo_global = max(0, int(s.hcr_centroids["z_px"].min()) - 2)
+        z_hi_global = min(Z_seg, int(s.hcr_centroids["z_px"].max()) + 2)
+    else:
+        z_lo_global, z_hi_global = 0, Z_seg
+
+    tb_path = TIGHT_BBOX / f"{sid}_hcr_cell_tight_bbox_v1.parquet"
+    if not tb_path.exists():
+        return {"sid": sid, "error": f"missing tight bbox cache: {tb_path}"}
+    tb_df = pd.read_parquet(tb_path)
+    tb_lookup = {
+        int(r.hcr_id): (
+            int(r.zmin_vox), int(r.zmax_vox),
+            int(r.ymin_vox), int(r.ymax_vox),
+            int(r.xmin_vox), int(r.xmax_vox),
+        )
+        for r in tb_df.itertuples(index=False)
+    }
+
+    cells_per_strip: dict[int, list[int]] = {}
+    for hid in all_hids:
+        cz = cent_z.get(hid)
+        if cz is None or not (z_lo_global <= cz < z_hi_global):
+            continue
+        bucket = z_lo_global + ((cz - z_lo_global) // STRIP_Z) * STRIP_Z
+        cells_per_strip.setdefault(bucket, []).append(int(hid))
+
+    writer = pq.ParquetWriter(
+        str(out_path), _arrow_schema(),
+        compression="snappy", use_dictionary=False,
+    )
+    n_owned = 0
+    n_missing = 0
+    rows_buffered: list[dict] = []
+    BATCH_SIZE = 5000
+    t0 = time.time()
+    z_strips = sorted(cells_per_strip.keys())
+
+    def _flush() -> None:
+        if not rows_buffered:
+            return
+        tbl = pa.Table.from_pylist(rows_buffered, schema=_arrow_schema())
+        writer.write_table(tbl)
+        rows_buffered.clear()
+
+    for s_idx, z0_inner in enumerate(z_strips):
+        z1_inner = min(z0_inner + STRIP_Z, z_hi_global)
+        z0_load = max(0, z0_inner - Z_PAD)
+        z1_load = min(Z_seg, z1_inner + Z_PAD)
+
+        owned = cells_per_strip[z0_inner]
+        own_bbs = [tb_lookup.get(h) for h in owned if h in tb_lookup]
+        if not own_bbs:
+            continue
+        y_min = min(b[2] for b in own_bbs); y_max = max(b[3] for b in own_bbs)
+        x_min = min(b[4] for b in own_bbs); x_max = max(b[5] for b in own_bbs)
+        sub_y0 = max(0, y_min - PAD_VOX)
+        sub_y1 = min(Y_seg, y_max + PAD_VOX)
+        sub_x0 = max(0, x_min - PAD_VOX)
+        sub_x1 = min(X_seg, x_max + PAD_VOX)
+
+        seg_block = np.asarray(
+            seg[0, 0, z0_load:z1_load, sub_y0:sub_y1, sub_x0:sub_x1]
+        )
+
+        for hid in owned:
+            tb = tb_lookup.get(hid)
+            if tb is None:
+                continue
+            zmin, zmax_ex, ymin, ymax_ex, xmin, xmax_ex = tb
+            n_owned += 1
+            psz0_g = max(0, zmin - PAD_VOX); psz1_g = min(Z_seg, zmax_ex + PAD_VOX)
+            psy0_g = max(0, ymin - PAD_VOX); psy1_g = min(Y_seg, ymax_ex + PAD_VOX)
+            psx0_g = max(0, xmin - PAD_VOX); psx1_g = min(X_seg, xmax_ex + PAD_VOX)
+            bz0 = psz0_g - z0_load; bz1 = psz1_g - z0_load
+            by0 = psy0_g - sub_y0; by1 = psy1_g - sub_y0
+            bx0 = psx0_g - sub_x0; bx1 = psx1_g - sub_x0
+            if (bz0 < 0 or bz1 > seg_block.shape[0]
+                    or by0 < 0 or by1 > seg_block.shape[1]
+                    or bx0 < 0 or bx1 > seg_block.shape[2]):
+                n_missing += 1
+                continue
+            seg_crop = seg_block[bz0:bz1, by0:by1, bx0:bx1]
+            mask_crop = (seg_crop == hid)
+            if not mask_crop.any():
+                n_missing += 1
+                continue
+
+            mask_bytes = np.packbits(mask_crop.reshape(-1)).tobytes()
+            rows_buffered.append({
+                "hcr_id": int(hid),
+                "z0_lvl2": int(psz0_g),
+                "y0_lvl2": int(psy0_g),
+                "x0_lvl2": int(psx0_g),
+                "dz": int(mask_crop.shape[0]),
+                "dy": int(mask_crop.shape[1]),
+                "dx": int(mask_crop.shape[2]),
+                "pad": int(PAD_VOX),
+                "mask_packed": mask_bytes,
+            })
+            if len(rows_buffered) >= BATCH_SIZE:
+                _flush()
+
+        if (s_idx + 1) % 1 == 0:
+            elapsed = time.time() - t0
+            print(f"  [{sid}] strip {s_idx+1}/{len(z_strips)}  "
+                  f"owned={n_owned}  missing={n_missing}  "
+                  f"elapsed={elapsed:.0f}s", flush=True)
+
+    _flush()
+    writer.close()
+    elapsed = time.time() - t0
+    sz = out_path.stat().st_size if out_path.exists() else 0
+    print(f"[{sid}] DONE: {n_owned} cells dumped, {n_missing} missing, "
+          f"{elapsed:.0f}s, {sz/1e9:.2f} GB", flush=True)
+    return {
+        "sid": sid,
+        "n_owned": n_owned,
+        "n_missing": n_missing,
+        "elapsed_s": float(elapsed),
+        "path": str(out_path),
+        "size_bytes": int(sz),
+    }
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--subjects", nargs="+", default=None,
+                    help="Subset of subjects (default: all 6).")
+    ap.add_argument("--workers", type=int, default=6,
+                    help="Number of subject-level worker processes.")
+    args = ap.parse_args()
+    subjects = args.subjects or SUBJECTS
+    print(f"Dumping per-cell crops for {len(subjects)} subject(s) → {OUT_DIR}")
+    print(f"  workers={args.workers}  STRIP_Z={STRIP_Z} Z_PAD={Z_PAD} PAD_VOX={PAD_VOX}")
+    t0 = time.time()
+    ctx = get_context("spawn")
+    with ctx.Pool(processes=min(args.workers, len(subjects))) as pool:
+        results = pool.map(_dump_subject, subjects)
+    print(f"\n=== ALL DONE in {time.time() - t0:.0f}s ===")
+    for r in results:
+        print(f"  {r}")
+
+
+if __name__ == "__main__":
+    main()

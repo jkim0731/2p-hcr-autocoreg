@@ -1,0 +1,40 @@
+---
+name: S11 v5d promoted to main (expansion-rate-independent)
+description: 2026-05-01 v5d (drop µm + voxel companions, shell=4 vox from boundary) is the production stage-2 model. v5 superseded.
+type: project
+originSessionId: b738b938-e542-46a0-8ca4-0ef155358066
+---
+**Decision (2026-05-01)**: v5d replaces v5 as the S11 stage-2 production
+model. Rationale = expansion-rate independence: per-sample µm calibration is
+metadata-level only (not biological expansion factor), but the user wants
+features that don't drift with subject-to-subject expansion variability.
+
+**v5d already implements "shell thickness = 4 pixels from boundary inward":**
+- `roi_v6_voxel.py` calls `all_v4_features(..., vz=1, vy=1, vx=1, r_core_um=4.0)`
+- That makes `ndi.distance_transform_edt(mask, sampling=(1,1,1))` measure
+  voxel distance from the mask boundary, and `core = dist >= 4` voxels.
+- Shell = `mask_opened & ~core` = within 4 voxels of boundary inward.
+- All `*_vox*` feature names (e.g. `c405_shell_minus_core4vox_p50`,
+  `core4vox_voxel_frac_opened`) carry this convention.
+
+**Production artefacts (point downstream code here):**
+- Models: `cached_roi_quality/roi_quality_stage2_binary_v5d.txt`,
+  `cached_roi_quality/roi_quality_stage2_4class_v5d.txt`
+- Meta: `cached_roi_quality/roi_quality_stage2_meta_v5d.json`
+- Per-subject OOF: `cached_roi_quality/{sid}_stage2_{binary_score,4class_proba}_v5d.parquet`
+- Trainer: `code/sessions/v3_S11_roi_quality/05h_train_stage2_v5d.py`
+- Voxel-companion extractor: `code/dev_code/roi_v6_voxel.py`
+
+**LOSO performance (1274 labels, 6-subj):**
+- Binary AUC 0.943, AP 0.962, acc@0.5 0.860
+- 4-class acc 0.749, f1_macro 0.733
+- Per-fold f1_bad_ok bottleneck: 782149 = 0.28 (n_eval=30)
+
+**Why not v5:** v5 keeps 31 absolute-µm features that scale with imaging
+calibration. Within-subject pct features survive expansion (rank-based) but
+absolute µm features encode the metadata-recorded voxel size, which conflates
+genuine size with imaging-grid scaling.
+
+**How to apply:** any new stage-3 / downstream / GUI logic must read
+`*_v5d.parquet` and `roi_quality_stage2_*_v5d.txt`. v5 artefacts kept on disk
+for comparison but no longer canonical.

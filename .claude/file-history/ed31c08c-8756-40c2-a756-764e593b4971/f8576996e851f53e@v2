@@ -1,0 +1,294 @@
+"""v3-S09 — Render constellation-match overlays per subject.
+
+Layout (mirrors session 08 register_constellation figure but focuses on
+the volume-NCC inside the dilated convex hull):
+
+  [0,0] HCR ch488 top-slab MIP with HCR GFP+ ROIs (good quality only)
+  [0,1] CZ ROI binary top-slab MIP (raw, no transform)
+  [0,2] HCR plane with anchor pairs annotated (GFP red x, CZ-warped green o,
+        chosen anchors highlighted; lines from CZ-anchor to GFP-anchor)
+  [1,0] HCR ch488 MIP overlaid with 7.5% dilated convex hull projection
+        (ROI footprint of the constellation in xy)
+  [1,1] Text panel: K, NCC_tps, NCC_base, ΔNCC, LOO drops, IoU, quality,
+        compactness, # voxels, pool meta
+  [1,2] LOO bar chart: ΔNCC = NCC_LOO - NCC_full per dropped anchor
+
+Run: `python /root/capsule/code/sessions/v3_S09_constellation_match/render_match.py`
+"""
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import tifffile
+from scipy.ndimage import binary_fill_holes
+from scipy.spatial import ConvexHull
+
+sys.path.insert(0, "/root/capsule/code/dev_code")
+sys.path.insert(0, "/root/capsule/data/claude_data/full_automatic_execution_01")
+
+from benchmark_analysis import load_hcr_volume  # type: ignore  # noqa: E402
+from benchmark_data_loader import load_subject  # type: ignore  # noqa: E402
+from locked_prior_warm import (  # type: ignore  # noqa: E402
+    apply_to_cz_um,
+    compute_locked_prior_warm_start,
+)
+from sz_estimator import get_sz  # type: ignore  # noqa: E402
+from surfaces_iter08 import (  # type: ignore  # noqa: E402
+    get_cz_surface_iter08,
+    get_hcr_top_surface_iter07,
+)
+
+# Re-use the CZ MIP helper from match_constellation (top slab projection)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+
+HERE = Path(__file__).resolve().parent
+FIG = HERE / "figures"
+FIG.mkdir(parents=True, exist_ok=True)
+
+
+def _top_slab_mip(vol, surf, xy_um, z_um, d_lo, d_hi):
+    """MIP across [d_lo, d_hi] beneath surface (sub-voxel z column)."""
+    Z, Y, X = vol.shape
+    xs = np.arange(X, dtype=np.float32) * xy_um
+    ys = np.arange(Y, dtype=np.float32) * xy_um
+    xx, yy = np.meshgrid(xs, ys)
+    a, b, c = surf["a"], surf["b"], surf["c"]
+    p = surf.get("p", 0.0); q = surf.get("q", 0.0); r = surf.get("r", 0.0)
+    z_pia = a * xx + b * yy + c + p * xx * xx + q * xx * yy + r * yy * yy
+    z_pia = z_pia.astype(np.float32)
+    depths = np.arange(d_lo, d_hi + z_um / 2, z_um, dtype=np.float32)
+    iy = np.arange(Y)[:, None]; ix = np.arange(X)[None, :]
+    acc = np.full((Y, X), -np.inf, dtype=np.float32)
+    any_valid = np.zeros((Y, X), bool)
+    for d in depths:
+        iz = np.round((z_pia + d) / z_um).astype(np.int64)
+        valid = (iz >= 0) & (iz < Z)
+        iz_c = np.clip(iz, 0, Z - 1)
+        sample = vol[iz_c, iy, ix].astype(np.float32)
+        sample = np.where(valid, sample, -np.inf)
+        acc = np.maximum(acc, sample)
+        any_valid |= valid
+    out = np.where(any_valid, acc, np.nan).astype(np.float32)
+    return out
+
+
+def _hcr_top_mip(s, hcr_surf):
+    vol, xy_um, z_um = load_hcr_volume(s, channel="488", level=4)
+    return _top_slab_mip(vol, hcr_surf, xy_um, z_um, 0.0, 100.0), float(xy_um)
+
+
+def _load_cz_seg_outline(s):
+    """Load CZ binary ROI volume from seg-mask-outline tif (filled per slice)."""
+    files = (
+        list(s.coreg_dir.glob("*seg-mask-outline.tif"))
+        or list(s.coreg_dir.glob("*seg_masks_outline.tif"))
+        or list(s.coreg_dir.glob("*seg*outline*.tif"))
+    )
+    if not files:
+        raise FileNotFoundError(f"No seg outline tif in {s.coreg_dir}")
+    arr = tifffile.imread(str(files[0]))
+    while arr.ndim > 3 and arr.shape[0] == 1:
+        arr = arr[0]
+    out = (arr > 0).astype(np.uint8)
+    filled = np.empty_like(out)
+    for z in range(out.shape[0]):
+        filled[z] = binary_fill_holes(out[z]).astype(np.uint8)
+    return filled
+
+
+def _cz_bin_top_mip(s, cz_surf):
+    bin_vol = _load_cz_seg_outline(s).astype(np.float32)
+    proj = _top_slab_mip(bin_vol, cz_surf, float(s.cz_xy_um), float(s.cz_z_um),
+                          0.0, 100.0)
+    return (np.nan_to_num(proj, nan=0.0) > 0.5).astype(np.uint8)
+
+
+def _project_hull_xy(src_xyz_anchor, dilate_frac=0.075, n_pts=200):
+    """Return the (x, y) polygon of the dilated convex hull projection on xy."""
+    pts = src_xyz_anchor[:, :2]
+    if len(pts) < 3:
+        return None
+    try:
+        hull = ConvexHull(pts)
+        verts = pts[hull.vertices]
+        c = verts.mean(0)
+        verts = c + (verts - c) * (1.0 + dilate_frac)
+        return np.vstack([verts, verts[:1]])
+    except Exception:
+        return None
+
+
+def render_subject(sid: str):
+    json_path = HERE / f"match_{sid}.json"
+    if not json_path.exists():
+        print(f"  {sid}: no match_{sid}.json — skipping")
+        return
+    res = json.loads(json_path.read_text())
+
+    pairs_csv = HERE / f"pairs_{sid}.csv"
+    pairs_df = pd.read_csv(pairs_csv) if pairs_csv.exists() else None
+
+    s = load_subject(sid)
+    sz = get_sz(s); sz_pin = float(sz.get("sz_best") or sz.get("sz") or 1.0)
+    lp = compute_locked_prior_warm_start(s, sz_init=sz_pin)
+    hcr_surf = get_hcr_top_surface_iter07(s)
+    cz_surf = get_cz_surface_iter08(s)
+
+    print(f"  {sid}: rendering ...", flush=True)
+    hcr_mip, hcr_xy_um = _hcr_top_mip(s, hcr_surf)
+    cz_mip = _cz_bin_top_mip(s, cz_surf)
+
+    # Centroids in xy (HCR µm) — gfp+ good quality, top slab — derived from pairs file
+    if pairs_df is not None and not pairs_df.empty:
+        all_gfp_xy = pairs_df.drop_duplicates("gfp_id")[["gfp_x_um", "gfp_y_um"]].to_numpy()
+        all_cz_warp_xy = pairs_df.drop_duplicates("cz_id")[["cz_warp_x_um", "cz_warp_y_um"]].to_numpy()
+    else:
+        all_gfp_xy = np.zeros((0, 2)); all_cz_warp_xy = np.zeros((0, 2))
+
+    fig, axes = plt.subplots(2, 3, figsize=(20, 12))
+
+    H, W = hcr_mip.shape
+    extent_hcr = [0, W * hcr_xy_um, H * hcr_xy_um, 0]
+    Yc, Xc = cz_mip.shape
+    extent_cz = [0, Xc * float(s.cz_xy_um), Yc * float(s.cz_xy_um), 0]
+
+    hcr_show = np.log1p(np.nan_to_num(hcr_mip, nan=0.0))
+
+    # [0,0]
+    axes[0, 0].imshow(hcr_show, cmap="gray", extent=extent_hcr, origin="upper")
+    if all_gfp_xy.size > 0:
+        axes[0, 0].plot(all_gfp_xy[:, 0], all_gfp_xy[:, 1], "rx", ms=3, mew=0.7,
+                        label=f"gfp+ good ({len(all_gfp_xy)})")
+    axes[0, 0].set_title(f"HCR ch488 top-slab MIP (0-100µm) · GFP+ quality≥0.5")
+    axes[0, 0].set_xlabel("x (µm)"); axes[0, 0].set_ylabel("y (µm)")
+    axes[0, 0].legend(loc="upper right", fontsize=8)
+
+    # [0,1]
+    axes[0, 1].imshow(cz_mip, cmap="gray", extent=extent_cz, origin="upper")
+    axes[0, 1].set_title(f"CZ ROI binary top-slab MIP (0-100µm)")
+    axes[0, 1].set_xlabel("x_CZ (µm)"); axes[0, 1].set_ylabel("y_CZ (µm)")
+
+    # [0,2] — overlay: HCR MIP + warped CZ centroids (z-MIP) + GFP cells +
+    # chosen anchors highlighted
+    axes[0, 2].imshow(hcr_show, cmap="gray", extent=extent_hcr, origin="upper")
+    if all_gfp_xy.size > 0:
+        axes[0, 2].plot(all_gfp_xy[:, 0], all_gfp_xy[:, 1], "rx", ms=3, mew=0.6)
+    if all_cz_warp_xy.size > 0:
+        axes[0, 2].plot(all_cz_warp_xy[:, 0], all_cz_warp_xy[:, 1],
+                        "go", ms=3, mfc="none", mew=0.7,
+                        label=f"CZ-warped ({len(all_cz_warp_xy)})")
+    if res.get("ok"):
+        src_xyz = np.asarray(res["src_xyz_um"])
+        dst_xyz = np.asarray(res["dst_xyz_um"])
+        axes[0, 2].plot(src_xyz[:, 0], src_xyz[:, 1], "o", color="lime",
+                        ms=10, mfc="none", mew=2.0,
+                        label=f"anchors CZ ({len(src_xyz)})")
+        axes[0, 2].plot(dst_xyz[:, 0], dst_xyz[:, 1], "x", color="red",
+                        ms=10, mew=2.0, label=f"anchors GFP ({len(dst_xyz)})")
+        for s0, d0 in zip(src_xyz, dst_xyz):
+            axes[0, 2].plot([s0[0], d0[0]], [s0[1], d0[1]], "-",
+                            color="cyan", lw=1.0, alpha=0.7)
+    axes[0, 2].invert_yaxis(); axes[0, 2].set_aspect("equal")
+    axes[0, 2].set_xlim(extent_hcr[:2]); axes[0, 2].set_ylim(extent_hcr[2:])
+    axes[0, 2].set_title("anchor pairs: CZ-warped → HCR GFP+")
+    axes[0, 2].set_xlabel("x_HCR (µm)"); axes[0, 2].set_ylabel("y_HCR (µm)")
+    axes[0, 2].legend(loc="upper right", fontsize=8)
+
+    # [1,0] — HCR with dilated hull polygon
+    axes[1, 0].imshow(hcr_show, cmap="gray", extent=extent_hcr, origin="upper")
+    if res.get("ok"):
+        src_xyz = np.asarray(res["src_xyz_um"])
+        poly = _project_hull_xy(src_xyz, dilate_frac=0.075)
+        if poly is not None:
+            axes[1, 0].plot(poly[:, 0], poly[:, 1], "-", color="yellow",
+                            lw=2.0, label="dilated hull (xy)")
+        axes[1, 0].plot(src_xyz[:, 0], src_xyz[:, 1], "o", color="lime",
+                        ms=10, mfc="none", mew=2.0)
+    axes[1, 0].set_title(f"convex hull (xy proj) · 7.5% dilated")
+    axes[1, 0].set_xlabel("x_HCR (µm)"); axes[1, 0].set_ylabel("y_HCR (µm)")
+    axes[1, 0].legend(loc="upper right", fontsize=8)
+
+    # [1,1] — text panel
+    if res.get("ok"):
+        loo_lines = []
+        for li, l in enumerate(res.get("loo", [])):
+            cz_ = res["cz_ids"][li]; gfp_ = res["gfp_ids"][li]
+            loo_lines.append(
+                f"   drop {cz_}↔{gfp_}: NCC={l.get('ncc', np.nan):+.4f}  "
+                f"Δ={l.get('delta', np.nan):+.4f}"
+            )
+        loo_str = "\n".join(loo_lines)
+        text = (
+            f"K = {res['K']}\n"
+            f"  CZ ids:  {res['cz_ids']}\n"
+            f"  GFP ids: {res['gfp_ids']}\n"
+            f"  IoU_xy:  {[f'{v:.2f}' for v in res['iou_per_anchor']]}\n"
+            f"  quality: {[f'{v:.2f}' for v in res['roi_quality_per_anchor']]}\n"
+            f"  compactness   = {res['compactness_um']:.1f} µm (mean pair dist)\n"
+            f"  hull voxels   = {res['n_voxels']} @ 4 µm\n\n"
+            f"VOLUME-VOLUME NCC inside dilated hull (CZ raw × HCR488)\n"
+            f"  base (no TPS) = {res['ncc_base']:+.4f}\n"
+            f"  TPS warped    = {res['ncc_tps']:+.4f}\n"
+            f"  Δ             = {res['delta_ncc']:+.4f}\n\n"
+            f"Leave-One-Out (refit TPS, re-eval inside FULL hull)\n"
+            f"{loo_str}\n\n"
+            f"pool meta:  {res.get('pool_meta')}\n"
+            f"evaluated:  {res['n_evaluated']}    accepted: {res['n_accepted']}\n"
+            f"rejected:   {res.get('rejection_reasons')}\n"
+            f"elapsed: {res.get('elapsed_s')} s"
+        )
+    else:
+        text = (
+            f"NO valid constellation\n\n"
+            f"pool_meta: {res.get('pool_meta')}\n"
+            f"n_pool:    {res.get('n_pool')}\n"
+            f"error:     {res.get('error')}\n"
+        )
+    axes[1, 1].text(0.02, 0.98, text, transform=axes[1, 1].transAxes,
+                    family="monospace", fontsize=9, va="top")
+    axes[1, 1].axis("off")
+
+    # [1,2] — LOO bar chart
+    if res.get("ok") and res.get("loo"):
+        deltas = [l.get("delta", np.nan) for l in res["loo"]]
+        labels = [f"{cz}↔{gfp}" for cz, gfp in zip(res["cz_ids"], res["gfp_ids"])]
+        col = ["#3a8" if (d is not None and d < 0) else "#c43" for d in deltas]
+        axes[1, 2].bar(range(len(deltas)), deltas, color=col)
+        axes[1, 2].axhline(0, color="k", lw=0.5)
+        axes[1, 2].set_xticks(range(len(deltas)))
+        axes[1, 2].set_xticklabels(labels, rotation=30, ha="right", fontsize=8)
+        axes[1, 2].set_ylabel("ΔNCC = NCC_LOO − NCC_full")
+        axes[1, 2].set_title("LOO test (must be negative for ALL anchors)")
+    else:
+        axes[1, 2].axis("off")
+
+    fig.suptitle(f"{sid} — v3-S09 constellation match  "
+                 f"(NCC={res.get('ncc_tps', float('nan')):+.4f})")
+    fig.tight_layout()
+    out = FIG / f"match_{sid}.png"
+    fig.savefig(out, dpi=110, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  → {out.relative_to(HERE)}", flush=True)
+
+
+def main():
+    import os
+    requested = os.environ.get("SUBJECTS")
+    subjects = (requested.split(",") if requested else
+                ["755252", "767018", "767022", "782149", "788406", "790322"])
+    for sid in subjects:
+        try:
+            render_subject(sid)
+        except Exception as e:
+            print(f"  ERROR rendering {sid}: {e}", flush=True)
+            import traceback; traceback.print_exc()
+
+
+if __name__ == "__main__":
+    main()

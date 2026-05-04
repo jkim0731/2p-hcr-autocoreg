@@ -1,0 +1,500 @@
+"""
+S11 / Step 5 — Stage-2 GBT trained on human labels.
+
+Reads:
+    code/dev_code/cached_roi_quality/<sid>_features.parquet
+    code/sessions/v3_S11_roi_quality/outputs/roi_qc_actions.jsonl
+        (append-only label log; tombstones replayed via `_active_labels`)
+
+Trains two flavours, both with leave-one-subject-out cross-validation:
+
+A. **Binary**  (good vs not_good)
+       positive = {good, bad_ok}   negative = {bad, merged}   drop = {unsure}
+       Rationale: bad_ok is "imperfect but usable downstream" — that's
+       what the QC gate cares about.  merged is a topology failure.
+
+B. **4-class** (good / bad / bad_ok / merged), drop unsure
+       Preserves the distinction the labeller drew so a downstream
+       consumer can choose a different positive set without retraining.
+
+Writes:
+    code/dev_code/cached_roi_quality/<sid>_stage2_binary_score.parquet
+        oof per-ROI binary probability for held-out subjects, full pred
+        for the rest of the subject's ROIs.   cols: hcr_id, score, label
+    code/dev_code/cached_roi_quality/<sid>_stage2_4class_proba.parquet
+        oof per-ROI 4-class probabilities.    cols: hcr_id, p_bad, p_bad_ok,
+                                                   p_merged, p_good, label
+    code/dev_code/cached_roi_quality/roi_quality_stage2_binary.txt
+    code/dev_code/cached_roi_quality/roi_quality_stage2_4class.txt
+    code/dev_code/cached_roi_quality/roi_quality_stage2_meta.json
+    code/sessions/v3_S11_roi_quality/outputs/stage2/binary_loso_metrics.csv
+    code/sessions/v3_S11_roi_quality/outputs/stage2/binary_feature_importance.csv
+    code/sessions/v3_S11_roi_quality/outputs/stage2/4class_loso_metrics.csv
+    code/sessions/v3_S11_roi_quality/outputs/stage2/4class_feature_importance.csv
+    code/sessions/v3_S11_roi_quality/outputs/stage2/4class_confusion_overall.csv
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import lightgbm as lgb
+import numpy as np
+import pandas as pd
+from sklearn.metrics import (
+    accuracy_score,
+    average_precision_score,
+    brier_score_loss,
+    confusion_matrix,
+    f1_score,
+    roc_auc_score,
+)
+
+ROOT = Path("/root/capsule")
+CACHE = ROOT / "code/dev_code/cached_roi_quality"
+SESS = ROOT / "code/sessions/v3_S11_roi_quality"
+OUT = SESS / "outputs/stage2"
+LABEL_LOG = SESS / "outputs/roi_qc_actions.jsonl"
+
+SUBJECTS = ["755252", "767018", "767022", "782149", "788406", "790322"]
+
+DROP_FEATURES = {"hcr_id", "sphericity", "y", "label", "human_label"}
+PROBE_SUFFIXES = ["mean", "std", "p10", "p50", "p90", "fg_minus_margin_p50"]
+
+# 4-class encoding (sorted alphabetically so the order is reproducible)
+CLASS_NAMES = ["bad", "bad_ok", "good", "merged"]
+CLASS_TO_IDX = {c: i for i, c in enumerate(CLASS_NAMES)}
+
+# Binary mapping: positive = {good, bad_ok}, negative = {bad, merged}, drop unsure.
+BINARY_POS = {"good", "bad_ok"}
+BINARY_NEG = {"bad", "merged"}
+
+LGB_BINARY = dict(
+    objective="binary",
+    learning_rate=0.05,
+    num_leaves=31,
+    min_data_in_leaf=20,
+    feature_fraction=0.85,
+    bagging_fraction=0.85,
+    bagging_freq=5,
+    lambda_l2=1.0,
+    is_unbalance=True,  # 73/27 pos/neg
+    metric=["binary_logloss", "auc"],
+    verbosity=-1,
+    seed=20260430,
+)
+
+LGB_MULTI = dict(
+    objective="multiclass",
+    num_class=len(CLASS_NAMES),
+    learning_rate=0.05,
+    num_leaves=31,
+    min_data_in_leaf=15,
+    feature_fraction=0.85,
+    bagging_fraction=0.85,
+    bagging_freq=5,
+    lambda_l2=1.0,
+    metric=["multi_logloss"],
+    verbosity=-1,
+    seed=20260430,
+)
+N_ESTIMATORS = 400
+EARLY_STOP = 30
+
+
+# ---------------------------------------------------------------------------
+# Label log -> active per-subject label dict
+# ---------------------------------------------------------------------------
+def _load_label_log() -> pd.DataFrame:
+    if not LABEL_LOG.exists():
+        raise FileNotFoundError(f"label log missing: {LABEL_LOG}")
+    return pd.read_json(LABEL_LOG, lines=True)
+
+
+def _active_labels(log: pd.DataFrame, sid: str) -> pd.DataFrame:
+    """Replay `_undone_` tombstones; return current (hcr_id, label) for sid."""
+    sub = log[log["sid"].astype(str) == sid].copy()
+    if sub.empty:
+        return pd.DataFrame(columns=["hcr_id", "label"])
+    tomb_ids: set[int] = set()
+    if (sub["label"] == "_undone_").any():
+        for _, r in sub[sub["label"] == "_undone_"].iterrows():
+            ub = r.get("undoes") or {}
+            try:
+                tomb_ids.add(int(ub.get("hcr_id", -1)))
+            except (TypeError, ValueError):
+                pass
+    sub = sub[sub["label"].isin(["good", "bad", "bad_ok", "merged", "unsure"])]
+    sub = sub[~sub["hcr_id"].astype(int).isin(tomb_ids)]
+    if "ts" in sub.columns:
+        sub = sub.sort_values("ts")
+    sub = sub.drop_duplicates(subset=["hcr_id"], keep="last")
+    return sub[["hcr_id", "label"]].reset_index(drop=True)
+
+
+# ---------------------------------------------------------------------------
+# Features
+# ---------------------------------------------------------------------------
+def _harmonise_probe(f: pd.DataFrame) -> pd.DataFrame:
+    src = "c561" if any(c.startswith("c561_") for c in f.columns) else "c514"
+    rename = {f"{src}_{s}": f"cprobe_{s}" for s in PROBE_SUFFIXES if f"{src}_{s}" in f.columns}
+    f = f.rename(columns=rename)
+    other = "c514" if src == "c561" else "c561"
+    f = f.drop(columns=[c for c in f.columns if c.startswith(f"{other}_")], errors="ignore")
+    return f
+
+
+def _load_features(sid: str) -> pd.DataFrame:
+    f = pd.read_parquet(CACHE / f"{sid}_features.parquet")
+    f = _harmonise_probe(f)
+    f["sid"] = sid
+    return f
+
+
+def _build_matrix(df: pd.DataFrame, feature_columns: list[str] | None
+                  ) -> tuple[pd.DataFrame, list[str]]:
+    if feature_columns is None:
+        cols = [
+            c for c in df.columns
+            if c not in DROP_FEATURES and c != "sid"
+            and (pd.api.types.is_numeric_dtype(df[c]) or pd.api.types.is_bool_dtype(df[c]))
+        ]
+    else:
+        cols = list(feature_columns)
+    X = df[cols].copy()
+    for c in X.columns:
+        if pd.api.types.is_bool_dtype(X[c]):
+            X[c] = X[c].astype("float32")
+    return X, cols
+
+
+# ---------------------------------------------------------------------------
+# Train one LOSO fold
+# ---------------------------------------------------------------------------
+def _early_stop_split(n: int, frac: float = 0.15, seed: int = 0) -> tuple[np.ndarray, np.ndarray]:
+    rng = np.random.default_rng(seed)
+    idx = np.arange(n)
+    rng.shuffle(idx)
+    cut = max(1, int(round(n * (1 - frac))))
+    return idx[:cut], idx[cut:]
+
+
+def train_binary(X_tr: pd.DataFrame, y_tr: np.ndarray) -> lgb.Booster:
+    tr, va = _early_stop_split(len(X_tr), frac=0.15, seed=42)
+    train_set = lgb.Dataset(X_tr.iloc[tr], y_tr[tr])
+    valid_set = lgb.Dataset(X_tr.iloc[va], y_tr[va], reference=train_set)
+    return lgb.train(
+        LGB_BINARY, train_set,
+        num_boost_round=N_ESTIMATORS,
+        valid_sets=[valid_set],
+        callbacks=[lgb.early_stopping(EARLY_STOP), lgb.log_evaluation(0)],
+    )
+
+
+def train_multiclass(X_tr: pd.DataFrame, y_tr: np.ndarray) -> lgb.Booster:
+    tr, va = _early_stop_split(len(X_tr), frac=0.15, seed=42)
+    train_set = lgb.Dataset(X_tr.iloc[tr], y_tr[tr])
+    valid_set = lgb.Dataset(X_tr.iloc[va], y_tr[va], reference=train_set)
+    return lgb.train(
+        LGB_MULTI, train_set,
+        num_boost_round=N_ESTIMATORS,
+        valid_sets=[valid_set],
+        callbacks=[lgb.early_stopping(EARLY_STOP), lgb.log_evaluation(0)],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+def main() -> None:
+    OUT.mkdir(parents=True, exist_ok=True)
+
+    log = _load_label_log()
+    print(f"label log: {len(log)} rows in {LABEL_LOG.relative_to(ROOT)}")
+
+    # Per-subject features + active labels
+    feats: dict[str, pd.DataFrame] = {sid: _load_features(sid) for sid in SUBJECTS}
+    labs:  dict[str, pd.DataFrame] = {sid: _active_labels(log, sid) for sid in SUBJECTS}
+
+    # Print active counts
+    print("\nactive label counts per subject (post-undo):")
+    for sid in SUBJECTS:
+        c = labs[sid]["label"].value_counts().to_dict()
+        print(f"  {sid}: total={len(labs[sid]):3d}  " + ", ".join(
+            f"{k}={c.get(k, 0)}" for k in ["good", "bad", "bad_ok", "merged", "unsure"]
+        ))
+
+    # ---------------- BINARY ----------------
+    print("\n" + "=" * 62 + "\nBINARY  {good, bad_ok} vs {bad, merged}, drop unsure\n" + "=" * 62)
+
+    feature_columns: list[str] | None = None
+    binary_metrics, binary_oof = [], {}
+    binary_importances: dict[str, list[float]] = {}
+
+    for held in SUBJECTS:
+        tr_X_parts, tr_y_parts = [], []
+        for sid in SUBJECTS:
+            if sid == held:
+                continue
+            f = feats[sid]
+            l = labs[sid]
+            l = l[l["label"].isin(BINARY_POS | BINARY_NEG)].copy()
+            l["y"] = l["label"].isin(BINARY_POS).astype("int8")
+            merged = f.merge(l[["hcr_id", "y"]], on="hcr_id", how="inner")
+            X, cols = _build_matrix(merged, feature_columns)
+            feature_columns = cols
+            tr_X_parts.append(X)
+            tr_y_parts.append(merged["y"].to_numpy("int8"))
+        X_tr = pd.concat(tr_X_parts, axis=0).reset_index(drop=True)
+        y_tr = np.concatenate(tr_y_parts)
+
+        # Held subject — predict all rows; compute metrics on labelled rows
+        f_held = feats[held]
+        X_held, _ = _build_matrix(f_held, feature_columns)
+        l_held = labs[held]
+        l_held = l_held[l_held["label"].isin(BINARY_POS | BINARY_NEG)].copy()
+        l_held["y"] = l_held["label"].isin(BINARY_POS).astype("int8")
+
+        booster = train_binary(X_tr, y_tr)
+        y_pred_full = booster.predict(X_held, num_iteration=booster.best_iteration)
+
+        eval_rows = f_held.merge(l_held[["hcr_id", "y"]], on="hcr_id", how="inner")
+        eval_idx = eval_rows.index.to_numpy()  # index into f_held / X_held aligned by reset_index? Let's recompute safely:
+        # Safer: align via hcr_id
+        scored = pd.DataFrame({"hcr_id": f_held["hcr_id"].to_numpy(), "score": y_pred_full})
+        eval_df = l_held.merge(scored, on="hcr_id", how="left")
+        y_eval = eval_df["y"].to_numpy("int8")
+        p_eval = eval_df["score"].to_numpy("float64")
+
+        auc = roc_auc_score(y_eval, p_eval) if len(np.unique(y_eval)) > 1 else float("nan")
+        ap = average_precision_score(y_eval, p_eval) if len(np.unique(y_eval)) > 1 else float("nan")
+        brier = brier_score_loss(y_eval, p_eval)
+        acc = accuracy_score(y_eval, (p_eval >= 0.5).astype("int8"))
+
+        binary_metrics.append({
+            "held_subject": held,
+            "n_train": int(len(X_tr)),
+            "n_eval": int(len(y_eval)),
+            "auc": auc, "ap": ap, "brier": brier, "acc@0.5": acc,
+            "best_iter": booster.best_iteration,
+            "n_pos_train": int((y_tr == 1).sum()),
+            "n_neg_train": int((y_tr == 0).sum()),
+            "n_pos_eval": int((y_eval == 1).sum()),
+            "n_neg_eval": int((y_eval == 0).sum()),
+        })
+        print(
+            f"[hold {held}] n_tr={len(X_tr):3d} (pos {(y_tr==1).sum()}/neg {(y_tr==0).sum()})  "
+            f"n_ev={len(y_eval):3d}  AUC={auc:.4f}  AP={ap:.4f}  Brier={brier:.4f}  "
+            f"acc@0.5={acc:.3f}  iter={booster.best_iteration}"
+        )
+
+        # Cache oof scores for this subject (all rows, with eval labels merged)
+        oof_df = pd.DataFrame({
+            "hcr_id": f_held["hcr_id"].to_numpy("int64"),
+            "score": y_pred_full.astype("float32"),
+        }).merge(
+            l_held.rename(columns={"label": "human_label"})[["hcr_id", "human_label"]],
+            on="hcr_id", how="left",
+        )
+        oof_df.to_parquet(CACHE / f"{held}_stage2_binary_score.parquet", index=False)
+        binary_oof[held] = oof_df
+
+        gain = booster.feature_importance(importance_type="gain")
+        for c, g in zip(feature_columns, gain):
+            binary_importances.setdefault(c, []).append(float(g))
+
+    bm = pd.DataFrame(binary_metrics).sort_values("held_subject")
+    bm.to_csv(OUT / "binary_loso_metrics.csv", index=False)
+    print("\nbinary LOSO summary:")
+    print(bm.to_string(index=False))
+    print(f"  mean AUC={bm['auc'].mean():.4f}  AP={bm['ap'].mean():.4f}  "
+          f"Brier={bm['brier'].mean():.4f}  acc@0.5={bm['acc@0.5'].mean():.4f}")
+
+    fi_b = (
+        pd.DataFrame({c: pd.Series(v) for c, v in binary_importances.items()})
+        .mean().sort_values(ascending=False)
+        .rename("mean_gain").reset_index().rename(columns={"index": "feature"})
+    )
+    fi_b.to_csv(OUT / "binary_feature_importance.csv", index=False)
+    print("\nbinary top-15 features by mean gain:")
+    print(fi_b.head(15).to_string(index=False))
+
+    # ---------------- 4-CLASS ----------------
+    print("\n" + "=" * 62 + f"\n4-CLASS  {CLASS_NAMES}, drop unsure\n" + "=" * 62)
+    multi_metrics = []
+    multi_importances: dict[str, list[float]] = {}
+    overall_cm = np.zeros((len(CLASS_NAMES), len(CLASS_NAMES)), dtype=int)
+
+    for held in SUBJECTS:
+        tr_X_parts, tr_y_parts = [], []
+        for sid in SUBJECTS:
+            if sid == held:
+                continue
+            f = feats[sid]
+            l = labs[sid]
+            l = l[l["label"].isin(CLASS_NAMES)].copy()
+            l["y"] = l["label"].map(CLASS_TO_IDX).astype("int8")
+            merged = f.merge(l[["hcr_id", "y"]], on="hcr_id", how="inner")
+            X, _ = _build_matrix(merged, feature_columns)
+            tr_X_parts.append(X)
+            tr_y_parts.append(merged["y"].to_numpy("int8"))
+        X_tr = pd.concat(tr_X_parts, axis=0).reset_index(drop=True)
+        y_tr = np.concatenate(tr_y_parts)
+
+        f_held = feats[held]
+        X_held, _ = _build_matrix(f_held, feature_columns)
+        l_held = labs[held]
+        l_held = l_held[l_held["label"].isin(CLASS_NAMES)].copy()
+        l_held["y"] = l_held["label"].map(CLASS_TO_IDX).astype("int8")
+
+        booster = train_multiclass(X_tr, y_tr)
+        proba_full = booster.predict(X_held, num_iteration=booster.best_iteration)
+        scored = pd.DataFrame(proba_full, columns=[f"p_{c}" for c in CLASS_NAMES])
+        scored["hcr_id"] = f_held["hcr_id"].to_numpy("int64")
+        eval_df = l_held.merge(scored, on="hcr_id", how="left")
+        y_eval = eval_df["y"].to_numpy("int8")
+        proba_eval = eval_df[[f"p_{c}" for c in CLASS_NAMES]].to_numpy("float64")
+        y_pred = proba_eval.argmax(axis=1)
+
+        acc = accuracy_score(y_eval, y_pred)
+        f1_macro = f1_score(y_eval, y_pred, average="macro", zero_division=0)
+        f1_per = f1_score(y_eval, y_pred, average=None, labels=list(range(len(CLASS_NAMES))), zero_division=0)
+        cm = confusion_matrix(y_eval, y_pred, labels=list(range(len(CLASS_NAMES))))
+        overall_cm += cm
+
+        row = {
+            "held_subject": held,
+            "n_train": int(len(X_tr)),
+            "n_eval": int(len(y_eval)),
+            "acc": acc,
+            "f1_macro": f1_macro,
+            "best_iter": booster.best_iteration,
+        }
+        for c, fv in zip(CLASS_NAMES, f1_per):
+            row[f"f1_{c}"] = float(fv)
+        for c in CLASS_NAMES:
+            row[f"n_train_{c}"] = int((y_tr == CLASS_TO_IDX[c]).sum())
+            row[f"n_eval_{c}"] = int((y_eval == CLASS_TO_IDX[c]).sum())
+        multi_metrics.append(row)
+
+        print(
+            f"[hold {held}] n_tr={len(X_tr):3d}  n_ev={len(y_eval):3d}  "
+            f"acc={acc:.3f}  f1_macro={f1_macro:.3f}  "
+            + " ".join(f"f1_{c}={f:.2f}" for c, f in zip(CLASS_NAMES, f1_per))
+            + f"  iter={booster.best_iteration}"
+        )
+
+        # Cache oof proba
+        oof = scored[["hcr_id"] + [f"p_{c}" for c in CLASS_NAMES]].merge(
+            l_held.rename(columns={"label": "human_label"})[["hcr_id", "human_label"]],
+            on="hcr_id", how="left",
+        )
+        oof.to_parquet(CACHE / f"{held}_stage2_4class_proba.parquet", index=False)
+
+        gain = booster.feature_importance(importance_type="gain")
+        for c, g in zip(feature_columns, gain):
+            multi_importances.setdefault(c, []).append(float(g))
+
+    mm = pd.DataFrame(multi_metrics).sort_values("held_subject")
+    mm.to_csv(OUT / "4class_loso_metrics.csv", index=False)
+    print("\n4-class LOSO summary:")
+    print(mm[["held_subject", "n_train", "n_eval", "acc", "f1_macro"]
+             + [f"f1_{c}" for c in CLASS_NAMES]].to_string(index=False))
+    print(f"  mean acc={mm['acc'].mean():.4f}  mean f1_macro={mm['f1_macro'].mean():.4f}")
+
+    fi_m = (
+        pd.DataFrame({c: pd.Series(v) for c, v in multi_importances.items()})
+        .mean().sort_values(ascending=False)
+        .rename("mean_gain").reset_index().rename(columns={"index": "feature"})
+    )
+    fi_m.to_csv(OUT / "4class_feature_importance.csv", index=False)
+
+    cm_df = pd.DataFrame(overall_cm, index=[f"true_{c}" for c in CLASS_NAMES],
+                         columns=[f"pred_{c}" for c in CLASS_NAMES])
+    cm_df.to_csv(OUT / "4class_confusion_overall.csv")
+    print("\n4-class confusion matrix (sum across folds):")
+    print(cm_df.to_string())
+
+    # ---------------- production models ----------------
+    print("\n" + "=" * 62 + "\nproduction models on all labelled rows\n" + "=" * 62)
+
+    # Binary
+    Xb_parts, yb_parts = [], []
+    for sid in SUBJECTS:
+        f = feats[sid]
+        l = labs[sid]
+        l = l[l["label"].isin(BINARY_POS | BINARY_NEG)].copy()
+        l["y"] = l["label"].isin(BINARY_POS).astype("int8")
+        merged = f.merge(l[["hcr_id", "y"]], on="hcr_id", how="inner")
+        X, _ = _build_matrix(merged, feature_columns)
+        Xb_parts.append(X)
+        yb_parts.append(merged["y"].to_numpy("int8"))
+    Xb = pd.concat(Xb_parts, axis=0).reset_index(drop=True)
+    yb = np.concatenate(yb_parts)
+    n_iter_b = max(int(np.median([m["best_iter"] for m in binary_metrics])), 80)
+    bin_prod = lgb.train(
+        LGB_BINARY,
+        lgb.Dataset(Xb, yb),
+        num_boost_round=n_iter_b,
+        callbacks=[lgb.log_evaluation(0)],
+    )
+    bin_prod.save_model(str(CACHE / "roi_quality_stage2_binary.txt"))
+    print(f"  binary production: trained on {len(Xb)} rows ({yb.sum()} pos / {(yb==0).sum()} neg), "
+          f"{n_iter_b} iters")
+
+    # 4-class
+    Xm_parts, ym_parts = [], []
+    for sid in SUBJECTS:
+        f = feats[sid]
+        l = labs[sid]
+        l = l[l["label"].isin(CLASS_NAMES)].copy()
+        l["y"] = l["label"].map(CLASS_TO_IDX).astype("int8")
+        merged = f.merge(l[["hcr_id", "y"]], on="hcr_id", how="inner")
+        X, _ = _build_matrix(merged, feature_columns)
+        Xm_parts.append(X)
+        ym_parts.append(merged["y"].to_numpy("int8"))
+    Xm = pd.concat(Xm_parts, axis=0).reset_index(drop=True)
+    ym = np.concatenate(ym_parts)
+    n_iter_m = max(int(np.median([m["best_iter"] for m in multi_metrics])), 80)
+    multi_prod = lgb.train(
+        LGB_MULTI,
+        lgb.Dataset(Xm, ym),
+        num_boost_round=n_iter_m,
+        callbacks=[lgb.log_evaluation(0)],
+    )
+    multi_prod.save_model(str(CACHE / "roi_quality_stage2_4class.txt"))
+    print(f"  4-class production: trained on {len(Xm)} rows "
+          f"({', '.join(f'{c}={(ym==CLASS_TO_IDX[c]).sum()}' for c in CLASS_NAMES)}), "
+          f"{n_iter_m} iters")
+
+    meta = {
+        "feature_columns": feature_columns,
+        "subjects": SUBJECTS,
+        "class_names": CLASS_NAMES,
+        "binary_pos": sorted(BINARY_POS),
+        "binary_neg": sorted(BINARY_NEG),
+        "binary": {
+            "n_train_total": int(len(Xb)),
+            "n_iter_prod": int(n_iter_b),
+            "loso_mean_auc": float(bm["auc"].mean()),
+            "loso_mean_ap": float(bm["ap"].mean()),
+            "loso_mean_brier": float(bm["brier"].mean()),
+            "loso_mean_acc05": float(bm["acc@0.5"].mean()),
+            "params": LGB_BINARY,
+        },
+        "four_class": {
+            "n_train_total": int(len(Xm)),
+            "n_iter_prod": int(n_iter_m),
+            "loso_mean_acc": float(mm["acc"].mean()),
+            "loso_mean_f1_macro": float(mm["f1_macro"].mean()),
+            "params": LGB_MULTI,
+        },
+    }
+    (CACHE / "roi_quality_stage2_meta.json").write_text(json.dumps(meta, indent=2))
+    print(f"\nmeta saved -> {CACHE / 'roi_quality_stage2_meta.json'}")
+    print(f"per-subject oof saved under {CACHE}/<sid>_stage2_*.parquet")
+    print(f"summaries under {OUT}")
+
+
+if __name__ == "__main__":
+    main()

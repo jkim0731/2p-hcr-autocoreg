@@ -1,0 +1,78 @@
+"""Audit redundancy between volume and µm features (one-shot, prints only)."""
+import sys
+from pathlib import Path
+import numpy as np
+import pandas as pd
+
+CACHE = Path("/root/capsule/code/dev_code/cached_roi_quality")
+SUBJECTS = ["755252", "767018", "767022", "782149", "788406", "790322"]
+
+# anchor: volume_um3_opened (best-defined size)
+# audit: every other µm/voxel-count feature; report Spearman ρ vs anchor and importance rank in 4-class v5.
+
+dfs = []
+for sid in SUBJECTS:
+    f = pd.read_parquet(CACHE / f"{sid}_features_v2.parquet")
+    g = pd.read_parquet(CACHE / f"{sid}_features_v3_extra.parquet")
+    h = pd.read_parquet(CACHE / f"{sid}_features_v4.parquet")
+    k = pd.read_parquet(CACHE / f"{sid}_features_v5.parquet")
+    out = (f.merge(g, on="hcr_id", how="left", suffixes=("", "_v3"))
+            .merge(h, on="hcr_id", how="left", suffixes=("", "_v4"))
+            .merge(k, on="hcr_id", how="left", suffixes=("", "_v5")))
+    out["sid"] = sid
+    dfs.append(out)
+
+df = pd.concat(dfs, ignore_index=True)
+print(f"merged rows: {len(df)}, cols: {df.shape[1]}")
+
+ANCHOR = "volume_um3_opened"
+SIZE_CANDS = [
+    "volume_vox_raw", "volume_um3_raw", "volume_vox_opened", "volume_um3_opened",
+    "surface_area_um2_raw", "surface_area_um2_opened",
+    "sa_to_vol_um_inv_raw", "sa_to_vol_um_inv_opened",
+    "sphericity_raw", "sphericity_opened",
+    "equivalent_diameter_um_raw",
+    "axis3d_lambda1_um2", "axis3d_lambda2_um2", "axis3d_lambda3_um2",
+    "bbox_z_extent_um", "bbox_y_extent_um", "bbox_x_extent_um",
+    "axis3d_extent1_um", "axis3d_extent2_um", "axis3d_extent3_um",
+    "n_protrusion_voxels", "protrusion_rim_voxels",
+]
+SIZE_CANDS = [c for c in SIZE_CANDS if c in df.columns]
+
+# Spearman corr with anchor (pooled).
+sub = df[SIZE_CANDS].dropna()
+print(f"\nrows after dropna in size cols: {len(sub)}")
+rho = sub.corr(method="spearman")[ANCHOR].sort_values(ascending=False)
+print(f"\nSpearman ρ vs {ANCHOR} (pooled):")
+print(rho.to_string())
+
+# Per-subject ρ to confirm pattern is stable.
+print(f"\nPer-subject Spearman ρ vs {ANCHOR}:")
+rows = []
+for sid in SUBJECTS:
+    s = df[df["sid"] == sid][SIZE_CANDS].dropna()
+    if s.empty:
+        continue
+    r = s.corr(method="spearman")[ANCHOR]
+    r["sid"] = sid
+    rows.append(r)
+per = pd.DataFrame(rows).set_index("sid")
+print(per.T.round(3).to_string())
+
+# Importance rank in 4-class v5
+imp_path = Path("/root/capsule/code/sessions/v3_S11_roi_quality/outputs/stage2/4class_feature_importance_v5.csv")
+if imp_path.exists():
+    imp = pd.read_csv(imp_path)
+    imp["rank"] = imp.index + 1
+    imp_dict = dict(zip(imp["feature"], zip(imp["rank"], imp["mean_gain"])))
+    print(f"\n4-class v5 importance rank for size candidates:")
+    rows = []
+    for c in SIZE_CANDS:
+        r = imp_dict.get(c, (None, None))
+        rho_ = float(rho.get(c, float("nan")))
+        rows.append({
+            "feat": c, "rank_4class_v5": r[0], "gain": r[1],
+            "spearman_vs_anchor": round(rho_, 3),
+            "abs_rho": round(abs(rho_), 3),
+        })
+    print(pd.DataFrame(rows).sort_values("abs_rho", ascending=False).to_string(index=False))

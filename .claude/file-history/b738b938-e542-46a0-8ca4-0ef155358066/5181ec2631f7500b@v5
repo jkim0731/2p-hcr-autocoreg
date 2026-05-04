@@ -1,0 +1,308 @@
+# S11 — HCR ROI pass/fail classifier
+
+**Date opened:** 2026-04-29
+**Plan reference:** `code/docs/10 Grand Plan v3 — Cell-cell matching and QC.md` §4.4 / §6.6
+**Operating mode:** human-in-the-loop (the GUI is a first-class deliverable for v3)
+
+## Goal
+Per-ROI score `roi_quality ∈ [0, 1]` for HCR ROIs.  Filters bad
+segmentations before they reach the cell-cell matcher.  Trained on
+heuristic + synthetic Stage-1 labels, refined by a small Stage-2 human
+pass on the uncertain band.
+
+## Subject status (2026-04-29 audit)
+| sid | metrics.pickle | channels | notes |
+|-----|---------------|----------|-------|
+| 754803 | yes | 405/488/561/594 | not in 6-subject benchmark; ignore for now |
+| 755252 | **missing** | 405/488/514/594 | shape features must be recomputed from `segmentation_mask.zarr` |
+| 767018 | yes | 405/488/561/594 | benchmark |
+| 767022 | **missing** | 405/488/514/594 | shape features must be recomputed |
+| 782149 | yes | 405/488/561/594 | benchmark, hardest |
+| 788406 | yes | 405/488/561/594 | benchmark |
+| 790322 | yes | 405/488/561/594 | benchmark |
+
+## Plan
+1. **`01_extract_features.py`** — per-ROI feature DataFrame.
+   * Shape from `metrics.pickle` (volume, surface_area, equiv_diameter,
+     axis ratios, sphericity, solidity, voxel_count, bbox).
+   * For 755252 / 767022 — recompute shape from
+     `segmentation_mask.zarr` using `regionprops` over chunked zarr.
+   * Intensity stats per channel (405 / 488 / probe / 594) inside the
+     ROI mask: mean, std, p10/p50/p90, fg-vs-margin contrast.
+   * 405 nuclear-agreement: mean / p90 inside ROI vs eroded core vs
+     dilated shell.
+   * 405 local-context patch summary (radial-shell mean / std).
+   * Neighbour density / k-NN distances from `hcr_centroids`.
+   * GFP+ score (existing `peakgauss3_*` columns).
+   * Mask-vs-zarr consistency.
+2. **`02_pseudo_label.py`** — Stage-1 labels.
+   * Easy negatives: volume bottom 1 % / top 1 %; boundary-touching;
+     low-405-at-centroid; solidity < 0.6; mask-zarr inconsistency.
+   * Synthetic negatives: forced merges + splits.
+   * Easy positives: middle-50 % volume; 405 peak inside; solidity
+     > 0.85; not boundary; stable 405/488 stats.
+3. **`03_train_stage1.py`** — first GBT on Stage-1 labels.
+4. **`04_label_gui.ipynb`** — ipywidgets labelling GUI.
+   Loads uncertain-band ROIs (Stage-1 score 0.3–0.7); buttons +
+   keyboard shortcuts; logs to `outputs/roi_qc_actions.jsonl`.
+5. **`05_train_stage2.py`** — final GBT on human labels, LOSO.
+
+## Outputs (planned)
+* `code/dev_code/cached_roi_quality/<sid>_features.parquet`
+* `code/dev_code/cached_roi_quality/<sid>_pseudo_labels.parquet`
+* `code/dev_code/cached_roi_quality/<sid>_stage1_score.parquet`
+* `code/sessions/v3_S11_roi_quality/outputs/roi_qc_actions.jsonl`
+* `code/dev_code/cached_roi_quality/roi_quality_model.json`
+
+---
+
+## Step 1 completion (2026-04-30)
+
+`01_extract_features.py` + `dev_code/roi_quality.py` complete.
+All 6 benchmark subjects extracted and cached.
+
+### Feature summary
+
+| sid | n_roi | found_in_seg | bndry_touch | c405_peak_in | med_vol_um3 | med_solidity | med_knn1_um |
+|-----|-------|-------------|-------------|--------------|-------------|--------------|-------------|
+| 755252 | 84,233 | 92.3% | 0.4% | 70.4% | 6,190 | 0.971 | 18.2 |
+| 767018 | 108,506 | 93.5% | 0.1% | 74.7% | 8,206 | 0.994 | 21.1 |
+| 767022 | 76,336 | 94.6% | 1.2% | 74.1% | 8,199 | 0.986 | 20.7 |
+| 782149 | 39,291 | 90.6% | 0.2% | 69.0% | 8,013 | 0.989 | 21.2 |
+| 788406 | 127,275 | 95.6% | 0.1% | 77.9% | 7,942 | 1.009 | 21.4 |
+| 790322 | 106,379 | 95.3% | 0.3% | 77.3% | 8,391 | 1.007 | 21.7 |
+
+### Schema (51 columns)
+Shape: `volume_vox`, `volume_um3`, `bbox_[zyx]_extent`, `equivalent_diameter_um`,
+`aspect_[zy/zx/yx]`, `solidity`, `sphericity` (all NaN), `bbox_occupancy`, `boundary_touching`.
+Intensity per channel (c405/c488/c{514|561}/c594): `mean`, `std`, `p10`, `p50`, `p90`, `fg_minus_margin_p50`.
+405 nuclear: `c405_core_p90`, `c405_shell_p90`, `c405_peak_inside`, `c405_core_minus_shell_p90`.
+kNN: `knn_d1`, `knn_d3`, `knn_d5`, `n_neighbors_30um`.
+GFP: `gfp_feature_value`, `gfp_density`, `gfp_counts`.
+Pickle consistency: `tight_bbox_in_pickle_bbox`, `volume_pickle_minus_zarr`.
+
+### Implementation notes
+- All features from `segmentation_mask_orig_res.zarr` (level-2 XY, xy≈0.987 µm/vox, z=1.0 µm/vox).
+- Z-strip batch I/O (5 channels × 10-11 strips): ~40-90s/strip depending on XY size.
+- `scipy.ndimage.find_objects()` once per strip replaces O(N × strip_size) per-label `np.where`.
+- `scipy.spatial.ConvexHull` for solidity (~0.7ms/cell); solidity may slightly exceed 1.0 for
+  nearly-convex cells — clip in training. Extreme solidity > 1.5 only for <200-voxel fragments.
+- `sphericity` is always NaN (marching_cubes too slow; skipped by design).
+- Binary mask strips accumulated in RAM during strip pass; no zarr re-read at finalization.
+- Intensity subjects (755252, 767022): probe=514, GFP feature = mean_minus_bg; `gfp_density`/`gfp_counts` NaN.
+- Spot subjects: probe=561, GFP feature = density.
+- Cells not found in seg (7-9%): centroids outside z-strip range or borderline chunks; shape features NaN.
+- `frac_tight_bbox_in_pickle`: 755252 and 767022 report 1.0 (no pickle, check skipped); spot subjects 90-96%.
+- Wall-clock: ~10-30 min/subject depending on ROI count and XY footprint.
+
+### Next step
+`02_pseudo_label.py` — Stage-1 heuristic labels using the 51-column feature tables.
+
+---
+
+## Step 2 completion (2026-04-29)
+
+`02_pseudo_label.py` written and run.  Per-subject pseudo-label
+distribution (heuristic rules + no synthetics yet):
+
+| sid | n_total | n_pos | n_neg | n_uncertain | frac_pos | frac_neg | frac_unc |
+|-----|---------|-------|-------|-------------|---------:|---------:|---------:|
+| 755252 |  84,233 | 26,888 | 18,067 | 39,278 | 0.319 | 0.214 | 0.466 |
+| 767018 | 108,506 | 41,956 | 19,835 | 46,715 | 0.387 | 0.183 | 0.430 |
+| 767022 |  76,336 | 27,751 | 14,042 | 34,543 | 0.364 | 0.184 | 0.453 |
+| 782149 |  39,291 | 14,077 |  9,779 | 15,435 | 0.358 | 0.249 | 0.393 |
+| 788406 | 127,275 | 45,104 | 18,163 | 64,008 | 0.354 | 0.143 | 0.503 |
+| 790322 | 106,379 | 39,792 | 15,532 | 51,055 | 0.374 | 0.146 | 0.480 |
+
+Top negative rules: `not_found_in_seg` (4–8 %), `nuclear_inversion`
+(3–7 %), `low_solidity` (2–4 %).  `mask_inconsistent` never fires
+(pickle vs zarr always agree where pickle exists — good sanity check).
+
+Outputs: `cached_roi_quality/<sid>_pseudo_labels.parquet`,
+`outputs/pseudo_label_summary.csv`,
+`outputs/pseudo_label_rule_counts.csv`.
+
+---
+
+## Step 3 completion (2026-04-29)
+
+`03_train_stage1.py` written and run.  LightGBM with native NaN
+handling on a 51-feature matrix (probe channel harmonised across
+755252/767022 (514) and the spot subjects (561) into `cprobe_*`).
+
+**LOSO mean AUC = 1.000 — this is *not* a real result.**
+The GBT is trivially memorising the heuristic rules, since the rule
+columns (`c405_peak_inside`, `solidity`, `volume_um3`,
+`c405_core_minus_shell_p90`, `boundary_touching`) are the top-5
+features by mean gain.  Most folds early-stop at 1–10 iterations.
+Real validation requires Step 5 with human labels.
+
+**Operationally useful, however.**  On the *uncertain* rows (those
+that match no rule) the score spreads across 0.3–0.9 (60–100 % of
+uncertain cells fall in [0.3, 0.7] depending on subject; none below
+0.3).  Plenty of material for the GUI's uncertain-band sampling.
+
+Outputs:
+- `cached_roi_quality/<sid>_stage1_score.parquet`
+  (cols: `hcr_id`, `score`, `pseudo_label`, `source`)
+- `cached_roi_quality/roi_quality_stage1.txt` (production model,
+  trained on all labelled rows for 100 iterations)
+- `cached_roi_quality/roi_quality_stage1_meta.json`
+- `outputs/stage1_loso_metrics.csv`
+- `outputs/stage1_feature_importance.csv`
+
+### Next step
+`04_label_gui.ipynb` — ipywidgets labelling GUI; samples uncertain
+ROIs from the [0.3, 0.7] band (~50–100 / subject), shows 405/488
+patches + mask outline + key feature values; logs to
+`outputs/roi_qc_actions.jsonl`.
+
+---
+
+## Step 4 completion (2026-04-29)
+
+`gui.py` (the labelling module) and `04_label_gui.ipynb` (the
+launcher) written.  `test_gui_smoke.py` exercises sampling, mask /
+image rendering, JSONL append, undo tombstone, and the resume guard
+without a display server — all green.
+
+### GUI design
+- ipywidgets + matplotlib + ipyevents (keyboard).
+- 6-panel display per ROI (top: 405 MIP / 488 MIP / overlay; bottom:
+  three 405 z-slices through the centroid), mask outline overlaid
+  in red, side panel with the 14 highest-signal features.
+- Buttons + keyboard shortcuts: `g` good, `b` bad, `u` unsure, `s`
+  skip, `z` undo.
+- Append-only `outputs/roi_qc_actions.jsonl`; `_undone_` records
+  carry the original record so `label_progress()` excludes them.
+- `launch(sid, n_rois=80, score_band=(0.3, 0.7), reviewer="...")`.
+- Resume-safe: prior labels for the same `(sid, hcr_id)` are
+  excluded from the sample pool on next launch.
+
+### Sample previews
+`outputs/previews/preview_*.png` (6 ROIs from 788406, score 0.40–0.51)
+— borderline-but-real cells with imperfect mask outlines, exactly
+the cases this GUI is meant to disambiguate.
+
+### Recommended labelling protocol
+- ~50–100 ROIs / subject from the [0.3, 0.7] uncertain band.
+- 6 subjects × 80 ROIs ≈ 480 labels.  Target ~5 s / ROI -> 40 min
+  per labelling pass.
+- Reviewer name goes in every record so multiple reviewers can be
+  combined (e.g. inter-rater agreement) later.
+
+### Next step (after labelling)
+`05_train_stage2.py` — combine human labels (high weight) with
+Stage-1 pseudo-labels (low weight), retrain LightGBM with LOSO,
+report AUC / Brier on the *human* labels of the held-out subject.
+This is the first real evaluation of the classifier.
+
+---
+
+## Step 4b — 3-D orthoview upgrade (2026-04-29)
+
+The first GUI used static MIPs + a 3-slice z-strip, which hides
+merged-in-z and split-mid-cell errors that 3-D segmentation
+artefacts produce.  `gui.py` now ships a true orthoviewer.
+
+### Layout
+- 1×3 panel: **xy** (axial), **xz** (coronal), **yz** (sagittal).
+- Per-ROI volumetric crop loaded once, normalised once
+  (per-volume p1/p99.5) so scrubbing doesn't flicker.
+- Mask outline (red contour) overlaid on each view; cyan crosshairs
+  mark the centroid in single-slice mode.
+- Channel ToggleButtons (`405` / `488` / `overlay`).
+- MIP Checkbox toggles between single-slice and 3-axis MIP.
+- IntSlider scrubs z (default = ROI centroid z-anchor).
+
+### Keyboard
+- `g` / `b` / `u` (good / bad / unsure), `s` skip, `z` undo.
+- `j` or `↓` = z − 1; `k` or `↑` = z + 1.
+- `m` toggle MIP; `1` / `2` / `3` switch channel.
+
+### Performance
+- One zarr read per ROI (3 channels × small bbox), then in-place
+  `set_data` on `AxesImage` handles for every slider tick.
+- Crop sizes seen so far: ~30³–55³ voxels — instant scrubbing.
+
+### Smoke test
+`test_gui_smoke.py` updated: loads a real `_RoiCrops`, exercises
+`_planes_for_channel` in both single-slice and MIP modes, and writes
+a 6-panel preview PNG to a temp dir.  Runs headless via `Agg`.
+
+### Sample previews
+`outputs/previews/orthoview_788406_*.png` — 4 ROIs from subject
+788406, top row single-slice with crosshairs, bottom row MIP.
+Mask outline tracks across the three views; visibly distinguishes
+clean cell bodies from ones that bleed into a neighbour in xz.
+
+---
+
+## Step 4c — standalone GUI (no Jupyter) (2026-04-30)
+
+The notebook flavour kept hitting kernel-vs-package mismatches
+(`ipyevents` not in kernel, `pyarrow` ditto, requires kernel
+restart between installs).  Added a standalone matplotlib-window
+app that shares all data-loading helpers from `gui.py` but uses
+matplotlib's bundled `Slider` / `RadioButtons` / `CheckButtons` /
+`Button` widgets — no `ipyevents`, no `ipywidgets`.
+
+Run::
+
+    python code/sessions/v3_S11_roi_quality/04b_label_gui_app.py \
+        --sid 788406 --reviewer alice
+
+CLI flags: `--sid` (required), `--n-rois`, `--score-min`,
+`--score-max`, `--reviewer`, `--seed`.  Backend probed in order
+TkAgg → QtAgg → Qt5Agg.  Same `outputs/roi_qc_actions.jsonl` log
+as the notebook flavour (resume-safe across both).
+
+Snapshot: `outputs/previews/standalone_app_snapshot.png`.
+
+## Step 5 — Stage-2 GBT on human labels (2026-04-30)
+
+558 active labels collected across the 6 benchmark subjects
+(post-undo replay):
+
+| sid    | total | good | bad | bad_ok | merged | unsure |
+|--------|------:|-----:|----:|-------:|-------:|-------:|
+| 755252 |   146 |   52 |  41 |     35 |     17 |      1 |
+| 767018 |    84 |   61 |  15 |      7 |      1 |      0 |
+| 767022 |    80 |   52 |  15 |     11 |      1 |      1 |
+| 782149 |    80 |   51 |  18 |      8 |      3 |      0 |
+| 788406 |    88 |   48 |  15 |     18 |      5 |      2 |
+| 790322 |    80 |   51 |  17 |      9 |      1 |      2 |
+| ALL    |   558 |  315 | 121 |     88 |     28 |      6 |
+
+Two models trained, both LOSO across 6 subjects, drop unsure:
+
+**Binary** ({good, bad_ok}=1 vs {bad, merged}=0)
+- Mean AUC = 0.895, AP = 0.944, Brier = 0.109, acc@0.5 = 0.846
+- Per-subject AUC: 755252 (0.797) worst; 782149 (0.981) and
+  790322 (0.976) best.  755252 holds 61 % of all `merged`
+  samples, so LOSO-on-755252 is the hardest fold.
+- Top features by mean gain: volume_vox, solidity, volume_um3,
+  cprobe_p50/p10, bbox_occupancy.
+
+**4-class** (bad / bad_ok / good / merged)
+- Mean acc = 0.763, mean f1_macro = 0.520
+- Per-class F1 (mean across folds): bad 0.76, good 0.86,
+  bad_ok 0.31, merged 0.15.
+- Confusion: 22/28 (78 %) merged predicted as good; 41/88
+  bad_ok predicted as good.  Rare classes are starved — only
+  28 merged total, average 4–5 per non-755252 subject.
+- Conclusion: 4-class head is **not** ready for production
+  use of the merged/bad_ok distinctions.  Binary head is
+  solid for the QC gate.
+
+Outputs:
+- `outputs/stage2/binary_loso_metrics.csv`
+- `outputs/stage2/binary_feature_importance.csv`
+- `outputs/stage2/4class_loso_metrics.csv`
+- `outputs/stage2/4class_feature_importance.csv`
+- `outputs/stage2/4class_confusion_overall.csv`
+- `code/dev_code/cached_roi_quality/<sid>_stage2_binary_score.parquet`
+- `code/dev_code/cached_roi_quality/<sid>_stage2_4class_proba.parquet`
+- `code/dev_code/cached_roi_quality/roi_quality_stage2_binary.txt`
+- `code/dev_code/cached_roi_quality/roi_quality_stage2_4class.txt`
+- `code/dev_code/cached_roi_quality/roi_quality_stage2_meta.json`

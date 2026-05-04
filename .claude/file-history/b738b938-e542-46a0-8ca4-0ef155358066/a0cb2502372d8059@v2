@@ -1,0 +1,515 @@
+"""
+S11 / Step 4b — STANDALONE HCR ROI labelling GUI (no Jupyter).
+
+A pure matplotlib-window application.  Run from a shell with a
+display::
+
+    python code/sessions/v3_S11_roi_quality/04b_label_gui_app.py \
+        --sid 788406 --reviewer alice
+
+Why this exists alongside `04_label_gui.ipynb`: the notebook flavour
+needs `ipyevents` + `pyarrow` inside the live kernel, which is
+brittle (kernel restarts, user-site vs conda paths, etc.).  This
+standalone app uses only matplotlib's bundled widgets — no extra
+runtime requirements beyond the same data-loading helpers.
+
+Both flavours share `gui.py`'s helpers, so labels written here land
+in the same JSONL and feed Step 5 with no conversion.
+
+Layout (3-D orthoview)::
+
+    +-----------+ +-----------+ +-----------+
+    | xy axial  | | xz coronal| | yz sagit. |   matplotlib axes
+    +-----------+ +-----------+ +-----------+
+    | header (sid / hcr_id / score / i / N / shape)               |
+    | z [─────────●──────────]  ←── matplotlib.widgets.Slider     |
+    | (405)(488)(overlay) [☐ MIP]   features panel (right)        |
+    | [Good][Bad][Unsure][Skip][Undo][Quit]                       |
+    | last: good(14328) bad(14329) ...                            |
+    +-------------------------------------------------------------+
+
+Keyboard:
+    g / b / u            label good / bad / unsure (and advance)
+    s                    skip          z   undo            q  quit
+    j / down-arrow       z − 1
+    k / up-arrow         z + 1
+    m                    toggle MIP / single-slice
+    1 / 2 / 3            channel = 405 / 488 / overlay
+"""
+from __future__ import annotations
+
+import argparse
+import datetime as _dt
+import sys
+import uuid
+from pathlib import Path
+
+import matplotlib
+
+# Pick a backend that supports interactive windows.  TkAgg is in the
+# Python stdlib so it's the safest default; fall back to QtAgg if Tk
+# isn't available, then to the matplotlib default.
+for _bk in ("TkAgg", "QtAgg", "Qt5Agg"):
+    try:
+        matplotlib.use(_bk, force=True)
+        break
+    except Exception:  # pragma: no cover — backend probing
+        continue
+
+import matplotlib.pyplot as plt
+import numpy as np
+from matplotlib.widgets import Button, CheckButtons, RadioButtons, Slider
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+
+from gui import (  # noqa: E402  (sys.path mutation above is intentional)
+    KEY_DISPLAY_FEATURES,
+    LABEL_LOG,
+    ROOT,
+    _ROI,
+    _RoiCrops,
+    _append_label,
+    _load_label_log,
+    _load_roi_crops,
+    _planes_for_channel,
+    _sample_uncertain,
+)
+
+
+# ---------------------------------------------------------------------------
+# small utilities
+# ---------------------------------------------------------------------------
+def _format_features_text(features: dict) -> str:
+    lines = []
+    for k in KEY_DISPLAY_FEATURES:
+        if k not in features:
+            continue
+        v = features[k]
+        if v is None or (isinstance(v, float) and np.isnan(v)):
+            txt = "—"
+        elif isinstance(v, (bool, np.bool_)):
+            txt = "True" if v else "False"
+        elif isinstance(v, (int, np.integer)):
+            txt = f"{int(v)}"
+        else:
+            txt = f"{float(v):.3g}"
+        lines.append(f"{k:<28s} {txt}")
+    return "\n".join(lines)
+
+
+def _now_iso() -> str:
+    return _dt.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
+
+# ---------------------------------------------------------------------------
+# main app
+# ---------------------------------------------------------------------------
+class StandaloneLabeller:
+    """Single-window 3-D orthoview labelling app."""
+
+    def __init__(
+        self,
+        sid: str,
+        n_rois: int,
+        score_band: tuple[float, float],
+        reviewer: str,
+        seed: int,
+    ) -> None:
+        self.sid = sid
+        self.reviewer = reviewer
+        self.token = uuid.uuid4().hex[:8]
+
+        prior = _load_label_log()
+        skip = (
+            set(prior.loc[prior["sid"] == sid, "hcr_id"].astype(int))
+            if not prior.empty
+            else set()
+        )
+        rng = np.random.default_rng(seed)
+        self.rois: list[_ROI] = _sample_uncertain(sid, n_rois, score_band, rng, skip)
+        if not self.rois:
+            raise RuntimeError(
+                f"No uncertain ROIs to label for sid={sid} in score band "
+                f"{score_band}.  Either all ROIs in the band have already "
+                f"been labelled (resume guard) or the band is empty."
+            )
+
+        self.history: list[dict] = []
+        self.idx = 0
+        self.crops: _RoiCrops | None = None
+        self._suppress_slider = False
+
+        # Channel / MIP state
+        self._channel = "405"
+        self._mip = False
+
+        # ---- figure layout (axes positions in figure coords) ----
+        self.fig = plt.figure(
+            f"S11 labeller — sid={sid}  reviewer={reviewer}", figsize=(14.5, 9.5)
+        )
+
+        # Three image panels (top 50% of the figure)
+        self.ax_xy = self.fig.add_axes([0.04, 0.46, 0.30, 0.50])
+        self.ax_xz = self.fig.add_axes([0.36, 0.46, 0.30, 0.50])
+        self.ax_yz = self.fig.add_axes([0.68, 0.46, 0.30, 0.50])
+        for ax, ttl in [
+            (self.ax_xy, "xy (axial)"),
+            (self.ax_xz, "xz (coronal)"),
+            (self.ax_yz, "yz (sagittal)"),
+        ]:
+            ax.set_title(ttl, fontsize=10)
+            ax.set_xticks([])
+            ax.set_yticks([])
+
+        self._im_xy = self.ax_xy.imshow(np.zeros((1, 1)), cmap="gray", vmin=0, vmax=1)
+        self._im_xz = self.ax_xz.imshow(
+            np.zeros((1, 1)), cmap="gray", vmin=0, vmax=1, aspect="auto"
+        )
+        self._im_yz = self.ax_yz.imshow(
+            np.zeros((1, 1)), cmap="gray", vmin=0, vmax=1, aspect="auto"
+        )
+        self._contour_artists: list = []
+        self._crosshair_artists: list = []
+
+        # Header line
+        self.ax_header = self.fig.add_axes([0.04, 0.405, 0.94, 0.04])
+        self.ax_header.axis("off")
+        self.text_header = self.ax_header.text(
+            0, 0.5, "", va="center", ha="left", fontsize=11
+        )
+
+        # Z slider
+        self.ax_slider = self.fig.add_axes([0.10, 0.36, 0.85, 0.025])
+        self.slider = Slider(
+            self.ax_slider, "z", 0, 1, valinit=0, valstep=1, valfmt="%d"
+        )
+        self.slider.on_changed(self._on_slider)
+
+        # Channel radio
+        self.ax_radio = self.fig.add_axes([0.04, 0.20, 0.10, 0.13])
+        self.radio = RadioButtons(self.ax_radio, ("405", "488", "overlay"), active=0)
+        self.radio.on_clicked(self._on_channel)
+
+        # MIP checkbox
+        self.ax_check = self.fig.add_axes([0.16, 0.24, 0.07, 0.06])
+        self.check = CheckButtons(self.ax_check, ("MIP",), actives=[False])
+        self.check.on_clicked(self._on_mip)
+
+        # Features panel (right of channel/MIP)
+        self.ax_feat = self.fig.add_axes([0.26, 0.18, 0.72, 0.16])
+        self.ax_feat.axis("off")
+        self.ax_feat.set_title("Features", fontsize=9, loc="left")
+        self.text_feat = self.ax_feat.text(
+            0, 1, "", va="top", ha="left", fontsize=8.5, family="monospace"
+        )
+
+        # Action buttons
+        btn_w, btn_h, btn_y = 0.10, 0.05, 0.06
+        btn_xs = [0.04, 0.16, 0.28, 0.40, 0.52, 0.86]
+        btn_labels = [
+            "Good (g)", "Bad (b)", "Unsure (u)", "Skip (s)", "Undo (z)", "Quit (q)"
+        ]
+        btn_colors = ["#a8e6a8", "#f5b5b5", "#ffe4a3", "#dcdcdc", "#dcdcdc", "#dcdcdc"]
+        callbacks = [
+            lambda _e: self._record("good"),
+            lambda _e: self._record("bad"),
+            lambda _e: self._record("unsure"),
+            lambda _e: self._advance(),
+            lambda _e: self._undo(),
+            lambda _e: self._quit(),
+        ]
+        self.buttons = []
+        for x, lbl, color, cb in zip(btn_xs, btn_labels, btn_colors, callbacks):
+            ax = self.fig.add_axes([x, btn_y, btn_w, btn_h])
+            b = Button(ax, lbl, color=color, hovercolor="#bcd")
+            b.on_clicked(cb)
+            self.buttons.append(b)
+
+        # History strip
+        self.ax_hist = self.fig.add_axes([0.04, 0.005, 0.94, 0.04])
+        self.ax_hist.axis("off")
+        self.text_hist = self.ax_hist.text(
+            0, 0.5, "", va="center", ha="left", fontsize=9, color="#444"
+        )
+
+        # Keyboard
+        self.fig.canvas.mpl_connect("key_press_event", self._on_key)
+
+        # Render the first ROI
+        self._render()
+
+    # ---------------------------------------------------------------- events
+    def _on_key(self, event) -> None:
+        k = (event.key or "").lower()
+        if k == "g":
+            self._record("good")
+        elif k == "b":
+            self._record("bad")
+        elif k == "u":
+            self._record("unsure")
+        elif k == "s":
+            self._advance()
+        elif k == "z":
+            self._undo()
+        elif k == "q":
+            self._quit()
+        elif k in ("j", "down"):
+            self._step_z(-1)
+        elif k in ("k", "up"):
+            self._step_z(+1)
+        elif k == "m":
+            # Programmatic toggle of CheckButton — call set_active to fire callback
+            self.check.set_active(0)
+        elif k in ("1", "2", "3"):
+            new = ["405", "488", "overlay"][int(k) - 1]
+            # set_active also fires on_clicked
+            self.radio.set_active({"405": 0, "488": 1, "overlay": 2}[new])
+
+    def _on_slider(self, _val) -> None:
+        if self._suppress_slider:
+            return
+        self._redraw_orthoview()
+
+    def _on_channel(self, label) -> None:
+        self._channel = label
+        self._redraw_orthoview()
+
+    def _on_mip(self, _label) -> None:
+        # CheckButtons.get_status() -> [bool]
+        self._mip = bool(self.check.get_status()[0])
+        self._redraw_orthoview()
+
+    # ---------------------------------------------------------------- nav
+    def _step_z(self, delta: int) -> None:
+        if self.crops is None:
+            return
+        Z = self.crops.shape[0]
+        new_z = int(np.clip(self.slider.val + delta, 0, Z - 1))
+        self.slider.set_val(new_z)  # fires _on_slider
+
+    def _current(self) -> _ROI | None:
+        if self.idx >= len(self.rois):
+            return None
+        return self.rois[self.idx]
+
+    def _record(self, label: str) -> None:
+        roi = self._current()
+        if roi is None:
+            return
+        rec = {
+            "ts": _now_iso(),
+            "sid": roi.sid,
+            "hcr_id": roi.hcr_id,
+            "label": label,
+            "stage1_score": roi.score,
+            "reviewer": self.reviewer,
+            "session_token": self.token,
+        }
+        _append_label(rec)
+        self.history.append(rec)
+        self._advance()
+
+    def _advance(self) -> None:
+        self.idx += 1
+        self._render()
+
+    def _undo(self) -> None:
+        if not self.history or self.idx == 0:
+            return
+        last = self.history.pop()
+        tomb = {
+            "ts": _now_iso(),
+            "sid": last["sid"],
+            "hcr_id": last["hcr_id"],
+            "label": "_undone_",
+            "undoes": last,
+            "reviewer": self.reviewer,
+            "session_token": self.token,
+        }
+        _append_label(tomb)
+        self.idx = max(0, self.idx - 1)
+        self._render()
+
+    def _quit(self) -> None:
+        self.text_header.set_text(
+            f"Session ended — {len(self.history)} labels written to "
+            f"{LABEL_LOG.relative_to(ROOT)}.  You can close this window."
+        )
+        self.fig.canvas.draw_idle()
+        plt.close(self.fig)
+
+    # ---------------------------------------------------------------- render
+    def _clear_overlay(self) -> None:
+        for art in self._contour_artists:
+            try:
+                art.remove()
+            except Exception:
+                pass
+        self._contour_artists = []
+        for art in self._crosshair_artists:
+            try:
+                art.remove()
+            except Exception:
+                pass
+        self._crosshair_artists = []
+
+    def _draw_overlay(self, xy_mask, xz_mask, yz_mask) -> None:
+        for ax, m in [
+            (self.ax_xy, xy_mask),
+            (self.ax_xz, xz_mask),
+            (self.ax_yz, yz_mask),
+        ]:
+            if m.any():
+                cs = ax.contour(
+                    m.astype(np.uint8), levels=[0.5],
+                    colors="red", linewidths=1.0,
+                )
+                self._contour_artists.append(cs)
+        if self._mip or self.crops is None:
+            return
+        z_idx = int(self.slider.val)
+        yc = self.crops.y_anchor
+        xc = self.crops.x_anchor
+        self._crosshair_artists.append(
+            self.ax_xy.axvline(xc, color="cyan", lw=0.5, alpha=0.7))
+        self._crosshair_artists.append(
+            self.ax_xy.axhline(yc, color="cyan", lw=0.5, alpha=0.7))
+        self._crosshair_artists.append(
+            self.ax_xz.axvline(xc, color="cyan", lw=0.5, alpha=0.7))
+        self._crosshair_artists.append(
+            self.ax_xz.axhline(z_idx, color="cyan", lw=0.5, alpha=0.7))
+        self._crosshair_artists.append(
+            self.ax_yz.axvline(yc, color="cyan", lw=0.5, alpha=0.7))
+        self._crosshair_artists.append(
+            self.ax_yz.axhline(z_idx, color="cyan", lw=0.5, alpha=0.7))
+
+    def _redraw_orthoview(self) -> None:
+        if self.crops is None:
+            return
+        z_idx = int(self.slider.val)
+        (xy_img, xy_mask), (xz_img, xz_mask), (yz_img, yz_mask) = _planes_for_channel(
+            self.crops, channel=self._channel, mip=self._mip, z_idx=z_idx
+        )
+        self._im_xy.set_data(xy_img)
+        self._im_xz.set_data(xz_img)
+        self._im_yz.set_data(yz_img)
+        self._clear_overlay()
+        self._draw_overlay(xy_mask, xz_mask, yz_mask)
+        self.fig.canvas.draw_idle()
+
+    def _resize_axes_for_crop(self) -> None:
+        Z, Y, X = self.crops.shape
+        self._im_xy.set_extent((-0.5, X - 0.5, Y - 0.5, -0.5))
+        self.ax_xy.set_xlim(-0.5, X - 0.5)
+        self.ax_xy.set_ylim(Y - 0.5, -0.5)
+        self._im_xz.set_extent((-0.5, X - 0.5, Z - 0.5, -0.5))
+        self.ax_xz.set_xlim(-0.5, X - 0.5)
+        self.ax_xz.set_ylim(Z - 0.5, -0.5)
+        self._im_yz.set_extent((-0.5, Y - 0.5, Z - 0.5, -0.5))
+        self.ax_yz.set_xlim(-0.5, Y - 0.5)
+        self.ax_yz.set_ylim(Z - 0.5, -0.5)
+
+    def _update_slider_for_crop(self) -> None:
+        Z = self.crops.shape[0]
+        new_max = max(0, Z - 1)
+        self._suppress_slider = True
+        try:
+            self.slider.valmax = new_max
+            self.slider.ax.set_xlim(self.slider.valmin, new_max)
+            self.slider.set_val(int(self.crops.z_anchor))
+        finally:
+            self._suppress_slider = False
+
+    def _update_history_strip(self) -> None:
+        items = []
+        for h in self.history[-6:]:
+            color = {"good": "#1a7f37", "bad": "#cf222e", "unsure": "#9a6700"}.get(
+                h["label"], "#666"
+            )
+            items.append(f"{h['label']}(#{h['hcr_id']})")
+            _ = color  # color in matplotlib text is per-segment, omit for brevity
+        self.text_hist.set_text("last: " + ", ".join(items) if items else "")
+
+    def _render(self) -> None:
+        roi = self._current()
+        if roi is None:
+            n_g = sum(1 for h in self.history if h["label"] == "good")
+            n_b = sum(1 for h in self.history if h["label"] == "bad")
+            n_u = sum(1 for h in self.history if h["label"] == "unsure")
+            self.text_header.set_text(
+                f"DONE — {len(self.history)} labels  "
+                f"({n_g} good / {n_b} bad / {n_u} unsure).  "
+                f"You can close this window."
+            )
+            self.text_feat.set_text("")
+            self._clear_overlay()
+            self._im_xy.set_data(np.zeros((1, 1)))
+            self._im_xz.set_data(np.zeros((1, 1)))
+            self._im_yz.set_data(np.zeros((1, 1)))
+            self.fig.canvas.draw_idle()
+            return
+
+        try:
+            self.crops = _load_roi_crops(roi)
+        except Exception as exc:
+            self.text_header.set_text(
+                f"sid={roi.sid}  hcr_id={roi.hcr_id} — load error: {exc}"
+            )
+            self.fig.canvas.draw_idle()
+            return
+
+        Z, Y, X = self.crops.shape
+        self._update_slider_for_crop()
+        self.text_header.set_text(
+            f"sid={roi.sid}   hcr_id={roi.hcr_id}   "
+            f"score={roi.score:.3f}   shape (Z×Y×X)={Z}×{Y}×{X}   "
+            f"[{self.idx + 1} / {len(self.rois)}]   reviewer={self.reviewer}"
+        )
+        self.text_feat.set_text(_format_features_text(roi.features))
+        self._resize_axes_for_crop()
+        self._redraw_orthoview()
+        self._update_history_strip()
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        description="Standalone HCR ROI labelling GUI (no Jupyter).",
+    )
+    p.add_argument("--sid", required=True, help="Subject ID, e.g. 788406")
+    p.add_argument("--n-rois", type=int, default=80, help="ROIs to sample")
+    p.add_argument("--score-min", type=float, default=0.3,
+                   help="Lower bound of Stage-1 uncertain band")
+    p.add_argument("--score-max", type=float, default=0.7,
+                   help="Upper bound of Stage-1 uncertain band")
+    p.add_argument("--reviewer", default="anonymous",
+                   help="Reviewer name to record in every label")
+    p.add_argument("--seed", type=int, default=20260429,
+                   help="RNG seed for reproducible sampling")
+    return p.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    print(f"S11 standalone labeller  backend={matplotlib.get_backend()}")
+    print(f"  sid={args.sid}  n_rois={args.n_rois}  "
+          f"band=({args.score_min}, {args.score_max})  reviewer={args.reviewer}")
+    app = StandaloneLabeller(
+        sid=args.sid,
+        n_rois=args.n_rois,
+        score_band=(args.score_min, args.score_max),
+        reviewer=args.reviewer,
+        seed=args.seed,
+    )
+    print(f"  loaded {len(app.rois)} ROIs to label  log={LABEL_LOG}")
+    print("  shortcuts: g/b/u label  s skip  z undo  q quit  "
+          "j/k or arrows scroll z  m MIP  1/2/3 channel")
+    plt.show()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

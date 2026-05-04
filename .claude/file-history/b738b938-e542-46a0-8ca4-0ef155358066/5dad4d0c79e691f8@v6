@@ -1,0 +1,117 @@
+---
+name: S11 v5d promoted to main (expansion-rate-independent)
+description: 2026-05-01 v5d (drop µm + voxel companions, shell=4 vox from boundary) is the production stage-2 model. v5 superseded. Latest retrain on 1648 labels.
+type: project
+originSessionId: b738b938-e542-46a0-8ca4-0ef155358066
+---
+**Decision (2026-05-01)**: v5d replaces v5 as the S11 stage-2 production
+model. Rationale = expansion-rate independence: per-sample µm calibration is
+metadata-level only (not biological expansion factor), but the user wants
+features that don't drift with subject-to-subject expansion variability.
+
+**v5d already implements "shell thickness = 4 pixels from boundary inward":**
+- `roi_v6_voxel.py` calls `all_v4_features(..., vz=1, vy=1, vx=1, r_core_um=4.0)`
+- That makes `ndi.distance_transform_edt(mask, sampling=(1,1,1))` measure
+  voxel distance from the mask boundary, and `core = dist >= 4` voxels.
+- Shell = `mask_opened & ~core` = within 4 voxels of boundary inward.
+- All `*_vox*` feature names (e.g. `c405_shell_minus_core4vox_p50`,
+  `core4vox_voxel_frac_opened`) carry this convention.
+
+**Public production API (use this from `analyze_subject` / future code):**
+`code/dev_code/roi_quality_v5d.py` exposes:
+- `FEATURE_COLUMNS` (92), `PCT_RANK_COLS`, `CLASS_NAMES`, `BINARY_POS/NEG`,
+  `LGB_BINARY`, `LGB_MULTI`, `CACHE_DIR`, `MODEL_BINARY`, `MODEL_FOUR_CLASS`,
+  `META_JSON` constants
+- `extract_features(sid)` — reads cached v2/v3_extra/v4/v5/v6_vox parquets,
+  applies pct-subj ranks, returns DataFrame with `["hcr_id"] + FEATURE_COLUMNS`
+- `train(subjects, label_log_path, out_dir)` — LOSO + final-model fitting,
+  writes models + meta JSON + per-subject OOF parquets
+- `predict(features_df)` → `(binary_score, four_class_proba)`
+- `predict_subject(sid)` — one-call extract + predict for inference
+Inference parity vs production model: max abs diff = 0.0 (identical).
+
+**Production artefacts (point downstream code here):**
+All cached files live under `code/dev_code/cached_roi_quality/` (this is the
+authoritative `CACHE` dir referenced by `roi_quality_v5d.py`, the session
+trainer, and the GUI; there is no `cached_roi_quality/` at repo root or
+session root).
+
+- Models (LightGBM .txt):
+  - `roi_quality_stage2_binary_v5d.txt`
+  - `roi_quality_stage2_4class_v5d.txt`
+- Meta (canonical 92-feature column list, params, LOSO metrics):
+  `roi_quality_stage2_meta_v5d.json`
+- Per-subject OOF (all 6 subjects, present and verified 2026-05-01):
+  `{sid}_stage2_binary_score_v5d.parquet`,
+  `{sid}_stage2_4class_proba_v5d.parquet`
+- Per-subject feature parquets the trainer concatenates (5 versions × 6
+  subjects, all present and verified 2026-05-01):
+  `{sid}_features_v2.parquet`, `{sid}_features_v3_extra.parquet`,
+  `{sid}_features_v4.parquet`, `{sid}_features_v5.parquet`,
+  `{sid}_features_v6_vox.parquet`
+  (v7 / neighbors_v1 / stage3 parquets exist but are **not** consumed by v5d.)
+
+**Trainer:** `code/sessions/v3_S11_roi_quality/05h_train_stage2_v5d.py`
+(reads the 5 feature versions above, applies `DROP_FEATURES`/
+`DROP_UM_FEATURES`/`DROP_DEAD_FEATURES`/`DROP_LOW_GAIN_V3_EXTRA`, computes
+`PCT_RANK_COLS` within-subject ranks, fits binary + 4-class LOSO).
+
+**Feature-extraction pipeline (run these to regenerate per-subject parquets):**
+| Script (`code/sessions/v3_S11_roi_quality/`) | Feature module (`code/dev_code/`)                       | Output parquet              |
+|----------------------------------------------|---------------------------------------------------------|-----------------------------|
+| `01b_extract_features_v2.py`                 | `roi_quality_v2.py`                                     | `{sid}_features_v2.parquet` |
+| `01c_extract_features_v3.py`                 | `roi_quality_v3.py` + `roi_v3_axis_features.py`         | `{sid}_features_v3_extra.parquet` |
+| `01d_extract_features_v4.py`                 | `roi_quality_v4.py`                                     | `{sid}_features_v4.parquet` |
+| `01e_extract_features_v5.py`                 | `roi_quality_v5.py`                                     | `{sid}_features_v5.parquet` |
+| `01g_extract_features_v6.py`                 | `roi_v6_voxel.py`                                       | `{sid}_features_v6_vox.parquet` |
+
+01b and 01c support `--workers N` (default 6, `multiprocessing.Pool(spawn)`)
+for ~3× wall-clock speedup over the 6 subjects. v3 axis module accepts
+`compute_dropped_peaks=False` to NaN-fill the 10 dropped peak counters.
+
+**Downstream consumer:** `code/sessions/v3_S11_roi_quality/gui.py` loads
+`{sid}_stage2_{binary_score,4class_proba}_v5d.parquet` plus the v5d feature
+stack via `_load_v5d_features` (mirrors trainer's PCT_RANK_COLS).
+
+**LOSO performance @ 1648 labels (2026-05-01, post-trim):**
+- Binary AUC **0.917**, 4-class **acc 0.719**, **f1_macro 0.720**
+- 92 active features (107 → 92 after dropping 5 dead features + 10 low-gain
+  v3_extra peak counters; A/B vs untrimmed: +0.006 AUC, +0.010 f1_macro,
+  +0.017 f1_bad_ok)
+- Worst fold = **782149** (sharp drop persists)
+- 782149 f1_bad_ok: **0.28 → 0.39** (priority target, real improvement)
+
+**Headline metrics regressed vs 1274-label run** (binary AUC 0.943 → 0.918;
+f1_macro 0.733 → 0.716) because the +374 newly-added labels were specifically
+the lowest-margin (hardest) cells per `labelling_priority_v5d.csv`. Eval set
+got systematically harder — not a model regression. The bottleneck class
+(782149 bad_ok) improved on the priority target; the global confusion matrix
+shows the persistent good↔bad_ok confusion (true_bad_ok→pred_good = 88,
+true_good→pred_bad_ok = 93).
+
+**Active label totals (2026-05-01, post-undo):**
+| sid    | total | good | bad | bad_ok | merged | unsure |
+|--------|------:|-----:|----:|-------:|-------:|-------:|
+| 755252 |   349 |  100 |  57 |     89 |     99 |      4 |
+| 767018 |   279 |  115 |  38 |     72 |     52 |      2 |
+| 767022 |   263 |   86 |  36 |     76 |     64 |      1 |
+| 782149 |   257 |   88 |  55 |     54 |     58 |      2 |
+| 788406 |   260 |   71 |  29 |     77 |     81 |      2 |
+| 790322 |   253 |   72 |  42 |     79 |     58 |      2 |
+| total  |  1661 |  532 | 257 |    447 |    412 |     13 |
+
+**4-class top features by mean gain (latest):**
+1. `axis3d_lambda1_um2_pct_subj` (within-subject pct rank — expansion-safe)
+2. `solidity_opened`
+3. `sphericity_opened`
+4. `c405_shell_over_core4vox_p50_ratio`
+5. `frac_kept_opening`
+
+**Why not v5:** v5 keeps 31 absolute-µm features that scale with imaging
+calibration. Within-subject pct features survive expansion (rank-based) but
+absolute µm features encode the metadata-recorded voxel size, which conflates
+genuine size with imaging-grid scaling.
+
+**How to apply:** any new stage-3 / downstream / GUI logic must read
+`*_v5d.parquet` and `roi_quality_stage2_*_v5d.txt`. v5 artefacts kept on disk
+for comparison but no longer canonical.

@@ -1,0 +1,132 @@
+#!/usr/bin/env python3
+"""Driver: extract v3-NEW per-ROI features (axis profile + projections + waist).
+
+Outputs `cached_roi_quality/{sid}_features_v3_extra.parquet`.  v2 features
+remain in `{sid}_features_v2.parquet`; the trainer (05c) concatenates them.
+
+Usage:
+    python 01c_extract_features_v3.py [--force] [--workers 6] [--subjects 782149 ...]
+"""
+from __future__ import annotations
+
+import argparse
+import sys
+import time
+from pathlib import Path
+
+import pandas as pd
+
+DEV_CODE = Path("/root/capsule/code/dev_code")
+SESSION_DIR = Path("/root/capsule/code/sessions/v3_S11_roi_quality")
+OUTPUTS_DIR = SESSION_DIR / "outputs"
+OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+
+sys.path.insert(0, str(DEV_CODE))
+
+from benchmark_data_loader import load_subject, BENCHMARK_SUBJECTS
+from roi_quality_v3 import extract_v3_extras, _features_v3_extra_cache_path
+
+DEFAULT_SUBJECTS = list(BENCHMARK_SUBJECTS)
+
+
+def _summary(sid: str, df: pd.DataFrame, elapsed: float) -> dict:
+    def _med(c):
+        return float(df[c].median()) if c in df.columns and df[c].notna().any() else float("nan")
+    return {
+        "sid": sid,
+        "n_roi": len(df),
+        "elapsed_s": round(elapsed, 1),
+        "med_axis3d_extent_um": _med("axis3d_extent_um"),
+        "med_axis3d_lambda_l1_l3": _med("axis3d_lambda_ratio_l1_l3"),
+        "med_axis3d_n_peaks_intens": _med("axis3d_n_peaks_inner_intens"),
+        "med_axis3d_section_min_med": _med("axis3d_section_min_over_med_area"),
+        "med_proj_xy_n_peaks_main": _med("proj_xy_main_n_peaks_inner"),
+        "med_proj_yz_n_peaks_main": _med("proj_yz_main_n_peaks_inner"),
+        "med_proj_zx_n_peaks_main": _med("proj_zx_main_n_peaks_inner"),
+        "frac_axis3d_intens_n_peaks_ge2": (
+            float((df["axis3d_n_peaks_inner_intens"] >= 2).mean())
+            if "axis3d_n_peaks_inner_intens" in df.columns else float("nan")
+        ),
+    }
+
+
+def _extract_subject(args: tuple) -> dict:
+    """Top-level picklable worker: (sid, force, bin_um) -> result dict."""
+    sid, force, bin_um = args
+    sys.path.insert(0, str(DEV_CODE))
+    from benchmark_data_loader import load_subject
+    from roi_quality_v3 import extract_v3_extras, _features_v3_extra_cache_path
+    import pandas as pd
+    import time
+
+    cache_path = _features_v3_extra_cache_path(sid)
+    if cache_path.exists() and not force:
+        print(f"  [CACHE HIT] {sid}: loading {cache_path}", flush=True)
+        t0 = time.time()
+        df = pd.read_parquet(cache_path)
+        elapsed = time.time() - t0
+        return {"sid": sid, "status": "cache_hit", "n_roi": len(df), "elapsed_s": elapsed}
+    try:
+        s = load_subject(sid)
+        t0 = time.time()
+        df = extract_v3_extras(s, cache=True, bin_um=bin_um, compute_dropped_peaks=False)
+        elapsed = time.time() - t0
+        return {"sid": sid, "status": "extracted", "n_roi": len(df), "elapsed_s": elapsed}
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        return {"sid": sid, "status": "error", "error": str(exc), "elapsed_s": 0.0}
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--force", action="store_true")
+    parser.add_argument("--workers", type=int, default=6)
+    parser.add_argument("--subjects", nargs="+", default=None,
+                        help=f"Subset (default: {DEFAULT_SUBJECTS})")
+    parser.add_argument("--bin-um", type=float, default=1.0)
+    args = parser.parse_args()
+
+    subjects = args.subjects or DEFAULT_SUBJECTS
+    print(f"v3 extraction → {len(subjects)} subjects, workers={args.workers}, force={args.force}")
+    t0_all = time.time()
+
+    from multiprocessing import get_context
+    worker_args = [(sid, args.force, args.bin_um) for sid in subjects]
+    ctx = get_context("spawn")
+    with ctx.Pool(processes=min(args.workers, len(subjects))) as pool:
+        results = list(pool.imap_unordered(_extract_subject, worker_args))
+
+    print(f"\n=== ALL DONE in {time.time() - t0_all:.0f}s ===")
+
+    rows, errors = [], []
+    for r in results:
+        sid = r["sid"]
+        if r.get("status") == "error":
+            print(f"  ERROR [{sid}]: {r.get('error')}")
+            errors.append(r)
+            continue
+        cache_path = _features_v3_extra_cache_path(sid)
+        if cache_path.exists():
+            df = pd.read_parquet(cache_path)
+            row = _summary(sid, df, r["elapsed_s"])
+            rows.append(row)
+            print(f"\n  Summary for {sid}:")
+            for k, v in row.items():
+                print(f"    {k}: {v}")
+
+    if rows:
+        out_csv = OUTPUTS_DIR / "feature_summary_v3_extra.csv"
+        pd.DataFrame(rows).to_csv(out_csv, index=False)
+        print(f"\n\nSummary written to {out_csv}")
+        print(pd.DataFrame(rows).to_string(index=False))
+
+    if errors:
+        print(f"\nERRORS ({len(errors)}):")
+        for e in errors:
+            print(f"  {e['sid']}: {e.get('error')}")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,67 @@
+{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "# S11 — HCR ROI labelling GUI\n",
+    "\n",
+    "Walk through a sample of uncertain ROIs (Stage-1 score in `[0.3, 0.7]`) and label each as **good / bad / unsure**.\n",
+    "Shortcuts: **g** = good, **b** = bad, **u** = unsure, **s** = skip, **z** = undo. Or click the buttons.\n",
+    "\n",
+    "Labels are appended to `outputs/roi_qc_actions.jsonl` (resume-safe — already-labelled ROIs are skipped on next launch).\n",
+    "\n",
+    "Edit the cell below to switch subject / sample size / reviewer name."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "import sys\n",
+    "from pathlib import Path\n",
+    "sys.path.insert(0, str(Path('/root/capsule/code/sessions/v3_S11_roi_quality').resolve()))\n",
+    "from gui import launch, label_progress\n",
+    "\n",
+    "session = launch(\n",
+    "    sid=\"788406\",\n",
+    "    n_rois=80,\n",
+    "    score_band=(0.3, 0.7),\n",
+    "    reviewer=\"YOUR_NAME\",\n",
+    ")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "### Progress so far\n",
+    "Run this cell any time to see how many labels have been recorded across subjects."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "label_progress()"
+   ]
+  }
+ ],
+ "metadata": {
+  "kernelspec": {
+   "display_name": "Python 3",
+   "language": "python",
+   "name": "python3"
+  },
+  "language_info": {
+   "name": "python",
+   "version": "3.11"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 5
+}

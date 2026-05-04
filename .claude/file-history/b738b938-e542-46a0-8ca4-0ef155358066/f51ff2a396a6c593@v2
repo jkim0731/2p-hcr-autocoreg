@@ -1,0 +1,100 @@
+#!/usr/bin/env python3
+"""Driver: extract v2 per-ROI features for all 6 benchmark subjects.
+
+Usage:
+    python 01b_extract_features_v2.py [--force] [--subjects 755252 ...]
+"""
+from __future__ import annotations
+
+import argparse
+import sys
+import time
+from pathlib import Path
+
+import pandas as pd
+
+DEV_CODE = Path("/root/capsule/code/dev_code")
+SESSION_DIR = Path("/root/capsule/code/sessions/v3_S11_roi_quality")
+OUTPUTS_DIR = SESSION_DIR / "outputs"
+OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+
+sys.path.insert(0, str(DEV_CODE))
+
+from benchmark_data_loader import load_subject, BENCHMARK_SUBJECTS
+from roi_quality_v2 import extract_roi_features_v2, _features_v2_cache_path
+
+DEFAULT_SUBJECTS = list(BENCHMARK_SUBJECTS)
+
+
+def _summary(sid: str, df: pd.DataFrame, elapsed: float) -> dict:
+    def _med(c):
+        return float(df[c].median()) if c in df.columns and df[c].notna().any() else float("nan")
+    return {
+        "sid": sid,
+        "n_roi": len(df),
+        "elapsed_s": round(elapsed, 1),
+        "median_volume_vox_raw": _med("volume_vox_raw"),
+        "median_frac_kept_opening": _med("frac_kept_opening"),
+        "median_solidity_raw": _med("solidity_raw"),
+        "median_solidity_opened": _med("solidity_opened"),
+        "median_c405_shell_minus_core_p50": _med("c405_shell_minus_core_p50"),
+        "median_c405_inside_minus_outside_p50": _med("c405_inside_minus_outside_p50"),
+        "median_n_touching_neighbors": _med("n_touching_neighbors"),
+        "median_surface_touching_frac": _med("surface_touching_frac"),
+        "frac_boundary_touching": (
+            float(df["boundary_touching"].mean()) if "boundary_touching" in df.columns else float("nan")
+        ),
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--force", action="store_true", help="Re-extract even if cache exists.")
+    parser.add_argument("--subjects", nargs="+", default=None,
+                        help=f"Subset of subjects (default: {DEFAULT_SUBJECTS})")
+    args = parser.parse_args()
+
+    subjects = args.subjects or DEFAULT_SUBJECTS
+    rows, errors = [], []
+
+    for sid in subjects:
+        print(f"\n{'=' * 60}\nSubject {sid}\n{'=' * 60}")
+        cache_path = _features_v2_cache_path(sid)
+        if cache_path.exists() and not args.force:
+            print(f"  [CACHE HIT] loading {cache_path}")
+            t0 = time.time()
+            df = pd.read_parquet(cache_path)
+            elapsed = time.time() - t0
+        else:
+            try:
+                s = load_subject(sid)
+                t0 = time.time()
+                df = extract_roi_features_v2(s, cache=True)
+                elapsed = time.time() - t0
+            except Exception as exc:
+                import traceback
+                print(f"\n  ERROR [{sid}]: {exc}")
+                traceback.print_exc()
+                errors.append({"sid": sid, "error": str(exc)})
+                continue
+        row = _summary(sid, df, elapsed)
+        rows.append(row)
+        print(f"\n  Summary for {sid}:")
+        for k, v in row.items():
+            print(f"    {k}: {v}")
+
+    if rows:
+        out_csv = OUTPUTS_DIR / "feature_summary_v2.csv"
+        pd.DataFrame(rows).to_csv(out_csv, index=False)
+        print(f"\n\nSummary written to {out_csv}")
+        print(pd.DataFrame(rows).to_string(index=False))
+
+    if errors:
+        print(f"\nERRORS ({len(errors)}):")
+        for e in errors:
+            print(f"  {e['sid']}: {e['error']}")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

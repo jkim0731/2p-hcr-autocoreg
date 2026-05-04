@@ -1,0 +1,44 @@
+#!/usr/bin/env python3
+"""Driver: extract per-cell neighbor lists (long format) for stage-3.
+
+Writes `cached_roi_quality/{sid}_neighbors_v1.parquet` with one row per
+(hcr_id, neighbor_id) pair (`overlap_voxels`, `rim_voxels` columns).
+
+Usage:
+    python 01f_extract_neighbors.py [--force] [--workers 6] [--subjects ...]
+"""
+from __future__ import annotations
+
+import argparse
+import sys
+import time
+from pathlib import Path
+
+DEV_CODE = Path("/root/capsule/code/dev_code")
+sys.path.insert(0, str(DEV_CODE))
+
+from benchmark_data_loader import BENCHMARK_SUBJECTS  # noqa: E402
+from roi_v5_neighbors import extract_neighbors_all  # noqa: E402
+
+DEFAULT_SUBJECTS = list(BENCHMARK_SUBJECTS)
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--force", action="store_true")
+    ap.add_argument("--workers", type=int, default=6)
+    ap.add_argument("--subjects", nargs="+", default=None)
+    args = ap.parse_args()
+
+    subjects = args.subjects or DEFAULT_SUBJECTS
+    print(f"neighbors extraction → {len(subjects)} subjects, "
+          f"workers={args.workers}, force={args.force}")
+    t0 = time.time()
+    results = extract_neighbors_all(subjects, workers=args.workers, force=args.force)
+    print(f"\n=== ALL DONE in {time.time() - t0:.0f}s ===")
+    for r in results:
+        print(f"  {r}")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,32 @@
+---------------------------------------------------------------------------
+ImportError                               Traceback (most recent call last)
+Cell In[1], line 6
+      3 sys.path.insert(0, str(Path('/root/capsule/code/sessions/v3_S11_roi_quality').resolve()))
+      4 from gui import launch, label_progress
+----> 6 session = launch(
+      7     sid="788406",
+      8     n_rois=80,
+      9     score_band=(0.3, 0.7),
+     10     reviewer="YOUR_NAME",
+     11 )
+
+File ~/capsule/code/sessions/v3_S11_roi_quality/gui.py:680, in launch(sid, n_rois, score_band, reviewer, seed)
+    672 def launch(
+    673     sid: str,
+    674     n_rois: int = 80,
+   (...)
+    677     seed: int = 20260429,
+    678 ) -> LabelSession:
+    679     """Convenience: build and display a `LabelSession`."""
+--> 680     sess = LabelSession(
+    681         sid=sid,
+    682         n_rois=n_rois,
+    683         score_band=score_band,
+    684         reviewer=reviewer,
+...
+ImportError: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - `Import pyarrow` failed. pyarrow is required for parquet support. Use pip or conda to install the pyarrow package.
+ - `Import fastparquet` failed. fastparquet is required for parquet support. Use pip or conda to install the fastparquet package.
+Output is truncated. View as a scrollable element or open in a text editor. Adjust cell output settings...

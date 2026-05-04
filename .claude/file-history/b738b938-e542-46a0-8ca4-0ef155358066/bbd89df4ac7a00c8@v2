@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+"""Build a bad_ok labelling queue from v4 stage-2 4-class probabilities.
+
+Picks the top-K unlabelled ROIs per subject ranked by `p_bad_ok` (descending),
+writes a CSV the GUI can consume via `--candidates`.
+
+Bad_ok was the weakest 4-class fold (mean f1=0.30; one fold f1=0.00) — the
+model has views on which unlabelled ROIs are bad_ok-like, so labelling those
+gives the most lift per click.
+
+Usage:
+    python 09_select_bad_ok_v4.py [--per-subject 50] [--p-min 0.4] [--out path]
+    python 04b_label_gui_app.py --reviewer alice \\
+        --candidates outputs/stage2/label_candidates_bad_ok_v4.csv \\
+        --sid 755252 767018 767022 782149 788406 790322
+"""
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+
+import pandas as pd
+
+ROOT = Path("/root/capsule")
+CACHE = ROOT / "code/dev_code/cached_roi_quality"
+SESS = ROOT / "code/sessions/v3_S11_roi_quality"
+LABEL_LOG = SESS / "outputs/roi_qc_actions.jsonl"
+DEFAULT_OUT = SESS / "outputs/stage2/label_candidates_bad_ok_v4.csv"
+
+SUBJECTS = ["755252", "767018", "767022", "782149", "788406", "790322"]
+ACTIVE_LABELS = {"good", "bad", "bad_ok", "merged", "unsure"}
+
+
+def _active_hcr_ids(sid: str) -> set[int]:
+    if not LABEL_LOG.exists():
+        return set()
+    log = pd.read_json(LABEL_LOG, lines=True)
+    sub = log[log["sid"].astype(str) == sid].copy()
+    if sub.empty:
+        return set()
+    tomb_ids: set[int] = set()
+    if (sub["label"] == "_undone_").any():
+        for _, r in sub[sub["label"] == "_undone_"].iterrows():
+            ub = r.get("undoes") or {}
+            try:
+                tomb_ids.add(int(ub.get("hcr_id", -1)))
+            except (TypeError, ValueError):
+                pass
+    sub = sub[sub["label"].isin(ACTIVE_LABELS)]
+    sub = sub[~sub["hcr_id"].astype(int).isin(tomb_ids)]
+    return set(sub["hcr_id"].astype(int).tolist())
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--per-subject", type=int, default=50)
+    ap.add_argument("--p-min", type=float, default=0.4,
+                    help="Drop candidates with p_bad_ok below this floor.")
+    ap.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    ap.add_argument("--subjects", nargs="+", default=None)
+    args = ap.parse_args()
+    subjects = args.subjects or SUBJECTS
+
+    rows = []
+    print(f"Building bad_ok queue from v4 oof: per-subject={args.per_subject}, "
+          f"p_min={args.p_min}")
+    for sid in subjects:
+        oof_p = CACHE / f"{sid}_stage2_4class_proba_v4.parquet"
+        if not oof_p.exists():
+            print(f"  [{sid}] MISSING {oof_p.name} — skipping")
+            continue
+        df = pd.read_parquet(oof_p)
+        active = _active_hcr_ids(sid)
+        df = df[~df["hcr_id"].astype(int).isin(active)].copy()
+        df = df[df["p_bad_ok"] >= args.p_min]
+        df = df.sort_values("p_bad_ok", ascending=False).head(args.per_subject)
+        df.insert(0, "sid", sid)
+        rows.append(df[["sid", "hcr_id", "p_bad", "p_bad_ok", "p_good", "p_merged"]])
+        if len(df):
+            top = df.iloc[0]
+            print(f"  [{sid}] picked {len(df):3d}  "
+                  f"p_bad_ok range [{df['p_bad_ok'].min():.3f}, {df['p_bad_ok'].max():.3f}]  "
+                  f"top hcr_id={int(top['hcr_id'])} (p={top['p_bad_ok']:.3f})")
+        else:
+            print(f"  [{sid}] picked   0 (none above threshold)")
+
+    if not rows:
+        print("No candidates — nothing written.")
+        return
+
+    out_df = pd.concat(rows, axis=0, ignore_index=True)
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    out_df.to_csv(args.out, index=False)
+    print(f"\nWrote {len(out_df)} candidates → {args.out}")
+    print(f"  per subject:")
+    for sid, n in out_df.groupby("sid").size().items():
+        print(f"    {sid}: {n}")
+    print("\nNext: launch GUI with this queue, e.g.")
+    print(f"  python {SESS}/04b_label_gui_app.py --reviewer YOUR_NAME \\")
+    print(f"      --candidates {args.out} --sid " + " ".join(subjects))
+
+
+if __name__ == "__main__":
+    main()

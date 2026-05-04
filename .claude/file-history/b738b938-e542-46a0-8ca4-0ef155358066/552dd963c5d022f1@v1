@@ -1,0 +1,47 @@
+
+## Automated branch (in development)
+
+**Currently promoted (cached for all 6 benchmark subjects):**
+- Pia / surface fits — `code/dev_code/surfaces_iter08.py`
+  (`get_cz_surface_iter08`, `get_hcr_top_surface_iter07`,
+  `get_hcr_bottom_surface_iter08`).
+- `sxy` from per-cell ROI-area ratio — `code/dev_code/roi_area_sxy.py`
+  (`estimate_sxy_roi_area`); ±2 % on the two good spot subjects,
+  −15 % on 782149 (open issue).
+- 2-D top-slab surface registration —
+  `code/dev_code/surface_registration_v2.py::get_surface_registration(s)`.
+  JSON-cached; picks the best of rigid / affine / PWR 3×3 / PWR 4×4,
+  scored as Pearson NCC of the warped CZ binary against the raw 488
+  MIP. PWR 4×4 wins all 6 subjects. See
+  `docs/08 Automated surface registration.md`.
+- HCR per-ROI quality classifier (S11 v5d, stage 2) —
+  `code/dev_code/roi_quality_v5d.py`. 92 voxel-unit + within-subject
+  pct-rank features (no µm-suffixed features, no expansion-rate
+  dependence); LightGBM binary + 4-class. LOSO @ 1648 labels:
+  binary AUC 0.917, 4-class f1_macro 0.720. Public API:
+  `extract_features(sid)`, `predict(features)`, `predict_subject(sid)`,
+  `train(...)`. Models + meta + per-subject OOF parquets cached at
+  `code/dev_code/cached_roi_quality/`. Feature-extraction modules
+  (`roi_quality_v{2,3,4,5}.py`, `roi_v3_axis_features.py`,
+  `roi_v6_voxel.py`) are also under `code/dev_code/`; the µm /
+  dead-feature / low-gain peak-counter code paths have been physically
+  removed.
+- HCR ROI labelling GUI (standalone matplotlib app) —
+  `code/dev_code/roi_label_gui.py`. CLI:
+  `python code/dev_code/roi_label_gui.py --sid 788406 --reviewer alice`.
+  Uses `roi_quality_v5d.py` for inference. Labels still append to the
+  session JSONL `code/sessions/v3_S11_roi_quality/outputs/roi_qc_actions.jsonl`
+  for label-history continuity.
+
+**Not yet promoted (the next implementation push):**
+- 3-D `sz` estimator (the binding centroid-ICP failure per the
+  reassessment in
+  `code/full_automatic_execution_01/reassess_with_surfaces/`).
+- Locked-prior 3-D warm-start consuming all of the above.
+- Surface-anchored seed constellation + TPS expansion that mimics
+  the manual workflow.
+
+The detailed staged design lives in
+**`docs/09 Full automatic v2 plan.md`** and is summarised in
+`docs/07 Grand Plan.md` §13.  The ledger in §11 covers the v1 catalog
+work (sessions S01–S64 in `full_automatic_execution_01/`).

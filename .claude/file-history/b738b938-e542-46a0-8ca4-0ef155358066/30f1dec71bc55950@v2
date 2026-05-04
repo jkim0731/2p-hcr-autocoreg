@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+"""Driver: extract v4 per-ROI features with per-subject multiprocessing.
+
+Reads from `cached_per_cell_crops/{sid}_per_cell_crops.parquet` (no seg-zarr
+re-read) plus 405 zarr (raw uint16, fast).  Writes
+`cached_roi_quality/{sid}_features_v4.parquet`.
+
+Usage:
+    python 01d_extract_features_v4.py [--force] [--workers 6] \\
+                                      [--r-core-um 4.0] [--subjects ...]
+"""
+from __future__ import annotations
+
+import argparse
+import sys
+import time
+from pathlib import Path
+
+import pandas as pd
+
+DEV_CODE = Path("/root/capsule/code/dev_code")
+SESSION_DIR = Path("/root/capsule/code/sessions/v3_S11_roi_quality")
+OUTPUTS_DIR = SESSION_DIR / "outputs"
+OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+
+sys.path.insert(0, str(DEV_CODE))
+
+from benchmark_data_loader import BENCHMARK_SUBJECTS  # noqa: E402
+from roi_quality_v4 import (  # noqa: E402
+    R_CORE_UM_DEFAULT, _features_v4_cache_path, extract_v4_all,
+)
+
+DEFAULT_SUBJECTS = list(BENCHMARK_SUBJECTS)
+
+
+def _summary(sid: str, df: pd.DataFrame) -> dict:
+    def _med(c):
+        return float(df[c].median()) if c in df.columns and df[c].notna().any() else float("nan")
+    return {
+        "sid": sid,
+        "n_roi": len(df),
+        "med_surface_area_opened": _med("surface_area_um2_opened"),
+        "med_volume_opened": _med("volume_um3_opened"),
+        "med_sa_to_vol_opened": _med("sa_to_vol_um_inv_opened"),
+        "med_sphericity_opened": _med("sphericity_opened"),
+        "med_core_voxel_frac": _med("core4um_voxel_frac_opened"),
+        "med_shell_minus_core_p50": _med("c405_shell_minus_core4um_p50"),
+        "med_shell_over_core_ratio": _med("c405_shell_over_core4um_p50_ratio"),
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--force", action="store_true")
+    parser.add_argument("--workers", type=int, default=6)
+    parser.add_argument("--r-core-um", type=float, default=R_CORE_UM_DEFAULT)
+    parser.add_argument("--subjects", nargs="+", default=None,
+                        help=f"Subset (default: {DEFAULT_SUBJECTS})")
+    args = parser.parse_args()
+
+    subjects = args.subjects or DEFAULT_SUBJECTS
+    print(f"v4 extraction → {len(subjects)} subjects, "
+          f"workers={args.workers}, r_core_um={args.r_core_um}, force={args.force}")
+    t0 = time.time()
+    results = extract_v4_all(
+        subjects, workers=args.workers,
+        r_core_um=args.r_core_um, force=args.force,
+    )
+    print(f"\n=== ALL DONE in {time.time() - t0:.0f}s ===")
+    for r in results:
+        print(f"  {r}")
+
+    rows = []
+    for sid in subjects:
+        p = _features_v4_cache_path(sid)
+        if p.exists():
+            df = pd.read_parquet(p)
+            rows.append(_summary(sid, df))
+    if rows:
+        out_csv = OUTPUTS_DIR / "feature_summary_v4.csv"
+        pd.DataFrame(rows).to_csv(out_csv, index=False)
+        print(f"\nSummary written to {out_csv}")
+        print(pd.DataFrame(rows).to_string(index=False))
+
+
+if __name__ == "__main__":
+    main()

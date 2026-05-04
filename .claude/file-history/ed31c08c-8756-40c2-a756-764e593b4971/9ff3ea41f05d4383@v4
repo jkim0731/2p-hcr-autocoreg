@@ -1,0 +1,521 @@
+"""v3-S09 — Before/After TPS overlays per subject.
+
+For each subject produce a 2x2 figure:
+
+  [0,0] HCR ch488 top-slab MIP + CZ ROI MIP overlay  — BEFORE TPS (warm-start only)
+  [0,1] HCR ch488 top-slab MIP + CZ ROI MIP overlay  — AFTER  TPS
+  [1,0] HCR GFP+ disk MIP        + CZ ROI MIP overlay — BEFORE TPS
+  [1,1] HCR GFP+ disk MIP        + CZ ROI MIP overlay — AFTER  TPS
+
+The CZ ROI MIP is the per-slice-filled `seg-mask-outline.tif` MIP across
+the top 100 µm slab beneath the CZ pia, forward-warped into the HCR µm
+frame:
+
+* BEFORE TPS — warm-start affine only:    cz_zyx_um → apply_to_cz_um(lp,·)
+* AFTER  TPS — warm-start + constellation: → reorder→xyz → TPS(·)
+
+The HCR GFP+ "MIP" is a binary disk-mask rasterisation of GFP+
+quality-≥0.5 centroids (radius 5 µm) projected to xy in the slab.
+Both BEFORE / AFTER panels show identical HCR backgrounds; only the CZ
+overlay moves.
+
+Run: `python /root/capsule/code/sessions/v3_S09_constellation_match/render_overlay.py`
+"""
+from __future__ import annotations
+
+import json
+import os
+import sys
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import numpy as np
+import tifffile
+from scipy.interpolate import RBFInterpolator
+from scipy.ndimage import binary_fill_holes
+from scipy.spatial import Delaunay
+
+sys.path.insert(0, "/root/capsule/code/dev_code")
+sys.path.insert(0, "/root/capsule/data/claude_data/full_automatic_execution_01")
+
+from benchmark_analysis import depth_from_surface, load_hcr_volume  # noqa: E402
+from benchmark_data_loader import load_subject  # noqa: E402
+import lib.centroid_helpers as ch  # noqa: E402
+from locked_prior_warm import (  # noqa: E402
+    apply_to_cz_um,
+    compute_locked_prior_warm_start,
+)
+from sz_estimator import get_sz  # noqa: E402
+from surfaces_iter08 import (  # noqa: E402
+    get_cz_surface_iter08,
+    get_hcr_top_surface_iter07,
+)
+from overlap_crop import get_overlap_crop  # noqa: E402
+
+
+HERE = Path(__file__).resolve().parent
+FIG = HERE / "figures"
+FIG.mkdir(parents=True, exist_ok=True)
+
+SUBJECTS_ALL = ["755252", "767018", "767022", "782149", "788406", "790322"]
+
+SLAB_DEPTH_UM = 100.0
+HCR_LEVEL = 4
+HCR_BG_CHANNEL = "488"
+GFP_DISK_RADIUS_UM = 5.0
+ROI_QUALITY_THRESHOLD = 0.5
+
+# HCR µm output frame for overlays (xy MIP). Spacing chosen to be coarse
+# enough to be fast but fine enough to preserve cell footprints.
+OVERLAY_XY_SPACING_UM = 2.0
+
+
+# ----------------------------------------------------------------------
+# Background MIPs in HCR µm xy frame
+# ----------------------------------------------------------------------
+def _top_slab_mip(vol, surf, xy_um, z_um, d_lo, d_hi, mode="max"):
+    """MIP across [d_lo, d_hi] beneath `surf` (sub-voxel z column)."""
+    Z, Y, X = vol.shape
+    xs = np.arange(X, dtype=np.float32) * xy_um
+    ys = np.arange(Y, dtype=np.float32) * xy_um
+    xx, yy = np.meshgrid(xs, ys)
+    a = surf["a"]; b = surf["b"]; c = surf["c"]
+    p = surf.get("p", 0.0); q = surf.get("q", 0.0); r = surf.get("r", 0.0)
+    z_pia = a * xx + b * yy + c + p * xx * xx + q * xx * yy + r * yy * yy
+    z_pia = z_pia.astype(np.float32)
+    depths = np.arange(d_lo, d_hi + z_um / 2, z_um, dtype=np.float32)
+    iy = np.arange(Y)[:, None]
+    ix = np.arange(X)[None, :]
+    if mode == "max":
+        acc = np.full((Y, X), -np.inf, dtype=np.float32)
+    else:
+        acc = np.zeros((Y, X), dtype=np.float64); cnt = 0
+    any_valid = np.zeros((Y, X), bool)
+    for d in depths:
+        iz = np.round((z_pia + d) / z_um).astype(np.int64)
+        valid = (iz >= 0) & (iz < Z)
+        iz_c = np.clip(iz, 0, Z - 1)
+        sample = vol[iz_c, iy, ix].astype(np.float32)
+        sample = np.where(valid, sample, -np.inf if mode == "max" else 0.0)
+        if mode == "max":
+            acc = np.maximum(acc, sample)
+        else:
+            acc += sample; cnt += 1
+        any_valid |= valid
+    if mode == "max":
+        out = np.where(any_valid, acc, np.nan).astype(np.float32)
+    else:
+        out = np.where(any_valid, acc / max(cnt, 1), np.nan).astype(np.float32)
+    return out
+
+
+# ----------------------------------------------------------------------
+# CZ binary ROI volume (filled per slice from seg-mask-outline)
+# ----------------------------------------------------------------------
+def _load_cz_seg_outline(s):
+    files = (
+        list(s.coreg_dir.glob("*seg-mask-outline.tif"))
+        or list(s.coreg_dir.glob("*seg_masks_outline.tif"))
+        or list(s.coreg_dir.glob("*seg*outline*.tif"))
+    )
+    if not files:
+        raise FileNotFoundError(f"No seg outline tif in {s.coreg_dir}")
+    arr = tifffile.imread(str(files[0]))
+    while arr.ndim > 3 and arr.shape[0] == 1:
+        arr = arr[0]
+    out = (arr > 0).astype(np.uint8)
+    filled = np.empty_like(out)
+    for z in range(out.shape[0]):
+        filled[z] = binary_fill_holes(out[z]).astype(np.uint8)
+    return filled
+
+
+def _cz_top_slab_voxels_um(s, cz_surf, slab_depth_um=SLAB_DEPTH_UM):
+    """Return CZ µm (z, y, x) voxel centers for foreground voxels in the
+    top `slab_depth_um` µm beneath the CZ pia surface.
+
+    Subsampled in xy by 2× to reduce point count (~4× faster, negligible
+    visual loss after rasterising back to a 2 µm xy bin)."""
+    bin_vol = _load_cz_seg_outline(s)            # (Z, Y, X) uint8
+    cz_xy = float(s.cz_xy_um); cz_z = float(s.cz_z_um)
+
+    Z, Y, X = bin_vol.shape
+    # 2× xy subsample of foreground voxels for speed.
+    sub = bin_vol[:, ::2, ::2]
+    zz, yy, xx = np.where(sub > 0)
+    if zz.size == 0:
+        return np.zeros((0, 3), np.float32)
+    z_um = zz * cz_z
+    y_um = (yy * 2) * cz_xy
+    x_um = (xx * 2) * cz_xy
+    pts = np.stack([z_um, y_um, x_um], axis=1).astype(np.float32)
+
+    # Top-slab gate via depth-below-pia
+    pts_xyz = pts[:, [2, 1, 0]]  # xyz for depth_from_surface
+    depth = depth_from_surface(pts_xyz, cz_surf)
+    keep = (depth >= 0.0) & (depth <= slab_depth_um)
+    return pts[keep]
+
+
+# ----------------------------------------------------------------------
+# Forward warps
+# ----------------------------------------------------------------------
+def _warm_start_warp(cz_um_zyx, lp):
+    """CZ µm zyx → HCR µm zyx via apply_to_cz_um."""
+    return apply_to_cz_um(lp, cz_um_zyx)
+
+
+def _build_tps(res_json):
+    src = np.asarray(res_json["src_xyz_um"], dtype=np.float64)
+    dst = np.asarray(res_json["dst_xyz_um"], dtype=np.float64)
+    if len(src) >= 4:
+        return RBFInterpolator(src, dst, kernel="thin_plate_spline")
+    return RBFInterpolator(src, dst, kernel="thin_plate_spline", degree=0)
+
+
+def _build_dilated_hull(src_xyz_anchor, dilate_frac=0.075):
+    """Return a Delaunay hull of anchors radially expanded by dilate_frac."""
+    hull_pts = src_xyz_anchor.copy()
+    rng = hull_pts.max(0) - hull_pts.min(0)
+    for ax in range(3):
+        if rng[ax] < 1e-3:
+            hull_pts = np.vstack([
+                hull_pts,
+                hull_pts[0] + np.eye(3)[ax] * 1.0,
+                hull_pts[0] - np.eye(3)[ax] * 1.0,
+            ])
+    c = hull_pts.mean(0)
+    return Delaunay(c + (hull_pts - c) * (1.0 + dilate_frac))
+
+
+def _tps_warp_after_lp(cz_um_zyx, lp, tps, hull=None):
+    """CZ µm zyx → HCR µm zyx via warm-start then TPS — but only apply
+    TPS at points inside the (dilated) anchor hull; outside, fall back
+    to the warm-start position so we don't visualise wild extrapolation.
+
+    `hull` is a `Delaunay` object built from CZ-warped anchors in xyz.
+    """
+    warm_zyx = apply_to_cz_um(lp, cz_um_zyx)        # zyx
+    if hull is None:
+        src_xyz = warm_zyx[:, ::-1]
+        tgt_xyz = tps(src_xyz)
+        return tgt_xyz[:, ::-1]
+    src_xyz = warm_zyx[:, ::-1]
+    inside = hull.find_simplex(src_xyz) >= 0
+    out_xyz = src_xyz.copy()
+    if inside.any():
+        out_xyz[inside] = tps(src_xyz[inside])
+    return out_xyz[:, ::-1], inside
+
+
+# ----------------------------------------------------------------------
+# Rasterisation: 2D HCR µm xy MIP from a point cloud
+# ----------------------------------------------------------------------
+def _rasterise_xy(pts_zyx_um, hcr_xy_um, hcr_shape_yx,
+                   spacing_um=OVERLAY_XY_SPACING_UM):
+    """Bin (y, x) coordinates into a 2D mask covering the HCR µm extent."""
+    H_y, H_x = hcr_shape_yx
+    extent_y = H_y * hcr_xy_um
+    extent_x = H_x * hcr_xy_um
+    out_h = int(np.ceil(extent_y / spacing_um))
+    out_w = int(np.ceil(extent_x / spacing_um))
+    mask = np.zeros((out_h, out_w), np.uint8)
+    if pts_zyx_um.shape[0] == 0:
+        return mask
+    yi = np.floor(pts_zyx_um[:, 1] / spacing_um).astype(np.int64)
+    xi = np.floor(pts_zyx_um[:, 2] / spacing_um).astype(np.int64)
+    keep = (yi >= 0) & (yi < out_h) & (xi >= 0) & (xi < out_w)
+    mask[yi[keep], xi[keep]] = 1
+    return mask
+
+
+def _disk_mask_at_centroids(centroids_zyx_um, hcr_xy_um, hcr_shape_yx,
+                             radius_um=GFP_DISK_RADIUS_UM,
+                             spacing_um=OVERLAY_XY_SPACING_UM):
+    """2D disk-stamp rasterisation of centroid xy footprints."""
+    H_y, H_x = hcr_shape_yx
+    extent_y = H_y * hcr_xy_um
+    extent_x = H_x * hcr_xy_um
+    out_h = int(np.ceil(extent_y / spacing_um))
+    out_w = int(np.ceil(extent_x / spacing_um))
+    mask = np.zeros((out_h, out_w), np.uint8)
+    if centroids_zyx_um.shape[0] == 0:
+        return mask
+    r_pix = max(1, int(np.round(radius_um / spacing_um)))
+    yy, xx = np.mgrid[-r_pix:r_pix + 1, -r_pix:r_pix + 1]
+    disk = (yy * yy + xx * xx) <= r_pix * r_pix
+    yi = np.round(centroids_zyx_um[:, 1] / spacing_um).astype(np.int64)
+    xi = np.round(centroids_zyx_um[:, 2] / spacing_um).astype(np.int64)
+    for yc, xc in zip(yi, xi):
+        y0, y1 = yc - r_pix, yc + r_pix + 1
+        x0, x1 = xc - r_pix, xc + r_pix + 1
+        ay0 = max(0, y0); ay1 = min(out_h, y1)
+        ax0 = max(0, x0); ax1 = min(out_w, x1)
+        if ay0 >= ay1 or ax0 >= ax1:
+            continue
+        dy0 = ay0 - y0; dy1 = dy0 + (ay1 - ay0)
+        dx0 = ax0 - x0; dx1 = dx0 + (ax1 - ax0)
+        mask[ay0:ay1, ax0:ax1] |= disk[dy0:dy1, dx0:dx1]
+    return mask
+
+
+# ----------------------------------------------------------------------
+# ROI quality scores → GFP+ filter
+# ----------------------------------------------------------------------
+def _load_quality_map(sid):
+    paths = list(Path("/root/capsule/code/dev_code/cached_roi_quality")
+                 .glob(f"{sid}_stage2_binary_score_v5d.parquet"))
+    if not paths:
+        return {}
+    import pandas as pd
+    df = pd.read_parquet(paths[0])
+    col = "score" if "score" in df.columns else "roi_quality"
+    return df.set_index("hcr_id")[col].to_dict()
+
+
+# ----------------------------------------------------------------------
+# Per-subject panel
+# ----------------------------------------------------------------------
+def render_subject(sid):
+    json_path = HERE / f"match_{sid}.json"
+    if not json_path.exists():
+        print(f"  {sid}: no match_{sid}.json — skipping", flush=True)
+        return
+    res = json.loads(json_path.read_text())
+    if not res.get("ok"):
+        print(f"  {sid}: match not OK — skipping", flush=True)
+        return
+
+    print(f"  {sid}: rendering overlay...", flush=True)
+    s = load_subject(sid)
+    sz = get_sz(s); sz_pin = float(sz.get("sz_best") or sz.get("sz") or 1.0)
+    lp = compute_locked_prior_warm_start(s, sz_init=sz_pin)
+    tps = _build_tps(res)
+    hcr_surf = get_hcr_top_surface_iter07(s)
+    cz_surf = get_cz_surface_iter08(s)
+
+    # ----- HCR ch488 top-slab MIP (background) -----
+    hcr_vol, hcr_xy, hcr_z = load_hcr_volume(s, channel=HCR_BG_CHANNEL,
+                                              level=HCR_LEVEL)
+    H_yx = hcr_vol.shape[1:]
+    hcr488_mip = _top_slab_mip(hcr_vol, hcr_surf, hcr_xy, hcr_z,
+                                0.0, SLAB_DEPTH_UM, mode="max")
+    del hcr_vol
+
+    # ----- HCR GFP+ disk MIP (binary background) -----
+    gfp_um_all, gfp_ids_all = ch.centroids_um(s, "hcr_gfp")  # (zyx)
+    qmap = _load_quality_map(sid)
+    qual = np.array([qmap.get(int(i), np.nan) for i in gfp_ids_all])
+    keep_q = np.isfinite(qual) & (qual >= ROI_QUALITY_THRESHOLD)
+    gfp_um_q = gfp_um_all[keep_q]
+    # Top-slab gate
+    gfp_xyz = gfp_um_q[:, [2, 1, 0]]
+    gfp_depth = depth_from_surface(gfp_xyz, hcr_surf)
+    in_slab = (gfp_depth >= 0.0) & (gfp_depth <= SLAB_DEPTH_UM)
+    gfp_um_slab = gfp_um_q[in_slab]
+    gfp_disk_mask = _disk_mask_at_centroids(gfp_um_slab, hcr_xy, H_yx)
+
+    # ----- CZ ROI MIP — point cloud → 2D HCR µm xy bins -----
+    cz_pts_um = _cz_top_slab_voxels_um(s, cz_surf)  # (N, 3) zyx
+    print(f"    CZ slab voxels: {cz_pts_um.shape[0]}  "
+          f"GFP+ slab cells: {gfp_um_slab.shape[0]}", flush=True)
+
+    src_xyz_anchor = np.asarray(res["src_xyz_um"])  # CZ-warped frame
+    hull_dil = _build_dilated_hull(src_xyz_anchor, dilate_frac=0.075)
+    if cz_pts_um.shape[0] > 0:
+        warm_zyx = _warm_start_warp(cz_pts_um, lp)
+        tps_zyx, inside_hull = _tps_warp_after_lp(
+            cz_pts_um, lp, tps, hull=hull_dil
+        )
+    else:
+        warm_zyx = np.zeros((0, 3))
+        tps_zyx = np.zeros((0, 3))
+        inside_hull = np.zeros(0, bool)
+    cz_mip_warm = _rasterise_xy(warm_zyx, hcr_xy, H_yx)
+    cz_mip_tps = _rasterise_xy(tps_zyx, hcr_xy, H_yx)
+    cz_mip_warm_inhull = _rasterise_xy(warm_zyx[inside_hull], hcr_xy, H_yx)
+    cz_mip_tps_inhull = _rasterise_xy(tps_zyx[inside_hull], hcr_xy, H_yx)
+    print(f"    voxels inside dilated hull: {int(inside_hull.sum())}",
+          flush=True)
+
+    # ----- Overlap crop bbox (xy zoom region) -----
+    crop = get_overlap_crop(s, margin_frac=0.10)
+    z0_um, z1_um, y0_um, y1_um, x0_um, x1_um = crop["bbox_hcr_um"]
+
+    # ----- Plot 3x2 -----
+    fig, axes = plt.subplots(3, 2, figsize=(16, 21))
+
+    extent_xy = [0.0, H_yx[1] * hcr_xy, H_yx[0] * hcr_xy, 0.0]
+    bg488 = np.log1p(np.nan_to_num(hcr488_mip, nan=0.0))
+    bg488 = bg488 / max(1e-6, np.percentile(bg488, 99.5))
+
+    dst_xyz_anchor = np.asarray(res["dst_xyz_um"])  # HCR GFP+ frame
+
+    # Hull polygon (xy projection) of dilated anchors.
+    from scipy.spatial import ConvexHull
+    try:
+        hxy = src_xyz_anchor[:, :2]
+        ch_hull = ConvexHull(hxy)
+        verts = hxy[ch_hull.vertices]
+        c = verts.mean(0)
+        verts = c + (verts - c) * 1.075
+        hull_poly = np.vstack([verts, verts[:1]])
+    except Exception:
+        hull_poly = None
+
+    def _draw_overlay(ax, bg_image, cz_full, cz_inhull, title, hull=None,
+                       anchors_src=None, anchors_dst=None):
+        ax.imshow(bg_image, cmap="gray", extent=extent_xy, origin="upper")
+        # outside-hull CZ ROIs: faded red (context)
+        outside = (cz_full > 0) & (cz_inhull == 0)
+        ctx = np.zeros((*cz_full.shape, 4), dtype=np.float32)
+        ctx[..., 0] = 1.0
+        ctx[..., 3] = outside.astype(np.float32) * 0.30
+        ax.imshow(ctx, extent=extent_xy, origin="upper",
+                   interpolation="nearest")
+        # inside-hull CZ ROIs: bright red (where TPS does/doesn't matter)
+        inh = np.zeros((*cz_full.shape, 4), dtype=np.float32)
+        inh[..., 0] = 1.0
+        inh[..., 1] = 0.4
+        inh[..., 3] = (cz_inhull > 0).astype(np.float32) * 0.85
+        ax.imshow(inh, extent=extent_xy, origin="upper",
+                   interpolation="nearest")
+        if hull is not None:
+            ax.plot(hull[:, 0], hull[:, 1], "-", color="yellow", lw=1.6,
+                    label="dilated hull (xy)")
+        if anchors_dst is not None and anchors_dst.size:
+            ax.plot(anchors_dst[:, 0], anchors_dst[:, 1], "x", color="cyan",
+                    ms=10, mew=2.0, label="anchors HCR")
+        if anchors_src is not None and anchors_src.size:
+            ax.plot(anchors_src[:, 0], anchors_src[:, 1], "o",
+                    color="lime", ms=12, mfc="none", mew=2.0,
+                    label="anchors CZ-warm")
+        ax.set_xlabel("x_HCR (µm)"); ax.set_ylabel("y_HCR (µm)")
+        ax.set_title(title)
+        # Zoom into the 3-D overlap crop xy region (warp-derived).
+        ax.set_xlim(x0_um, x1_um)
+        ax.set_ylim(y1_um, y0_um)        # y inverted (origin upper)
+        ax.set_aspect("equal")
+        if hull is not None or (anchors_dst is not None and anchors_dst.size) \
+                or (anchors_src is not None and anchors_src.size):
+            ax.legend(loc="upper right", fontsize=8)
+
+    # Background for GFP+ panels: gray-levels of disk mask (with low alpha)
+    bg_gfp = gfp_disk_mask.astype(np.float32) * 0.85
+
+    # [0,0] HCR488 + CZ ROI BEFORE  (warm-start everywhere)
+    _draw_overlay(axes[0, 0], bg488, cz_mip_warm, cz_mip_warm_inhull,
+                   "HCR ch488 MIP + CZ ROI MIP — BEFORE TPS",
+                   hull=hull_poly, anchors_src=src_xyz_anchor)
+
+    # [0,1] HCR488 + CZ ROI AFTER (TPS inside hull, warm-start outside)
+    _draw_overlay(axes[0, 1], bg488, cz_mip_tps, cz_mip_tps_inhull,
+                   f"HCR ch488 MIP + CZ ROI MIP — AFTER TPS  "
+                   f"(NCC={res['ncc_tps']:+.3f}, Δ={res['delta_ncc']:+.3f})",
+                   hull=hull_poly, anchors_dst=dst_xyz_anchor)
+
+    # [1,0] HCR GFP+ + CZ ROI BEFORE
+    _draw_overlay(axes[1, 0], bg_gfp, cz_mip_warm, cz_mip_warm_inhull,
+                   "HCR GFP+ MIP + CZ ROI MIP — BEFORE TPS",
+                   hull=hull_poly, anchors_src=src_xyz_anchor)
+
+    # [1,1] HCR GFP+ + CZ ROI AFTER
+    _draw_overlay(axes[1, 1], bg_gfp, cz_mip_tps, cz_mip_tps_inhull,
+                   f"HCR GFP+ MIP + CZ ROI MIP — AFTER TPS  "
+                   f"(K={res['K']})",
+                   hull=hull_poly, anchors_dst=dst_xyz_anchor)
+
+    # ===== Row 2: hull-zoomed view + before/after difference overlay =====
+    # Bbox of dilated hull (xy)
+    if hull_poly is not None:
+        hx0 = float(hull_poly[:, 0].min()); hx1 = float(hull_poly[:, 0].max())
+        hy0 = float(hull_poly[:, 1].min()); hy1 = float(hull_poly[:, 1].max())
+        # Pad 30 % on each side for context.
+        hx_pad = max(15.0, 0.30 * (hx1 - hx0))
+        hy_pad = max(15.0, 0.30 * (hy1 - hy0))
+        zx0, zx1 = hx0 - hx_pad, hx1 + hx_pad
+        zy0, zy1 = hy0 - hy_pad, hy1 + hy_pad
+    else:
+        zx0, zx1 = x0_um, x1_um
+        zy0, zy1 = y0_um, y1_um
+
+    # [2,0] Hull-zoomed HCR488 + BEFORE / AFTER as cyan / red overlay
+    ax = axes[2, 0]
+    ax.imshow(bg488, cmap="gray", extent=extent_xy, origin="upper")
+    # BEFORE = cyan, AFTER = red, overlap = white-ish
+    rgba = np.zeros((*cz_mip_warm_inhull.shape, 4), dtype=np.float32)
+    before = cz_mip_warm_inhull > 0
+    after = cz_mip_tps_inhull > 0
+    rgba[..., 0] = after.astype(np.float32)               # red channel: AFTER
+    rgba[..., 1] = before.astype(np.float32) * 0.85       # green
+    rgba[..., 2] = before.astype(np.float32)              # blue (cyan = G+B)
+    rgba[..., 3] = (before | after).astype(np.float32) * 0.85
+    ax.imshow(rgba, extent=extent_xy, origin="upper", interpolation="nearest")
+    if hull_poly is not None:
+        ax.plot(hull_poly[:, 0], hull_poly[:, 1], "-", color="yellow",
+                lw=1.5, label="dilated hull")
+    ax.plot(src_xyz_anchor[:, 0], src_xyz_anchor[:, 1], "o",
+            color="lime", ms=10, mfc="none", mew=2.0, label="anchors CZ-warm")
+    ax.plot(dst_xyz_anchor[:, 0], dst_xyz_anchor[:, 1], "x",
+            color="orange", ms=10, mew=2.0, label="anchors HCR")
+    for sa, da in zip(src_xyz_anchor, dst_xyz_anchor):
+        ax.annotate("", xy=(da[0], da[1]), xytext=(sa[0], sa[1]),
+                    arrowprops=dict(arrowstyle="->", color="white", lw=1.0))
+    ax.set_xlabel("x_HCR (µm)"); ax.set_ylabel("y_HCR (µm)")
+    ax.set_title("Hull-zoom — CZ ROI BEFORE (cyan) vs AFTER (red), in-hull only\n"
+                 "white arrows: anchor displacement (CZ-warm → HCR GFP+)")
+    ax.set_xlim(zx0, zx1); ax.set_ylim(zy1, zy0); ax.set_aspect("equal")
+    ax.legend(loc="upper right", fontsize=8)
+
+    # [2,1] Hull-zoomed HCR GFP+ + BEFORE / AFTER overlay
+    ax = axes[2, 1]
+    ax.imshow(bg_gfp, cmap="gray", extent=extent_xy, origin="upper")
+    rgba2 = np.zeros((*cz_mip_warm_inhull.shape, 4), dtype=np.float32)
+    rgba2[..., 0] = (cz_mip_tps_inhull > 0).astype(np.float32)
+    rgba2[..., 1] = (cz_mip_warm_inhull > 0).astype(np.float32) * 0.85
+    rgba2[..., 2] = (cz_mip_warm_inhull > 0).astype(np.float32)
+    rgba2[..., 3] = ((cz_mip_warm_inhull > 0) |
+                     (cz_mip_tps_inhull > 0)).astype(np.float32) * 0.85
+    ax.imshow(rgba2, extent=extent_xy, origin="upper", interpolation="nearest")
+    if hull_poly is not None:
+        ax.plot(hull_poly[:, 0], hull_poly[:, 1], "-", color="yellow",
+                lw=1.5, label="dilated hull")
+    ax.plot(src_xyz_anchor[:, 0], src_xyz_anchor[:, 1], "o",
+            color="lime", ms=10, mfc="none", mew=2.0, label="anchors CZ-warm")
+    ax.plot(dst_xyz_anchor[:, 0], dst_xyz_anchor[:, 1], "x",
+            color="orange", ms=10, mew=2.0, label="anchors HCR")
+    for sa, da in zip(src_xyz_anchor, dst_xyz_anchor):
+        ax.annotate("", xy=(da[0], da[1]), xytext=(sa[0], sa[1]),
+                    arrowprops=dict(arrowstyle="->", color="white", lw=1.0))
+    ax.set_xlabel("x_HCR (µm)"); ax.set_ylabel("y_HCR (µm)")
+    ax.set_title("Hull-zoom — CZ ROI BEFORE (cyan) vs AFTER (red), in-hull only\n"
+                 "background: HCR GFP+ disk MIP")
+    ax.set_xlim(zx0, zx1); ax.set_ylim(zy1, zy0); ax.set_aspect("equal")
+    ax.legend(loc="upper right", fontsize=8)
+
+    fig.suptitle(
+        f"{sid} — v3-S09 CZ↔HCR ROI MIP overlay (top {SLAB_DEPTH_UM:.0f} µm slab)\n"
+        f"K={res['K']}  NCC_tps={res['ncc_tps']:+.4f}  "
+        f"NCC_base={res['ncc_base']:+.4f}  ΔNCC={res['delta_ncc']:+.4f}",
+        fontsize=14,
+    )
+    fig.tight_layout()
+    out = FIG / f"overlay_{sid}.png"
+    fig.savefig(out, dpi=110, bbox_inches="tight")
+    plt.close(fig)
+    print(f"    → {out.relative_to(HERE)}", flush=True)
+
+
+def main():
+    requested = os.environ.get("SUBJECTS")
+    subjects = (requested.split(",") if requested else SUBJECTS_ALL)
+    for sid in subjects:
+        try:
+            render_subject(sid)
+        except Exception as e:
+            print(f"  ERROR rendering {sid}: {e}", flush=True)
+            import traceback; traceback.print_exc()
+
+
+if __name__ == "__main__":
+    main()

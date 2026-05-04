@@ -1,0 +1,402 @@
+"""S11 / Step 6 — Extract HCR tile-stitching boundary metadata.
+
+For each benchmark subject, parse the BigStitcher XML produced by
+`aind-smartspim-stitch` to recover, in the fused-image (level-0) voxel
+frame:
+
+    - tile grid shape  (n_x_tiles × n_y_tiles)
+    - per-tile size in voxels
+    - per-tile origin and end (with stitching refinement applied)
+    - overlap zones between adjacent tiles in x and y
+
+Tile transforms are stored as a 2-step stack in the XML:
+    final_origin = "Translation to Nominal Grid" + "Stitching Transform"
+
+The fused-image origin is the BoundingBox min recorded in the fused
+zarr's `.zattrs` ("Bigstitcher-Spark.Boundingbox_min"), so the per-tile
+origin in fused-image voxels = nominal_grid_translation +
+stitching_translation - bbox_min.
+
+Outputs:
+    code/sessions/v3_S11_roi_quality/outputs/tile_boundaries.json
+    code/sessions/v3_S11_roi_quality/outputs/tile_boundaries.csv
+
+JSON layout (one entry per subject)::
+    {
+      "788406": {
+        "fused_shape_lvl0": [Z, Y, X],
+        "fused_shape_lvl2": [Z, Y, X],
+        "tile_size_lvl0": [Z, Y, X],
+        "tile_size_lvl2": [Z, Y, X],
+        "voxel_size_um_lvl0": [z, y, x],
+        "voxel_size_um_lvl2": [z, y, x],
+        "tile_grid": {"x": 5, "y": 5},
+        "tiles": [
+          {
+            "tile_x_idx": 0, "tile_y_idx": 0,
+            "origin_lvl0_zyx": [...], "end_lvl0_zyx": [...],
+            "origin_lvl2_zyx": [...], "end_lvl2_zyx": [...],
+            "stitch_refine_lvl0_zyx": [...]
+          }, ...
+        ],
+        "overlap_zones_lvl2": {
+          "x": [{"between": [(0,*),(1,*)], "x_lo": ..., "x_hi": ...}, ...],
+          "y": [...],
+        }
+      },
+      ...
+    }
+"""
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+from xml.etree import ElementTree as ET
+
+import pandas as pd
+
+ROOT = Path("/root/capsule")
+HCR_DIRS = {
+    "754803": ROOT / "data/HCR_754803_2025-08-20_14-00-00_processed_2025-09-10_00-33-24",
+    "755252": ROOT / "data/HCR_755252_2025-07-02_13-00-00_processed_2025-07-18_09-27-44",
+    "767018": ROOT / "data/HCR_767018_2025-08-20_14-00-00_processed_2025-09-10_00-33-24",
+    "767022": ROOT / "data/HCR_767022_2025-07-03_13-00-00_processed_2025-07-18_09-27-44",
+    "782149": ROOT / "data/HCR_782149_2025-11-05_13-00-00_processed_2025-11-10_20-37-29",
+    "788406": ROOT / "data/HCR_788406_2025-11-05_13-00-00_processed_2025-11-10_20-35-28",
+    "790322": ROOT / "data/HCR_790322_2025-11-05_13-00-00_processed_2025-11-10_20-36-20",
+}
+SESSION_OUT = ROOT / "code/sessions/v3_S11_roi_quality/outputs"
+SESSION_OUT.mkdir(parents=True, exist_ok=True)
+
+TILE_NAME_RE = re.compile(r"Tile_X_(\d{4})_Y_(\d{4})_Z_(\d{4})_ch_(\d+)\.(?:ome\.)?zarr")
+
+
+def _parse_affine(text: str) -> list[float]:
+    return [float(x) for x in text.strip().split()]
+
+
+def _affine_translation(text: str) -> tuple[float, float, float]:
+    """Translation triple (tx, ty, tz) from a 12-element 3×4 affine."""
+    a = _parse_affine(text)
+    if len(a) != 12:
+        raise ValueError(f"expected 12-element affine, got {len(a)}: {a!r}")
+    return a[3], a[7], a[11]
+
+
+def _has_nontrivial_linear(text: str) -> bool:
+    """True if the linear (3×3) part of the affine is meaningfully non-identity."""
+    a = _parse_affine(text)
+    diag = (a[0], a[5], a[10])
+    off = (a[1], a[2], a[4], a[6], a[8], a[9])
+    return any(abs(d - 1.0) > 1e-3 for d in diag) or any(abs(o) > 1e-3 for o in off)
+
+
+def _find_xml(hcr_dir: Path) -> Path:
+    """Pick the most refined stitching XML available.
+
+    New (post-2025-09) layout puts XMLs under image_tile_alignment/.
+    Older layout puts them under image_tile_fusing/metadata/stitching/.
+    """
+    align = hcr_dir / "image_tile_alignment"
+    if align.exists():
+        cand = align / "combined_stitching_cam_alignment_all_channels.xml"
+        if cand.exists():
+            return cand
+        cand = next(align.glob("*stitching_channel_405.xml"), None)
+        if cand is not None:
+            return cand
+    legacy = hcr_dir / "image_tile_fusing/metadata/stitching"
+    if legacy.exists():
+        for name in (
+            "stitching_single_channel_updated.xml",
+            "stitching_spot_channels_updated.xml",
+            "stitching_single_channel_updated_remote.xml",
+        ):
+            cand = legacy / name
+            if cand.exists():
+                return cand
+    raise FileNotFoundError(f"no stitching XML in {hcr_dir}")
+
+
+def _fused_bbox_min(hcr_dir: Path) -> tuple[float, float, float] | None:
+    """Read 'Boundingbox_min' from the fused channel-405.zarr/.zattrs.
+
+    Order in attrs is [x, y, z]; we return (z, y, x).
+    """
+    zattrs = hcr_dir / "image_tile_fusing/fused/channel_405.zarr/.zattrs"
+    if not zattrs.exists():
+        return None
+    a = json.loads(zattrs.read_text())
+    bb = a.get("Bigstitcher-Spark", {}).get("Boundingbox_min")
+    if not bb or len(bb) < 3:
+        return None
+    x_min, y_min, z_min = bb[0], bb[1], bb[2]
+    return float(z_min), float(y_min), float(x_min)
+
+
+def _fused_shape_lvl0(hcr_dir: Path) -> tuple[int, int, int] | None:
+    """Read fused level-0 dimensions (Z, Y, X) from the fused zarr's .zattrs."""
+    zattrs = hcr_dir / "image_tile_fusing/fused/channel_405.zarr/.zattrs"
+    if not zattrs.exists():
+        return None
+    a = json.loads(zattrs.read_text())
+    levels = (
+        a.get("Bigstitcher-Spark", {})
+        .get("MultiResolutionInfos", [[]])[0]
+    )
+    if not levels:
+        return None
+    dims = levels[0].get("dimensions")  # [X, Y, Z, 1, 1] in their order
+    if not dims or len(dims) < 3:
+        return None
+    return int(dims[2]), int(dims[1]), int(dims[0])
+
+
+def parse_subject(sid: str, hcr_dir: Path) -> dict:
+    xml = _find_xml(hcr_dir)
+    tree = ET.parse(xml)
+    root = tree.getroot()
+
+    # setup_id -> Tile_X_xxxx_Y_yyyy
+    setup_to_tile: dict[int, tuple[int, int]] = {}
+    setup_to_size: dict[int, tuple[int, int, int]] = {}  # (Z, Y, X) in level-0 vox
+    setup_to_voxel_um: dict[int, tuple[float, float, float]] = {}
+    setup_channel: dict[int, str] = {}
+
+    for vs in root.iter("ViewSetup"):
+        sid_el = vs.find("id")
+        nm_el = vs.find("name")
+        sz_el = vs.find("size")
+        vx_el = vs.find("voxelSize")
+        ch_el = vs.find("attributes/channel")
+        if sid_el is None or nm_el is None or sz_el is None:
+            continue
+        m = TILE_NAME_RE.match(nm_el.text or "")
+        if m is None:
+            continue
+        setup = int(sid_el.text)
+        x_idx, y_idx = int(m.group(1)), int(m.group(2))
+        setup_to_tile[setup] = (x_idx, y_idx)
+        sx, sy, sz = sz_el.text.strip().split()  # XML order: X Y Z
+        setup_to_size[setup] = (int(sz), int(sy), int(sx))
+        if vx_el is not None and vx_el.find("size") is not None:
+            vsx, vsy, vsz = vx_el.find("size").text.strip().split()
+            setup_to_voxel_um[setup] = (float(vsz), float(vsy), float(vsx))
+        if ch_el is not None and ch_el.text is not None:
+            setup_channel[setup] = ch_el.text.strip()
+
+    # Filter to channel 405 (per-channel transforms are identical for spatial-only ones)
+    setups_405 = sorted(
+        s for s, ch in setup_channel.items() if ch == "405"
+    ) or sorted(setup_to_tile.keys())
+
+    # Compose final tile origin = nominal_grid + stitching_refine
+    setup_to_origin: dict[int, tuple[float, float, float]] = {}
+    setup_to_refine: dict[int, tuple[float, float, float]] = {}
+
+    for vr in root.iter("ViewRegistration"):
+        setup = int(vr.attrib.get("setup", -1))
+        if setup not in setup_to_tile:
+            continue
+        if setup_channel.get(setup) != "405" and setup_channel:
+            # For combined XML, every channel has its own ViewRegistration; we only need 405
+            continue
+        nom = (0.0, 0.0, 0.0)
+        ref = (0.0, 0.0, 0.0)
+        for vt in vr.findall("ViewTransform"):
+            name_el = vt.find("Name")
+            aff_el = vt.find("affine")
+            if aff_el is None or aff_el.text is None:
+                continue
+            name = (name_el.text or "").strip() if name_el is not None else ""
+            tx, ty, tz = _affine_translation(aff_el.text)
+            if name == "Translation to Nominal Grid":
+                nom = (tx, ty, tz)
+            elif name == "Stitching Transform":
+                ref = (tx, ty, tz)
+            elif _has_nontrivial_linear(aff_el.text):
+                # spectral / cam alignment — ignore for spatial layout
+                pass
+        # XML order is (X, Y, Z); convert to (Z, Y, X)
+        setup_to_origin[setup] = (
+            nom[2] + ref[2],
+            nom[1] + ref[1],
+            nom[0] + ref[0],
+        )
+        setup_to_refine[setup] = (ref[2], ref[1], ref[0])
+
+    # Tile size — assume uniform across tiles
+    sample_setup = next(iter(setups_405))
+    tile_size_lvl0 = setup_to_size[sample_setup]
+    voxel_um_lvl0 = setup_to_voxel_um.get(sample_setup, (1.0, 0.247, 0.247))
+
+    # Fused bbox / origin
+    bbox_min_zyx = _fused_bbox_min(hcr_dir)
+    fused_shape_lvl0 = _fused_shape_lvl0(hcr_dir)
+
+    if bbox_min_zyx is None or fused_shape_lvl0 is None:
+        # Fall back to recomputing from tile origins
+        zs = [setup_to_origin[s][0] for s in setups_405]
+        ys = [setup_to_origin[s][1] for s in setups_405]
+        xs = [setup_to_origin[s][2] for s in setups_405]
+        bbox_min_zyx = (
+            min(zs), min(ys), min(xs),
+        )
+        fused_shape_lvl0 = (
+            int(round(max(zs) + tile_size_lvl0[0] - bbox_min_zyx[0])),
+            int(round(max(ys) + tile_size_lvl0[1] - bbox_min_zyx[1])),
+            int(round(max(xs) + tile_size_lvl0[2] - bbox_min_zyx[2])),
+        )
+
+    # Per-tile origin in fused-image voxels (level-0)
+    tiles = []
+    for s in setups_405:
+        x_idx, y_idx = setup_to_tile[s]
+        oz, oy, ox = setup_to_origin[s]
+        rz, ry, rx = setup_to_refine[s]
+        origin_lvl0 = (
+            oz - bbox_min_zyx[0],
+            oy - bbox_min_zyx[1],
+            ox - bbox_min_zyx[2],
+        )
+        end_lvl0 = (
+            origin_lvl0[0] + tile_size_lvl0[0],
+            origin_lvl0[1] + tile_size_lvl0[1],
+            origin_lvl0[2] + tile_size_lvl0[2],
+        )
+        tiles.append({
+            "setup": s,
+            "tile_x_idx": x_idx,
+            "tile_y_idx": y_idx,
+            "stitch_refine_lvl0_zyx": [round(rz, 3), round(ry, 3), round(rx, 3)],
+            "origin_lvl0_zyx": [round(v, 3) for v in origin_lvl0],
+            "end_lvl0_zyx": [round(v, 3) for v in end_lvl0],
+            "origin_lvl2_zyx": [round(v / 4, 3) for v in origin_lvl0],
+            "end_lvl2_zyx": [round(v / 4, 3) for v in end_lvl0],
+        })
+
+    # Group tiles by (x_idx, y_idx) and compute overlap zones along X and Y axes
+    by_x: dict[int, list[dict]] = {}
+    by_y: dict[int, list[dict]] = {}
+    for t in tiles:
+        by_x.setdefault(t["tile_x_idx"], []).append(t)
+        by_y.setdefault(t["tile_y_idx"], []).append(t)
+
+    x_indices = sorted(by_x.keys())
+    y_indices = sorted(by_y.keys())
+
+    overlap_x = []  # boundary along X direction (between x_idx and x_idx+1)
+    for xi, xj in zip(x_indices[:-1], x_indices[1:]):
+        # Median start of left tile end (across its y siblings) vs right tile origin
+        left_ends = [t["end_lvl0_zyx"][2] for t in by_x[xi]]
+        right_origins = [t["origin_lvl0_zyx"][2] for t in by_x[xj]]
+        x_lo = round(min(right_origins), 3)
+        x_hi = round(max(left_ends), 3)
+        overlap_x.append({
+            "x_lo_lvl0": x_lo, "x_hi_lvl0": x_hi,
+            "x_lo_lvl2": round(x_lo / 4, 3), "x_hi_lvl2": round(x_hi / 4, 3),
+            "width_lvl0_vox": round(x_hi - x_lo, 3),
+            "width_lvl2_vox": round((x_hi - x_lo) / 4, 3),
+            "between_x_idx": [xi, xj],
+        })
+
+    overlap_y = []
+    for yi, yj in zip(y_indices[:-1], y_indices[1:]):
+        left_ends = [t["end_lvl0_zyx"][1] for t in by_y[yi]]
+        right_origins = [t["origin_lvl0_zyx"][1] for t in by_y[yj]]
+        y_lo = round(min(right_origins), 3)
+        y_hi = round(max(left_ends), 3)
+        overlap_y.append({
+            "y_lo_lvl0": y_lo, "y_hi_lvl0": y_hi,
+            "y_lo_lvl2": round(y_lo / 4, 3), "y_hi_lvl2": round(y_hi / 4, 3),
+            "width_lvl0_vox": round(y_hi - y_lo, 3),
+            "width_lvl2_vox": round((y_hi - y_lo) / 4, 3),
+            "between_y_idx": [yi, yj],
+        })
+
+    fused_shape_lvl2 = (
+        fused_shape_lvl0[0],  # z is not downsampled at lvl2
+        int(round(fused_shape_lvl0[1] / 4)),
+        int(round(fused_shape_lvl0[2] / 4)),
+    )
+
+    return {
+        "xml_used": str(xml.relative_to(ROOT)),
+        "fused_bbox_min_lvl0_zyx": [round(v, 3) for v in bbox_min_zyx],
+        "fused_shape_lvl0_zyx": list(fused_shape_lvl0),
+        "fused_shape_lvl2_zyx": list(fused_shape_lvl2),
+        "tile_size_lvl0_zyx": list(tile_size_lvl0),
+        "tile_size_lvl2_zyx": [tile_size_lvl0[0], tile_size_lvl0[1] // 4, tile_size_lvl0[2] // 4],
+        "voxel_size_um_lvl0_zyx": list(voxel_um_lvl0),
+        "voxel_size_um_lvl2_zyx": [voxel_um_lvl0[0], voxel_um_lvl0[1] * 4, voxel_um_lvl0[2] * 4],
+        "tile_grid": {"x": len(x_indices), "y": len(y_indices), "n_tiles": len(tiles)},
+        "tiles": tiles,
+        "overlap_zones_x": overlap_x,
+        "overlap_zones_y": overlap_y,
+    }
+
+
+def main() -> None:
+    out: dict[str, dict] = {}
+    flat_rows = []
+    for sid, hcr_dir in HCR_DIRS.items():
+        if not hcr_dir.exists():
+            print(f"  [SKIP] {sid}: dir missing")
+            continue
+        try:
+            info = parse_subject(sid, hcr_dir)
+        except Exception as exc:
+            print(f"  [ERROR] {sid}: {exc}")
+            continue
+        out[sid] = info
+
+        # Top-level summary line
+        print(
+            f"\n[{sid}] grid={info['tile_grid']['x']}x{info['tile_grid']['y']}  "
+            f"tiles={info['tile_grid']['n_tiles']}  "
+            f"tile_size_lvl0={info['tile_size_lvl0_zyx']}  "
+            f"fused_lvl2={info['fused_shape_lvl2_zyx']}  "
+            f"voxel_um_lvl0={info['voxel_size_um_lvl0_zyx']}"
+        )
+        # X overlap summary
+        if info["overlap_zones_x"]:
+            xw = [z["width_lvl0_vox"] for z in info["overlap_zones_x"]]
+            print(
+                f"  x-overlaps lvl0 vox: {[round(w) for w in xw]}  "
+                f"({100 * sum(xw) / len(xw) / info['tile_size_lvl0_zyx'][2]:.1f}% of tile)"
+            )
+        if info["overlap_zones_y"]:
+            yw = [z["width_lvl0_vox"] for z in info["overlap_zones_y"]]
+            print(
+                f"  y-overlaps lvl0 vox: {[round(w) for w in yw]}  "
+                f"({100 * sum(yw) / len(yw) / info['tile_size_lvl0_zyx'][1]:.1f}% of tile)"
+            )
+
+        # Build flat per-tile CSV rows
+        for t in info["tiles"]:
+            flat_rows.append({
+                "sid": sid,
+                "tile_x_idx": t["tile_x_idx"],
+                "tile_y_idx": t["tile_y_idx"],
+                "origin_z_lvl2": t["origin_lvl2_zyx"][0],
+                "origin_y_lvl2": t["origin_lvl2_zyx"][1],
+                "origin_x_lvl2": t["origin_lvl2_zyx"][2],
+                "end_z_lvl2": t["end_lvl2_zyx"][0],
+                "end_y_lvl2": t["end_lvl2_zyx"][1],
+                "end_x_lvl2": t["end_lvl2_zyx"][2],
+                "stitch_refine_z_lvl0": t["stitch_refine_lvl0_zyx"][0],
+                "stitch_refine_y_lvl0": t["stitch_refine_lvl0_zyx"][1],
+                "stitch_refine_x_lvl0": t["stitch_refine_lvl0_zyx"][2],
+            })
+
+    json_path = SESSION_OUT / "tile_boundaries.json"
+    csv_path = SESSION_OUT / "tile_boundaries.csv"
+    json_path.write_text(json.dumps(out, indent=2))
+    pd.DataFrame(flat_rows).to_csv(csv_path, index=False)
+    print(f"\nSaved {len(out)} subjects -> {json_path.relative_to(ROOT)}")
+    print(f"Per-tile flat CSV  -> {csv_path.relative_to(ROOT)}")
+
+
+if __name__ == "__main__":
+    main()

@@ -61,5 +61,6 @@
     "defaultMode": "dontAsk"
   },
   "model": "opus",
-  "skipDangerousModePermissionPrompt": true
+  "skipDangerousModePermissionPrompt": true,
+  "effortLevel": "xhigh"
 }

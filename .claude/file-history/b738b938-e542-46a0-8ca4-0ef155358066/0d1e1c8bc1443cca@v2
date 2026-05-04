@@ -1,0 +1,504 @@
+"""
+S11 — HCR ROI pass/fail labelling GUI.
+
+A single-screen ipywidgets labeller designed for ~2-5 s per ROI:
+
+    +-----------------------------------------------+
+    | sid=788406  hcr_id=14330  score=0.51  17/100  |
+    | +--------+ +--------+ +--------+   features:  |
+    | | 405    | | 488    | | overlay|   solidity  |
+    | | xy MIP | | xy MIP | | mask   |   volume    |
+    | +--------+ +--------+ +--------+   knn_d1    |
+    | +--------+ +--------+ +--------+   peak_in   |
+    | | 405 z- | | 405 z  | | 405 z+ |   ...       |
+    | +--------+ +--------+ +--------+              |
+    | [Good g] [Bad b] [Unsure u] [Skip s] [Undo z] |
+    | last 3: good(14328) bad(14329) good(14330)    |
+    +-----------------------------------------------+
+
+Labels are appended to
+    code/sessions/v3_S11_roi_quality/outputs/roi_qc_actions.jsonl
+one JSON per row::
+
+    {"ts": "...", "sid": "...", "hcr_id": ..., "label": "good"|"bad"|"unsure",
+     "stage1_score": 0.51, "reviewer": "...", "session_token": "..."}
+
+Resume detects already-labelled `(sid, hcr_id)` pairs and skips them.
+
+Usage in a notebook::
+
+    from gui import launch
+    launch(sid="788406", n_rois=80, score_band=(0.3, 0.7), reviewer="alice")
+"""
+from __future__ import annotations
+
+import datetime as _dt
+import io
+import json
+import os
+import sys
+import uuid
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import ipywidgets as W
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import zarr
+from IPython.display import display
+from ipyevents import Event
+from matplotlib.patches import Rectangle
+
+ROOT = Path("/root/capsule")
+CACHE = ROOT / "code/dev_code/cached_roi_quality"
+TIGHT_BBOX = ROOT / "code/dev_code/cached_hcr_cell_tight_bbox"
+SESSION_DIR = ROOT / "code/sessions/v3_S11_roi_quality"
+OUTPUTS = SESSION_DIR / "outputs"
+LABEL_LOG = OUTPUTS / "roi_qc_actions.jsonl"
+
+sys.path.insert(0, str(ROOT / "code/dev_code"))
+
+SUBJECTS = ["755252", "767018", "767022", "782149", "788406", "790322"]
+HCR_DATA_ROOTS: dict[str, Path] = {}  # populated lazily by `_hcr_dir`
+
+# Display
+KEY_DISPLAY_FEATURES = [
+    "volume_um3",
+    "solidity",
+    "equivalent_diameter_um",
+    "bbox_occupancy",
+    "boundary_touching",
+    "c405_peak_inside",
+    "c405_core_minus_shell_p90",
+    "c405_p90",
+    "c488_p90",
+    "knn_d1",
+    "knn_d3",
+    "n_neighbors_30um",
+    "gfp_density",
+    "gfp_feature_value",
+]
+
+
+def _hcr_dir(sid: str) -> Path:
+    if sid in HCR_DATA_ROOTS:
+        return HCR_DATA_ROOTS[sid]
+    matches = sorted((ROOT / "data").glob(f"HCR_{sid}_*"))
+    if not matches:
+        raise FileNotFoundError(f"No HCR dir for {sid}")
+    HCR_DATA_ROOTS[sid] = matches[0]
+    return matches[0]
+
+
+def _open_zarr(path: Path):
+    return zarr.open(str(path), mode="r")
+
+
+def _load_label_log() -> pd.DataFrame:
+    if not LABEL_LOG.exists():
+        return pd.DataFrame(columns=["ts", "sid", "hcr_id", "label"])
+    rows = []
+    with open(LABEL_LOG) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return pd.DataFrame(rows)
+
+
+def _append_label(record: dict[str, Any]) -> None:
+    OUTPUTS.mkdir(parents=True, exist_ok=True)
+    with open(LABEL_LOG, "a") as f:
+        f.write(json.dumps(record) + "\n")
+
+
+@dataclass
+class _ROI:
+    sid: str
+    hcr_id: int
+    score: float
+    bbox: tuple[int, int, int, int, int, int]  # zmin, zmax, ymin, ymax, xmin, xmax (level-2 vox)
+    centroid: tuple[float, float, float]       # zc, yc, xc (level-2 vox)
+    features: dict[str, Any]
+
+
+def _sample_uncertain(
+    sid: str,
+    n_rois: int,
+    score_band: tuple[float, float],
+    rng: np.random.Generator,
+    skip_hcr_ids: set[int],
+) -> list[_ROI]:
+    feats = pd.read_parquet(CACHE / f"{sid}_features.parquet")
+    scores = pd.read_parquet(CACHE / f"{sid}_stage1_score.parquet")
+    bbox = pd.read_parquet(TIGHT_BBOX / f"{sid}_hcr_cell_tight_bbox_v1.parquet")
+
+    df = feats.merge(scores, on="hcr_id").merge(bbox, on="hcr_id", how="inner")
+    df = df[df["pseudo_label"].isna()]                  # only uncertain
+    lo, hi = score_band
+    df = df[(df["score"] >= lo) & (df["score"] <= hi)]
+    df = df[~df["hcr_id"].isin(skip_hcr_ids)]
+    if df.empty:
+        return []
+
+    n = min(n_rois, len(df))
+    idx = rng.choice(len(df), size=n, replace=False)
+    sub = df.iloc[idx]
+
+    rois: list[_ROI] = []
+    for _, r in sub.iterrows():
+        rois.append(
+            _ROI(
+                sid=sid,
+                hcr_id=int(r["hcr_id"]),
+                score=float(r["score"]),
+                bbox=(
+                    int(r["zmin_vox"]), int(r["zmax_vox"]),
+                    int(r["ymin_vox"]), int(r["ymax_vox"]),
+                    int(r["xmin_vox"]), int(r["xmax_vox"]),
+                ),
+                centroid=(float(r["zc_vox"]), float(r["yc_vox"]), float(r["xc_vox"])),
+                features={k: r.get(k) for k in KEY_DISPLAY_FEATURES if k in r.index},
+            )
+        )
+    return rois
+
+
+def _crop_with_margin(
+    arr_zarr,
+    bbox: tuple[int, int, int, int, int, int],
+    margin_xy: int = 8,
+    margin_z: int = 2,
+) -> tuple[np.ndarray, tuple[int, int, int]]:
+    """Read a 3-D crop from a zarr array shaped (1,1,Z,Y,X) with a margin
+    around `bbox`.  Returns (crop, (z_offset, y_offset, x_offset)) where
+    the offset gives the global coords of the crop[0, 0, 0] voxel.
+    """
+    Z, Y, X = arr_zarr.shape[-3:]
+    zmin, zmax, ymin, ymax, xmin, xmax = bbox
+    z0 = max(0, zmin - margin_z)
+    z1 = min(Z, zmax + margin_z)
+    y0 = max(0, ymin - margin_xy)
+    y1 = min(Y, ymax + margin_xy)
+    x0 = max(0, xmin - margin_xy)
+    x1 = min(X, xmax + margin_xy)
+    crop = np.asarray(arr_zarr[0, 0, z0:z1, y0:y1, x0:x1])
+    return crop, (z0, y0, x0)
+
+
+def _normalize_for_display(img: np.ndarray, p_lo=1.0, p_hi=99.5) -> np.ndarray:
+    """Robust per-image min-max scaling to [0, 1] for display."""
+    flat = img.ravel().astype(np.float32)
+    if flat.size == 0:
+        return img.astype(np.float32)
+    lo = float(np.percentile(flat, p_lo))
+    hi = float(np.percentile(flat, p_hi))
+    if hi <= lo:
+        return np.zeros_like(img, dtype=np.float32)
+    return np.clip((img.astype(np.float32) - lo) / (hi - lo), 0.0, 1.0)
+
+
+def _render_roi(roi: _ROI, fig: plt.Figure) -> None:
+    fig.clf()
+    hd = _hcr_dir(roi.sid)
+    seg = _open_zarr(hd / "cell_body_segmentation/segmentation_mask_orig_res.zarr")
+    fz_405 = _open_zarr(hd / "image_tile_fusing/fused/channel_405.zarr")["2"]
+    fz_488 = _open_zarr(hd / "image_tile_fusing/fused/channel_488.zarr")["2"]
+
+    mask_crop, (z0, y0, x0) = _crop_with_margin(seg, roi.bbox)
+    img_crop_405, _ = _crop_with_margin(fz_405, roi.bbox)
+    img_crop_488, _ = _crop_with_margin(fz_488, roi.bbox)
+    label_mask = (mask_crop == roi.hcr_id)
+
+    # Top row: xy MIP (max over z within mask region)
+    mip_405 = _normalize_for_display(img_crop_405.max(axis=0))
+    mip_488 = _normalize_for_display(img_crop_488.max(axis=0))
+    mask_mip = label_mask.any(axis=0).astype(np.uint8)
+
+    # Bottom row: 3 z slices through the ROI centroid
+    zc_local = int(round(roi.centroid[0])) - z0
+    z_lo = int(round(roi.bbox[0])) - z0
+    z_hi = int(round(roi.bbox[1])) - z0 - 1
+    zc_local = max(z_lo, min(zc_local, z_hi))
+    z_above = max(zc_local - 1, 0)
+    z_below = min(zc_local + 1, mask_crop.shape[0] - 1)
+
+    panels_top = [
+        ("405 MIP", mip_405, mask_mip),
+        ("488 MIP", mip_488, mask_mip),
+        ("overlay", mip_405, mask_mip),  # same as 405 with mask outline highlighted
+    ]
+    panels_bot = [
+        (f"405 z-1 (#{z_above + z0})", _normalize_for_display(img_crop_405[z_above]), label_mask[z_above]),
+        (f"405 z   (#{zc_local + z0})", _normalize_for_display(img_crop_405[zc_local]), label_mask[zc_local]),
+        (f"405 z+1 (#{z_below + z0})", _normalize_for_display(img_crop_405[z_below]), label_mask[z_below]),
+    ]
+
+    axes = fig.subplots(2, 3)
+    for ax, (title, img, m) in zip(axes[0], panels_top):
+        ax.imshow(img, cmap="gray", vmin=0, vmax=1)
+        ax.contour(m, levels=[0.5], colors="red", linewidths=0.8)
+        ax.set_title(title, fontsize=9)
+        ax.set_xticks([])
+        ax.set_yticks([])
+    for ax, (title, img, m) in zip(axes[1], panels_bot):
+        ax.imshow(img, cmap="gray", vmin=0, vmax=1)
+        ax.contour(m, levels=[0.5], colors="red", linewidths=0.8)
+        ax.set_title(title, fontsize=9)
+        ax.set_xticks([])
+        ax.set_yticks([])
+    fig.tight_layout()
+
+
+def _format_features(features: dict[str, Any]) -> str:
+    lines = []
+    for k in KEY_DISPLAY_FEATURES:
+        if k not in features:
+            continue
+        v = features[k]
+        if v is None or (isinstance(v, float) and np.isnan(v)):
+            txt = "—"
+        elif isinstance(v, (bool, np.bool_)):
+            txt = "✓" if v else "✗"
+        elif isinstance(v, (int, np.integer)):
+            txt = f"{v}"
+        else:
+            txt = f"{float(v):.3g}"
+        lines.append(f"<b>{k}</b>: {txt}")
+    return "<br>".join(lines)
+
+
+class LabelSession:
+    """Session that walks through a sample of uncertain ROIs."""
+
+    def __init__(
+        self,
+        sid: str,
+        n_rois: int = 80,
+        score_band: tuple[float, float] = (0.3, 0.7),
+        reviewer: str = "anonymous",
+        seed: int = 20260429,
+    ) -> None:
+        self.sid = sid
+        self.reviewer = reviewer
+        self.token = uuid.uuid4().hex[:8]
+
+        prior = _load_label_log()
+        skip = (
+            set(prior.loc[prior["sid"] == sid, "hcr_id"].astype(int))
+            if not prior.empty
+            else set()
+        )
+
+        rng = np.random.default_rng(seed)
+        self.rois: list[_ROI] = _sample_uncertain(sid, n_rois, score_band, rng, skip)
+        self.history: list[dict[str, Any]] = []  # in-memory undo stack
+        self.idx = 0
+
+        # ---- widgets ----
+        self.header = W.HTML()
+        self.fig_out = W.Output()
+        self.feat_html = W.HTML()
+        self.history_html = W.HTML()
+        self.btn_good = W.Button(description="Good (g)", button_style="success", layout=W.Layout(width="120px"))
+        self.btn_bad = W.Button(description="Bad (b)", button_style="danger", layout=W.Layout(width="120px"))
+        self.btn_unsure = W.Button(description="Unsure (u)", button_style="warning", layout=W.Layout(width="120px"))
+        self.btn_skip = W.Button(description="Skip (s)", layout=W.Layout(width="120px"))
+        self.btn_undo = W.Button(description="Undo (z)", layout=W.Layout(width="120px"))
+        self.btn_quit = W.Button(description="Quit", layout=W.Layout(width="80px"))
+
+        self.btn_good.on_click(lambda _b: self._record("good"))
+        self.btn_bad.on_click(lambda _b: self._record("bad"))
+        self.btn_unsure.on_click(lambda _b: self._record("unsure"))
+        self.btn_skip.on_click(lambda _b: self._advance(record=False))
+        self.btn_undo.on_click(lambda _b: self._undo())
+        self.btn_quit.on_click(lambda _b: self._quit())
+
+        # Keyboard
+        self._key_event = Event(source=self.fig_out, watched_events=["keydown"], wait=200)
+        self._key_event.on_dom_event(self._on_key)
+
+        # Persistent figure (one per session)
+        with self.fig_out:
+            self.fig = plt.figure(figsize=(9, 6))
+            plt.show()
+
+        controls = W.HBox(
+            [self.btn_good, self.btn_bad, self.btn_unsure, self.btn_skip, self.btn_undo, self.btn_quit]
+        )
+        body = W.HBox(
+            [
+                W.VBox([self.header, self.fig_out, controls, self.history_html],
+                       layout=W.Layout(width="700px")),
+                W.VBox([W.HTML("<h4>Features</h4>"), self.feat_html],
+                       layout=W.Layout(width="320px", padding="0 0 0 12px")),
+            ]
+        )
+        self.root = body
+
+        # Render the first ROI
+        self._render()
+
+    # ---------- core actions ----------
+    def _on_key(self, ev: dict[str, Any]) -> None:
+        k = ev.get("key", "").lower()
+        if k == "g":
+            self._record("good")
+        elif k == "b":
+            self._record("bad")
+        elif k == "u":
+            self._record("unsure")
+        elif k == "s":
+            self._advance(record=False)
+        elif k == "z":
+            self._undo()
+
+    def _current(self) -> _ROI | None:
+        if self.idx >= len(self.rois):
+            return None
+        return self.rois[self.idx]
+
+    def _record(self, label: str) -> None:
+        roi = self._current()
+        if roi is None:
+            return
+        rec = {
+            "ts": _dt.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+            "sid": roi.sid,
+            "hcr_id": roi.hcr_id,
+            "label": label,
+            "stage1_score": roi.score,
+            "reviewer": self.reviewer,
+            "session_token": self.token,
+        }
+        _append_label(rec)
+        self.history.append(rec)
+        self._advance(record=True)
+
+    def _advance(self, record: bool) -> None:
+        self.idx += 1
+        self._render()
+
+    def _undo(self) -> None:
+        if not self.history or self.idx == 0:
+            return
+        # Step back one ROI; mark a tombstone in the JSONL so the prior label
+        # can be ignored when training picks up labels.
+        last = self.history.pop()
+        tomb = {
+            "ts": _dt.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+            "sid": last["sid"],
+            "hcr_id": last["hcr_id"],
+            "label": "_undone_",
+            "undoes": last,
+            "reviewer": self.reviewer,
+            "session_token": self.token,
+        }
+        _append_label(tomb)
+        self.idx = max(0, self.idx - 1)
+        self._render()
+
+    def _quit(self) -> None:
+        self.header.value = (
+            f"<b>Session ended.</b> {len(self.history)} labels written to "
+            f"{LABEL_LOG.relative_to(ROOT)}."
+        )
+
+    # ---------- rendering ----------
+    def _render(self) -> None:
+        roi = self._current()
+        if roi is None:
+            self.header.value = (
+                f"<b>Done.</b> {len(self.history)} labels in this session "
+                f"({sum(1 for h in self.history if h['label']=='good')} good / "
+                f"{sum(1 for h in self.history if h['label']=='bad')} bad / "
+                f"{sum(1 for h in self.history if h['label']=='unsure')} unsure)."
+            )
+            self.feat_html.value = ""
+            with self.fig_out:
+                self.fig.clf()
+                self.fig.canvas.draw_idle()
+            return
+
+        self.header.value = (
+            f"<b>{roi.sid}</b> &nbsp; hcr_id=<b>{roi.hcr_id}</b> &nbsp; "
+            f"stage1 score=<b>{roi.score:.3f}</b> &nbsp; "
+            f"<span style='color:#888'>{self.idx + 1} / {len(self.rois)}</span>"
+        )
+        self.feat_html.value = _format_features(roi.features)
+
+        with self.fig_out:
+            try:
+                _render_roi(roi, self.fig)
+            except Exception as exc:  # pragma: no cover — surface in UI
+                self.fig.clf()
+                ax = self.fig.add_subplot(111)
+                ax.text(0.5, 0.5, f"render error: {exc}", ha="center", va="center")
+            self.fig.canvas.draw_idle()
+
+        # Recent history strip
+        items = []
+        for h in self.history[-5:]:
+            color = {"good": "#1a7f37", "bad": "#cf222e", "unsure": "#9a6700"}.get(h["label"], "#666")
+            items.append(
+                f"<span style='color:{color}'>{h['label']}</span>(#{h['hcr_id']})"
+            )
+        self.history_html.value = (
+            "<div style='font-size:12px;color:#444'>last: "
+            + ", ".join(items)
+            + "</div>"
+        )
+
+    # ---------- public API ----------
+    def display(self) -> None:
+        display(self.root)
+
+
+def launch(
+    sid: str,
+    n_rois: int = 80,
+    score_band: tuple[float, float] = (0.3, 0.7),
+    reviewer: str = "anonymous",
+    seed: int = 20260429,
+) -> LabelSession:
+    """Convenience: build and display a `LabelSession`."""
+    sess = LabelSession(
+        sid=sid,
+        n_rois=n_rois,
+        score_band=score_band,
+        reviewer=reviewer,
+        seed=seed,
+    )
+    sess.display()
+    return sess
+
+
+def label_progress() -> pd.DataFrame:
+    """Tally labelled ROIs per subject (excluding undone)."""
+    df = _load_label_log()
+    if df.empty:
+        return pd.DataFrame(columns=["sid", "good", "bad", "unsure", "total"])
+    # Drop undone
+    undone_keys = set()
+    if "_undone_" in df.get("label", pd.Series()).unique():
+        for _, r in df[df["label"] == "_undone_"].iterrows():
+            ub = r.get("undoes") or {}
+            undone_keys.add((ub.get("sid"), int(ub.get("hcr_id", -1))))
+    if undone_keys:
+        keep = [(s, int(h)) not in undone_keys for s, h in zip(df["sid"], df["hcr_id"])]
+        df = df[keep]
+    df = df[df["label"].isin(["good", "bad", "unsure"])]
+    out = (
+        df.groupby(["sid", "label"]).size().unstack(fill_value=0).reset_index()
+    )
+    for c in ("good", "bad", "unsure"):
+        if c not in out.columns:
+            out[c] = 0
+    out["total"] = out["good"] + out["bad"] + out["unsure"]
+    return out[["sid", "good", "bad", "unsure", "total"]]

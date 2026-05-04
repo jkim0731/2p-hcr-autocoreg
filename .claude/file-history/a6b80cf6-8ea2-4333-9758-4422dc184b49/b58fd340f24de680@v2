@@ -1,0 +1,175 @@
+# v3-S10 — Constrained revival of v1 candidates (Grand Plan v3 §4.1)
+
+**Date opened:** 2026-04-30
+**Plan reference:** `code/docs/10 Grand Plan v3 — Cell-cell matching and QC.md`
+§4.1, §6.5
+**Premise (per user, 2026-04-30).** Re-run v1 candidate matchers inside
+the locked-frame overlap volume, restricted to *valid* HCR ROIs as
+predicted by the v3-S11 stage-2 binary classifier ({good, bad_ok}=1
+vs {bad, merged}=0).
+
+## Setup
+
+* Locked frame = LP warm-start with `sz_init = sz_peak` (iter-7 image-NCC
+  sweep, results table at
+  `data/claude_data/full_automatic_execution_02/sessions/v2_S02_sz_image_sweep/results_iter7_summary.csv`).
+  Pins (R, sxy, sz, t_x, t_y) plus the t_z pia anchor — i.e. **all
+  features up to sz**, per the user's framing.
+* Overlap region = bbox of warped-CZ in HCR µm zyx, expanded by
+  `expand_um = 30 µm`.
+* Valid-ROI filter = `roi_quality_stage2_binary_score_v5d.parquet`
+  ≥ τ.  Threshold sweep:
+  * τ = 0.7 drops 6–30 % of GT HCR cells; too aggressive.
+  * τ = 0.5 drops 1.5–22 % of GT (782149 worst at 19.8 %).
+  * τ = 0.3 drops 1–12 % of GT (782149 worst at 11.9 %); chosen as
+    the working point.
+
+| sid     | n_GT | gt with q-score | thr 0.3 | thr 0.5 | thr 0.7 |
+|---------|-----:|---------------:|--------:|--------:|--------:|
+| 755252  |  639 |            639 |   553 (86.5 %) | 517 | 476 |
+| 767018  |  273 |            273 |   250 (91.6 %) | 233 | 208 |
+| 767022  |  793 |            793 |   738 (93.1 %) | 724 | 694 |
+| 782149  |  303 |            303 |   267 (88.1 %) | 243 | 214 |
+| 788406  |  787 |            787 |   767 (97.5 %) | 751 | 700 |
+| 790322  |  778 |            778 |   770 (99.0 %) | 737 | 596 |
+
+## Methods run
+
+| method     | description |
+|------------|-------------|
+| `P14_full` | rectangular Hungarian, overlap-bbox crop only (no quality filter) |
+| `P14`      | rectangular Hungarian, overlap-bbox + roi_quality ≥ τ |
+| `P1`       | TEASER++/GNC-TLS K=5, c̄=15, on overlap+quality crop, with crop-local F6 features (re-normalised against the cropped HCR set) |
+
+Pair acceptance radius after Hungarian: 50 µm.  P1 has its own internal
+TLS gate at c̄ = 15 µm.
+
+## Diagnostic — LP-vs-GT residual
+
+Per-subject distance from `apply_to_cz_um(LP, cz_um)[i]` to the true HCR
+centroid for each `(cz_id, hcr_id)` ground-truth pair (sz pinned to
+iter-7).  This is the matcher-independent ceiling for any
+distance-based assignment after the locked frame:
+
+| sid    | pwr_ncc | med_LP_err | p90_LP_err | frac<20µm | frac<50µm |
+|--------|--------:|-----------:|-----------:|----------:|----------:|
+| 755252 | 0.195   | 74.9 µm    | 658.7 µm   | 0.000     | 0.014     |
+| 767018 | 0.153   | 61.0 µm    | 102.4 µm   | 0.004     | 0.344     |
+| 767022 | 0.315   | 50.4 µm    | 620.7 µm   | 0.023     | 0.489     |
+| 782149 | 0.178   | 94.2 µm    | 121.2 µm   | 0.000     | 0.023     |
+| 788406 | 0.247   | 57.3 µm    | 121.7 µm   | 0.070     | 0.436     |
+| 790322 | 0.206   | 34.7 µm    | 57.3 µm    | 0.144     | 0.817     |
+
+Reading: r@20 from any pose-only matcher is bounded by `frac<20µm`.  The
+LP frame pins (R, sxy, sz, t_x, t_y) image-NCC-style but leaves a
+median residual of ~30–95 µm; on 755252/782149 the p90 is hundreds of
+µm, well past Hungarian's accept gate.  Subjects where LP residual
+exceeds 50 µm cannot be rescued by Hungarian alone — they need either
+M3-ICP-locked refinement (the v2-S03 winner) or a TPS expansion seeded
+from anchor pairs (§4.5).
+
+## Results — sum r@20 across 6 benchmark subjects
+
+(see `constrained_revival_results.csv` for the full table.)
+
+### Pass A — `accept_radius = 50 µm`, `expand_um = 30 µm`
+
+| method          | 755252 | 767018 | 767022 | 782149 | 788406 | 790322 | **sum r@20** | sum r@30 |
+|-----------------|-------:|-------:|-------:|-------:|-------:|-------:|-------------:|---------:|
+| `P14_full`      | 0.005  | 0.212  | 0.277  | 0.007  | 0.337  | 0.542  | **1.380**    | 1.494    |
+| `P14` τ = 0.3   | 0.005  | 0.168  | 0.257  | 0.000  | 0.323  | 0.506  | 1.260        | 1.379    |
+| `P1`  τ = 0.3   | 0.011  | 0.139  | 0.358  | 0.003  | 0.288  | 0.436  | 1.236        | 1.364    |
+
+### Pass B — `accept_radius = 200 µm`, `expand_um = 100 µm`
+
+`accept_radius` was previously discarding correct matches whose residual
+exceeded 50 µm even though the predicted HCR centroid lies within 20 µm
+of GT (Hungarian's distance is between LP-warped CZ and the *kept* HCR
+centroid; the harness's r@k is then between predicted HCR and *GT* HCR).
+Re-running with a wider gate:
+
+| method            | 755252 | 767018 | 767022 | 782149 | 788406 | 790322 | **sum r@20** | sum r@30 |
+|-------------------|-------:|-------:|-------:|-------:|-------:|-------:|-------------:|---------:|
+| `P14_full`        | 0.041  | 0.282  | 0.325  | 0.099  | 0.353  | 0.621  | **1.721**    | 1.862    |
+| `P14` τ = 0.3     | 0.034  | 0.234  | 0.318  | 0.073  | 0.337  | 0.608  | 1.604        | 1.757    |
+| `P1`  τ = 0.3     | 0.011  | 0.128  | 0.361  | 0.010  | 0.291  | 0.485  | 1.285        | 1.407    |
+
+### Reference baselines (Grand Plan v3 §0)
+
+| pipeline                  | sum r@20 |
+|---------------------------|---------:|
+| v1 P14 (no crop, no LP)   | 0.78     |
+| v1 P1  (no crop, no LP)   | 0.78     |
+| v2 C5_szp                 | 1.39 (3-subj) |
+| v2 M3-ICP-locked          | 1.10 (3-subj) |
+| **v2 gated ensemble**     | **2.95** |
+
+## Verdict (per §4.1 stop rule)
+
+> "Anything that ties or beats `M3-ICP-locked + C5_szp` enters the
+> production candidate menu."
+
+| candidate    | result | verdict |
+|--------------|--------|---------|
+| `P14_full`   | 1.72 (best Pass B); 1.38 (Pass A) | **does not** tie 2.95; ~2.2× v1's 0.78 |
+| `P14`        | 1.26 / 1.50ish under Pass B | dominated by `P14_full`; quality filter slightly hurts pose-only matching |
+| `P1`         | 1.24 (Pass A); see Pass B | TPS refinement here cannot fix LP residual on hard subjects; underperforms `P14_full` |
+
+The constrained-revival framing **does** lift the geometric floor
+~1.8–2.2× over v1's no-crop baseline (0.78 → 1.4–1.7), but **none of
+these candidates tie the v2 gated ensemble**.  The bottleneck is no
+longer the matcher — it is the LP residual on 755252/782149 (median
+~75–95 µm) and the long-tail residual on 767022 (p90 = 620 µm).
+Hungarian distance can't fix that; the v2-S03 result that earned the
+2.95 score did so by following LP with M3-ICP — which is the right
+recipe to keep, and what §4.5 (TPS expansion) and §4.6 (volume refit)
+are designed to formalise.
+
+**Per-subject failure attribution** (Pass B P14_full):
+
+* 790322 — `frac<20 = 0.144`, `frac<50 = 0.817`, r@20 = 0.621.  LP is
+  already accurate; matcher is the limit.  Quality filter and crop
+  helped most here.
+* 788406 — `frac<50 = 0.436`, r@20 = 0.353.  Hungarian saturates the
+  reachable fraction; would benefit from TPS to refine within bbox.
+* 767022 — long-tail residual (p90 = 620 µm).  Bbox crop misses
+  outlier-region GT cells; M3-ICP would re-centre the cloud.
+* 767018 — narrow distribution but biased mean (med 61 µm); ICP is the
+  natural fix.
+* 755252 / 782149 — `frac<50 ≤ 0.023`.  Pose-only matchers cannot
+  recover; need either anchor seeding (§4.5 iter-8 K-subset TPS) or a
+  manual-seed mode (§7 stop rule).
+
+The quality filter was designed to **gate TPS expansion** and feed the
+**per-pair classifier** (§4.2/4.3), not to rescue Hungarian — so a
+small recall hit at this stage is expected.  Importantly, at τ = 0.3
+the GT-HCR survival is ≥ 88 % on every subject, leaving the filter
+viable for §4.2 / §4.5 use.
+
+## Outputs
+
+- `constrained_revival_results.csv` — per (subject, method) metrics
+- `pairs_<sid>_<method>.csv` — proposed pairs for each method/subject
+- `lp_residual_diagnostic.csv` — LP-vs-GT residual stats (run via the
+  diagnostic snippet at the bottom of `run_constrained_revival.py`)
+
+## Stop rule fired
+
+Per §4.1: "Stop early if any 3 consecutive revivals fail" — P14_full,
+P14, P1 all fall short of the 2.95 ceiling.  Verdict: the centroid-only
+revival family does not yield production-ready candidates; the crop is
+useful as input to the v2 gated ensemble (already in production) and
+to §4.5 / §4.2 / §4.3 downstream sessions.  M4 (per-cell IoU on
+`cz_voronoi_labels`), Spectral GM (P4), and FPFH (P15) are listed in
+§4.1 but deferred — they all share the same LP-residual ceiling and
+none would tie 2.95 without ICP refinement first.
+
+## Files
+
+| file | purpose |
+|------|---------|
+| `run_constrained_revival.py` | driver — LP + sz pin + bbox crop + roi quality filter + P14/P1; pluggable methods |
+| `constrained_revival_results.csv` | full per (subject, method) result table |
+| `pairs_<sid>_<method>.csv` | predicted pairs |
+| `log.md` | this log |
+

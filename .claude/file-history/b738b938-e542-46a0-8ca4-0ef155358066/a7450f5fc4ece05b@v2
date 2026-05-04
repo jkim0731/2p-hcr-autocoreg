@@ -1,0 +1,557 @@
+"""S11 / Step 6 — Stage-3 iterative-prediction LOSO model, v2.
+
+Improvements over v1 (`06_train_stage3_iter_v1.py`):
+
+1. Loads v7 image-quality features alongside v5 (intra-soma + boundary
+   contrast captures bad_ok = "image dim, seg slightly wrong").
+
+2. Richer neighbor aggregates that bake in the user's directional prior:
+   "neighbor merged → host more likely bad_ok; neighbor good → host more
+   likely good at that boundary":
+
+   - **Rim-share weighting** — `nbr_w_mean_p_*` weights each neighbor by its
+     contribution to the host's protrusion rim (`overlap_voxels / rim_voxels`).
+   - **Thresholded directional fractions** — for each class c and threshold
+     thr, `host_rim_frac_with_p_c_ge_{thr}` = fraction of host's rim
+     contacting neighbors with `p_c ≥ thr`. Two thresholds: 0.5 and 0.7.
+   - **Worst/top-offender features** — for the host's largest-rim-share
+     neighbor: `top_nbr_p_{bad,bad_ok,good,merged}`, `top_nbr_p_binary_pos`,
+     `top_nbr_rim_share`. The host's identity is often dominated by its single
+     biggest contact, not the average.
+   - **total_other_rim_share** — sum of rim shares across all touching
+     neighbors (rest of rim = background).
+
+   Existing v1 aggregates kept for backward compat:
+   - nbr_mean_p_*, nbr_max_p_*, nbr_min_p_* (4 classes + binary)
+   - nbr_w_mean_p_* (now rim-share weighted)
+   - n_touching_neighbors, max_overlap_voxels, sum_overlap_voxels
+
+Inputs:
+- Stage-2 v5 LOSO OOF 4-class probas + binary scores.
+- Neighbor edge list (hcr_id, neighbor_id, overlap_voxels, rim_voxels).
+- v5 feature matrix (v2+v3_extra+v4+v5) + v7 image-quality features.
+
+Outputs (suffix `_v2` = stage-3 v2):
+    cached_roi_quality/{sid}_stage3_binary_score_v2.parquet
+    cached_roi_quality/{sid}_stage3_4class_proba_v2.parquet
+    cached_roi_quality/roi_quality_stage3_binary_v2.txt
+    cached_roi_quality/roi_quality_stage3_4class_v2.txt
+    cached_roi_quality/roi_quality_stage3_meta_v2.json
+    sessions/v3_S11_roi_quality/outputs/stage3/...*_v2.csv
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import lightgbm as lgb
+import numpy as np
+import pandas as pd
+from sklearn.metrics import (
+    accuracy_score,
+    average_precision_score,
+    brier_score_loss,
+    confusion_matrix,
+    f1_score,
+    roc_auc_score,
+)
+
+ROOT = Path("/root/capsule")
+CACHE = ROOT / "code/dev_code/cached_roi_quality"
+SESS = ROOT / "code/sessions/v3_S11_roi_quality"
+OUT = SESS / "outputs/stage3"
+LABEL_LOG = SESS / "outputs/roi_qc_actions.jsonl"
+
+SUBJECTS = ["755252", "767018", "767022", "782149", "788406", "790322"]
+
+CLASS_NAMES = ["bad", "bad_ok", "good", "merged"]
+CLASS_TO_IDX = {c: i for i, c in enumerate(CLASS_NAMES)}
+PROBA_COLS = [f"p_{c}" for c in CLASS_NAMES]
+BIN_COL = "p_binary_pos"
+
+BINARY_POS = {"good", "bad_ok"}
+BINARY_NEG = {"bad", "merged"}
+
+DROP_FEATURES = {"hcr_id", "y", "label", "human_label", "sid"}
+
+PCT_RANK_COLS = [
+    "volume_um3_opened", "volume_vox_raw",
+    "axis3d_lambda1_um2", "surface_area_um2_opened",
+]
+
+NBR_THRESHOLDS = (0.5, 0.7)
+
+LGB_BINARY = dict(
+    objective="binary", learning_rate=0.05, num_leaves=31,
+    min_data_in_leaf=20, feature_fraction=0.85, bagging_fraction=0.85,
+    bagging_freq=5, lambda_l2=1.0, is_unbalance=True,
+    metric=["binary_logloss", "auc"], verbosity=-1, seed=20260430,
+)
+LGB_MULTI = dict(
+    objective="multiclass", num_class=len(CLASS_NAMES), learning_rate=0.05,
+    num_leaves=31, min_data_in_leaf=15, feature_fraction=0.85,
+    bagging_fraction=0.85, bagging_freq=5, lambda_l2=1.0,
+    metric=["multi_logloss"], verbosity=-1, seed=20260430,
+)
+N_ESTIMATORS = 400
+EARLY_STOP = 30
+
+
+def _load_label_log() -> pd.DataFrame:
+    return pd.read_json(LABEL_LOG, lines=True)
+
+
+def _active_labels(log: pd.DataFrame, sid: str) -> pd.DataFrame:
+    sub = log[log["sid"].astype(str) == sid].copy()
+    if sub.empty:
+        return pd.DataFrame(columns=["hcr_id", "label"])
+    tomb_ids: set[int] = set()
+    if (sub["label"] == "_undone_").any():
+        for _, r in sub[sub["label"] == "_undone_"].iterrows():
+            ub = r.get("undoes") or {}
+            try:
+                tomb_ids.add(int(ub.get("hcr_id", -1)))
+            except (TypeError, ValueError):
+                pass
+    sub = sub[sub["label"].isin(["good", "bad", "bad_ok", "merged", "unsure"])]
+    sub = sub[~sub["hcr_id"].astype(int).isin(tomb_ids)]
+    if "ts" in sub.columns:
+        sub = sub.sort_values("ts")
+    sub = sub.drop_duplicates(subset=["hcr_id"], keep="last")
+    return sub[["hcr_id", "label"]].reset_index(drop=True)
+
+
+def _add_within_subject_pct(df: pd.DataFrame) -> pd.DataFrame:
+    for c in PCT_RANK_COLS:
+        if c not in df.columns:
+            df[f"{c}_pct_subj"] = float("nan")
+            continue
+        df[f"{c}_pct_subj"] = df[c].rank(pct=True, method="average")
+    return df
+
+
+def _load_features(sid: str) -> pd.DataFrame:
+    f = pd.read_parquet(CACHE / f"{sid}_features_v2.parquet")
+    g = pd.read_parquet(CACHE / f"{sid}_features_v3_extra.parquet")
+    h = pd.read_parquet(CACHE / f"{sid}_features_v4.parquet")
+    k = pd.read_parquet(CACHE / f"{sid}_features_v5.parquet")
+    out = (f.merge(g, on="hcr_id", how="left", suffixes=("", "_v3"))
+            .merge(h, on="hcr_id", how="left", suffixes=("", "_v4"))
+            .merge(k, on="hcr_id", how="left", suffixes=("", "_v5")))
+    v7_path = CACHE / f"{sid}_features_v7.parquet"
+    if v7_path.exists():
+        v7 = pd.read_parquet(v7_path)
+        out = out.merge(v7, on="hcr_id", how="left", suffixes=("", "_v7"))
+    out = _add_within_subject_pct(out)
+    return out
+
+
+def _load_stage2_oof(sid: str) -> pd.DataFrame:
+    p4 = pd.read_parquet(CACHE / f"{sid}_stage2_4class_proba_v5.parquet")
+    p2 = pd.read_parquet(CACHE / f"{sid}_stage2_binary_score_v5.parquet")
+    p4 = p4[["hcr_id"] + PROBA_COLS].copy()
+    p2 = p2[["hcr_id", "score"]].rename(columns={"score": BIN_COL}).copy()
+    return p4.merge(p2, on="hcr_id", how="outer")
+
+
+def _aggregate_neighbor_features(sid: str, oof: pd.DataFrame) -> pd.DataFrame:
+    """Per-host neighbor aggregates baking in the directional coupling prior.
+
+    Columns produced:
+      mean / max / min over neighbors:    nbr_{mean,max,min}_p_{class,binary_pos}
+      rim-share-weighted mean:            nbr_w_mean_p_{class,binary_pos}
+      thresholded rim-share fractions:    host_rim_frac_with_p_{cls}_ge_{thr}
+                                          for cls in 4-class, thr in 0.5/0.7
+      top-offender (largest rim-share):   top_nbr_p_{class,binary_pos},
+                                          top_nbr_rim_share
+      adjacency totals:                   n_touching_neighbors,
+                                          max_overlap_voxels,
+                                          sum_overlap_voxels,
+                                          total_other_rim_share
+    """
+    nb_path = CACHE / f"{sid}_neighbors_v1.parquet"
+    if not nb_path.exists():
+        return pd.DataFrame(columns=["hcr_id"])
+    nb = pd.read_parquet(nb_path)
+    if nb.empty:
+        return pd.DataFrame(columns=["hcr_id"])
+
+    rename_map = {c: f"nbr_{c}" for c in PROBA_COLS + [BIN_COL]}
+    nb = nb.merge(
+        oof.rename(columns={"hcr_id": "neighbor_id", **rename_map}),
+        on="neighbor_id", how="left",
+    )
+    val_cols = [f"nbr_{c}" for c in PROBA_COLS]
+    bin_col = f"nbr_{BIN_COL}"
+    all_cols = val_cols + [bin_col]
+
+    nb = nb.dropna(subset=val_cols, how="all").copy()
+    if nb.empty:
+        return pd.DataFrame(columns=["hcr_id"])
+
+    nb["overlap_voxels"] = nb["overlap_voxels"].astype("float64")
+    nb["rim_voxels"] = nb["rim_voxels"].astype("float64").clip(lower=1.0)
+    nb["rim_share"] = nb["overlap_voxels"] / nb["rim_voxels"]
+
+    g = nb.groupby("hcr_id", sort=False)
+    parts = []
+
+    def _rename(prefix, df):
+        df = df.copy()
+        df.columns = [f"{prefix}_{c.replace('nbr_', '')}" for c in df.columns]
+        return df
+
+    parts.append(_rename("nbr_mean", g[all_cols].mean()))
+    parts.append(_rename("nbr_max", g[all_cols].max()))
+    parts.append(_rename("nbr_min", g[all_cols].min()))
+
+    for c in all_cols:
+        nb[f"_wv_{c}"] = nb[c] * nb["rim_share"]
+    sums_v = g[[f"_wv_{c}" for c in all_cols]].sum()
+    sum_w = g["rim_share"].sum().replace(0, np.nan)
+    wmean = sums_v.div(sum_w, axis=0)
+    wmean.columns = [
+        f"nbr_w_mean_{c.replace('_wv_nbr_', '')}" for c in wmean.columns
+    ]
+    parts.append(wmean)
+
+    for thr in NBR_THRESHOLDS:
+        for cls, c in zip(CLASS_NAMES, val_cols):
+            nb[f"_thr_{int(thr*100)}_{cls}"] = (nb[c] >= thr).astype("float64") * nb["rim_share"]
+        thr_cols = [f"_thr_{int(thr*100)}_{cls}" for cls in CLASS_NAMES]
+        thr_sum = g[thr_cols].sum()
+        thr_sum.columns = [
+            f"host_rim_frac_with_p_{cls}_ge_{thr:.1f}" for cls in CLASS_NAMES
+        ]
+        parts.append(thr_sum)
+
+    idx_top = g["rim_share"].idxmax()
+    top = nb.loc[idx_top.values, all_cols + ["rim_share"]].copy()
+    top.index = idx_top.index
+    top.columns = [
+        "top_nbr_p_bad", "top_nbr_p_bad_ok", "top_nbr_p_good", "top_nbr_p_merged",
+        "top_nbr_p_binary_pos", "top_nbr_rim_share",
+    ]
+    parts.append(top)
+
+    extras = g.agg(
+        n_touching_neighbors=("neighbor_id", "size"),
+        max_overlap_voxels=("overlap_voxels", "max"),
+        sum_overlap_voxels=("overlap_voxels", "sum"),
+        total_other_rim_share=("rim_share", "sum"),
+    )
+    parts.append(extras)
+
+    out = pd.concat(parts, axis=1).reset_index()
+    return out
+
+
+def _build_subject_frame(sid: str) -> pd.DataFrame:
+    feats = _load_features(sid)
+    oof = _load_stage2_oof(sid)
+    nb_aggr = _aggregate_neighbor_features(sid, oof)
+    df = feats.merge(oof, on="hcr_id", how="left")
+    df = df.merge(nb_aggr, on="hcr_id", how="left")
+    for c in ["n_touching_neighbors", "max_overlap_voxels",
+              "sum_overlap_voxels", "total_other_rim_share"]:
+        if c in df.columns:
+            df[c] = df[c].fillna(0)
+    df["sid"] = sid
+    return df
+
+
+def _build_matrix(df: pd.DataFrame, feature_columns: list[str] | None
+                  ) -> tuple[pd.DataFrame, list[str]]:
+    if feature_columns is None:
+        cols = [
+            c for c in df.columns
+            if c not in DROP_FEATURES
+            and (pd.api.types.is_numeric_dtype(df[c]) or pd.api.types.is_bool_dtype(df[c]))
+        ]
+    else:
+        cols = list(feature_columns)
+    X = df[cols].copy()
+    for c in X.columns:
+        if pd.api.types.is_bool_dtype(X[c]):
+            X[c] = X[c].astype("float32")
+    return X, cols
+
+
+def _early_stop_split(n: int, frac: float = 0.15, seed: int = 0):
+    rng = np.random.default_rng(seed)
+    idx = np.arange(n)
+    rng.shuffle(idx)
+    cut = max(1, int(round(n * (1 - frac))))
+    return idx[:cut], idx[cut:]
+
+
+def train_binary(X_tr, y_tr) -> lgb.Booster:
+    tr, va = _early_stop_split(len(X_tr), frac=0.15, seed=42)
+    return lgb.train(
+        LGB_BINARY,
+        lgb.Dataset(X_tr.iloc[tr], y_tr[tr]),
+        num_boost_round=N_ESTIMATORS,
+        valid_sets=[lgb.Dataset(X_tr.iloc[va], y_tr[va])],
+        callbacks=[lgb.early_stopping(EARLY_STOP), lgb.log_evaluation(0)],
+    )
+
+
+def train_multi(X_tr, y_tr) -> lgb.Booster:
+    tr, va = _early_stop_split(len(X_tr), frac=0.15, seed=42)
+    return lgb.train(
+        LGB_MULTI,
+        lgb.Dataset(X_tr.iloc[tr], y_tr[tr]),
+        num_boost_round=N_ESTIMATORS,
+        valid_sets=[lgb.Dataset(X_tr.iloc[va], y_tr[va])],
+        callbacks=[lgb.early_stopping(EARLY_STOP), lgb.log_evaluation(0)],
+    )
+
+
+def main() -> None:
+    OUT.mkdir(parents=True, exist_ok=True)
+    log = _load_label_log()
+    print(f"label log: {len(log)} rows")
+
+    feats = {sid: _build_subject_frame(sid) for sid in SUBJECTS}
+    labs = {sid: _active_labels(log, sid) for sid in SUBJECTS}
+
+    print("\nactive label counts per subject (post-undo):")
+    for sid in SUBJECTS:
+        c = labs[sid]["label"].value_counts().to_dict()
+        print(f"  {sid}: total={len(labs[sid]):3d}  " + ", ".join(
+            f"{k}={c.get(k, 0)}" for k in ["good", "bad", "bad_ok", "merged", "unsure"]
+        ))
+    print(f"\nstage-3 v2 frame: {SUBJECTS[0]} has {feats[SUBJECTS[0]].shape[1]} columns")
+
+    print("\n" + "=" * 62 + "\nBINARY (stage-3 v2)  {good, bad_ok} vs {bad, merged}, drop unsure\n" + "=" * 62)
+    feature_columns = None
+    bin_metrics, bin_imp = [], {}
+
+    for held in SUBJECTS:
+        tr_X, tr_y = [], []
+        for sid in SUBJECTS:
+            if sid == held:
+                continue
+            f = feats[sid]
+            l = labs[sid]
+            l = l[l["label"].isin(BINARY_POS | BINARY_NEG)].copy()
+            l["y"] = l["label"].isin(BINARY_POS).astype("int8")
+            merged = f.merge(l[["hcr_id", "y"]], on="hcr_id", how="inner")
+            X, cols = _build_matrix(merged, feature_columns)
+            feature_columns = cols
+            tr_X.append(X)
+            tr_y.append(merged["y"].to_numpy("int8"))
+        X_tr = pd.concat(tr_X, axis=0).reset_index(drop=True)
+        y_tr = np.concatenate(tr_y)
+
+        f_held = feats[held]
+        X_held, _ = _build_matrix(f_held, feature_columns)
+        l_held = labs[held]
+        l_held = l_held[l_held["label"].isin(BINARY_POS | BINARY_NEG)].copy()
+        l_held["y"] = l_held["label"].isin(BINARY_POS).astype("int8")
+
+        booster = train_binary(X_tr, y_tr)
+        y_pred_full = booster.predict(X_held, num_iteration=booster.best_iteration)
+
+        scored = pd.DataFrame({"hcr_id": f_held["hcr_id"].to_numpy(), "score": y_pred_full})
+        eval_df = l_held.merge(scored, on="hcr_id", how="left")
+        y_eval = eval_df["y"].to_numpy("int8")
+        p_eval = eval_df["score"].to_numpy("float64")
+
+        auc = roc_auc_score(y_eval, p_eval) if len(np.unique(y_eval)) > 1 else float("nan")
+        ap = average_precision_score(y_eval, p_eval) if len(np.unique(y_eval)) > 1 else float("nan")
+        brier = brier_score_loss(y_eval, p_eval)
+        acc = accuracy_score(y_eval, (p_eval >= 0.5).astype("int8"))
+
+        bin_metrics.append({
+            "held_subject": held, "n_train": int(len(X_tr)),
+            "n_eval": int(len(y_eval)),
+            "auc": auc, "ap": ap, "brier": brier, "acc@0.5": acc,
+            "best_iter": booster.best_iteration,
+        })
+        print(f"[hold {held}] n_tr={len(X_tr):3d}  n_ev={len(y_eval):3d}  "
+              f"AUC={auc:.4f}  AP={ap:.4f}  Brier={brier:.4f}  acc@0.5={acc:.3f}  "
+              f"iter={booster.best_iteration}")
+
+        oof_df = pd.DataFrame({
+            "hcr_id": f_held["hcr_id"].to_numpy("int64"),
+            "score": y_pred_full.astype("float32"),
+        }).merge(
+            l_held.rename(columns={"label": "human_label"})[["hcr_id", "human_label"]],
+            on="hcr_id", how="left",
+        )
+        oof_df.to_parquet(CACHE / f"{held}_stage3_binary_score_v2.parquet", index=False)
+
+        gain = booster.feature_importance(importance_type="gain")
+        for c, g in zip(feature_columns, gain):
+            bin_imp.setdefault(c, []).append(float(g))
+
+    bm = pd.DataFrame(bin_metrics).sort_values("held_subject")
+    bm.to_csv(OUT / "binary_loso_metrics_v2.csv", index=False)
+    print("\nstage-3 binary v2 LOSO summary:")
+    print(bm.to_string(index=False))
+    print(f"  mean AUC={bm['auc'].mean():.4f}  AP={bm['ap'].mean():.4f}  "
+          f"Brier={bm['brier'].mean():.4f}  acc@0.5={bm['acc@0.5'].mean():.4f}")
+
+    fi_b = (
+        pd.DataFrame({c: pd.Series(v) for c, v in bin_imp.items()})
+        .mean().sort_values(ascending=False)
+        .rename("mean_gain").reset_index().rename(columns={"index": "feature"})
+    )
+    fi_b.to_csv(OUT / "binary_feature_importance_v2.csv", index=False)
+    print("\nstage-3 binary v2 top-30 features:")
+    print(fi_b.head(30).to_string(index=False))
+
+    print("\n" + "=" * 62 + f"\n4-CLASS (stage-3 v2)  {CLASS_NAMES}, drop unsure\n" + "=" * 62)
+    multi_metrics, multi_imp = [], {}
+    overall_cm = np.zeros((len(CLASS_NAMES), len(CLASS_NAMES)), dtype=int)
+
+    for held in SUBJECTS:
+        tr_X, tr_y = [], []
+        for sid in SUBJECTS:
+            if sid == held:
+                continue
+            f = feats[sid]
+            l = labs[sid]
+            l = l[l["label"].isin(CLASS_NAMES)].copy()
+            l["y"] = l["label"].map(CLASS_TO_IDX).astype("int8")
+            merged = f.merge(l[["hcr_id", "y"]], on="hcr_id", how="inner")
+            X, _ = _build_matrix(merged, feature_columns)
+            tr_X.append(X)
+            tr_y.append(merged["y"].to_numpy("int8"))
+        X_tr = pd.concat(tr_X, axis=0).reset_index(drop=True)
+        y_tr = np.concatenate(tr_y)
+
+        f_held = feats[held]
+        X_held, _ = _build_matrix(f_held, feature_columns)
+        l_held = labs[held]
+        l_held = l_held[l_held["label"].isin(CLASS_NAMES)].copy()
+        l_held["y"] = l_held["label"].map(CLASS_TO_IDX).astype("int8")
+
+        booster = train_multi(X_tr, y_tr)
+        proba_full = booster.predict(X_held, num_iteration=booster.best_iteration)
+        scored = pd.DataFrame(proba_full, columns=PROBA_COLS)
+        scored["hcr_id"] = f_held["hcr_id"].to_numpy("int64")
+        eval_df = l_held.merge(scored, on="hcr_id", how="left")
+        y_eval = eval_df["y"].to_numpy("int8")
+        proba_eval = eval_df[PROBA_COLS].to_numpy("float64")
+        y_pred = proba_eval.argmax(axis=1)
+        acc = accuracy_score(y_eval, y_pred)
+        f1m = f1_score(y_eval, y_pred, average="macro", zero_division=0)
+        f1p = f1_score(y_eval, y_pred, average=None,
+                        labels=list(range(len(CLASS_NAMES))), zero_division=0)
+        cm = confusion_matrix(y_eval, y_pred, labels=list(range(len(CLASS_NAMES))))
+        overall_cm += cm
+
+        row = {
+            "held_subject": held, "n_train": int(len(X_tr)),
+            "n_eval": int(len(y_eval)), "acc": acc, "f1_macro": f1m,
+            "best_iter": booster.best_iteration,
+        }
+        for c, fv in zip(CLASS_NAMES, f1p):
+            row[f"f1_{c}"] = float(fv)
+        multi_metrics.append(row)
+
+        print(f"[hold {held}] n_tr={len(X_tr):3d}  n_ev={len(y_eval):3d}  "
+              f"acc={acc:.3f}  f1_macro={f1m:.3f}  "
+              + " ".join(f"f1_{c}={f:.2f}" for c, f in zip(CLASS_NAMES, f1p))
+              + f"  iter={booster.best_iteration}")
+
+        oof = scored[["hcr_id"] + PROBA_COLS].merge(
+            l_held.rename(columns={"label": "human_label"})[["hcr_id", "human_label"]],
+            on="hcr_id", how="left",
+        )
+        oof.to_parquet(CACHE / f"{held}_stage3_4class_proba_v2.parquet", index=False)
+
+        gain = booster.feature_importance(importance_type="gain")
+        for c, g in zip(feature_columns, gain):
+            multi_imp.setdefault(c, []).append(float(g))
+
+    mm = pd.DataFrame(multi_metrics).sort_values("held_subject")
+    mm.to_csv(OUT / "4class_loso_metrics_v2.csv", index=False)
+    print("\nstage-3 4-class v2 LOSO summary:")
+    print(mm[["held_subject", "n_train", "n_eval", "acc", "f1_macro"]
+             + [f"f1_{c}" for c in CLASS_NAMES]].to_string(index=False))
+    print(f"  mean acc={mm['acc'].mean():.4f}  mean f1_macro={mm['f1_macro'].mean():.4f}")
+
+    fi_m = (
+        pd.DataFrame({c: pd.Series(v) for c, v in multi_imp.items()})
+        .mean().sort_values(ascending=False)
+        .rename("mean_gain").reset_index().rename(columns={"index": "feature"})
+    )
+    fi_m.to_csv(OUT / "4class_feature_importance_v2.csv", index=False)
+    print("\nstage-3 4-class v2 top-30 features:")
+    print(fi_m.head(30).to_string(index=False))
+
+    cm_df = pd.DataFrame(overall_cm,
+                          index=[f"true_{c}" for c in CLASS_NAMES],
+                          columns=[f"pred_{c}" for c in CLASS_NAMES])
+    cm_df.to_csv(OUT / "4class_confusion_overall_v2.csv")
+    print("\nstage-3 4-class v2 confusion matrix (sum):")
+    print(cm_df.to_string())
+
+    print("\n" + "=" * 62 + "\nproduction stage-3 v2 models on all labelled rows\n" + "=" * 62)
+
+    Xb_parts, yb_parts = [], []
+    for sid in SUBJECTS:
+        f = feats[sid]; l = labs[sid]
+        l = l[l["label"].isin(BINARY_POS | BINARY_NEG)].copy()
+        l["y"] = l["label"].isin(BINARY_POS).astype("int8")
+        m = f.merge(l[["hcr_id", "y"]], on="hcr_id", how="inner")
+        X, _ = _build_matrix(m, feature_columns)
+        Xb_parts.append(X); yb_parts.append(m["y"].to_numpy("int8"))
+    Xb = pd.concat(Xb_parts, axis=0).reset_index(drop=True)
+    yb = np.concatenate(yb_parts)
+    n_iter_b = max(int(np.median([m["best_iter"] for m in bin_metrics])), 80)
+    bin_prod = lgb.train(LGB_BINARY, lgb.Dataset(Xb, yb),
+                          num_boost_round=n_iter_b,
+                          callbacks=[lgb.log_evaluation(0)])
+    bin_prod.save_model(str(CACHE / "roi_quality_stage3_binary_v2.txt"))
+    print(f"  binary stage-3 v2 production: {len(Xb)} rows, {n_iter_b} iters")
+
+    Xm_parts, ym_parts = [], []
+    for sid in SUBJECTS:
+        f = feats[sid]; l = labs[sid]
+        l = l[l["label"].isin(CLASS_NAMES)].copy()
+        l["y"] = l["label"].map(CLASS_TO_IDX).astype("int8")
+        m = f.merge(l[["hcr_id", "y"]], on="hcr_id", how="inner")
+        X, _ = _build_matrix(m, feature_columns)
+        Xm_parts.append(X); ym_parts.append(m["y"].to_numpy("int8"))
+    Xm = pd.concat(Xm_parts, axis=0).reset_index(drop=True)
+    ym = np.concatenate(ym_parts)
+    n_iter_m = max(int(np.median([m["best_iter"] for m in multi_metrics])), 80)
+    multi_prod = lgb.train(LGB_MULTI, lgb.Dataset(Xm, ym),
+                             num_boost_round=n_iter_m,
+                             callbacks=[lgb.log_evaluation(0)])
+    multi_prod.save_model(str(CACHE / "roi_quality_stage3_4class_v2.txt"))
+    print(f"  4-class stage-3 v2 production: {len(Xm)} rows, {n_iter_m} iters")
+
+    meta = {
+        "version": "stage3_v2",
+        "feature_columns": feature_columns,
+        "subjects": SUBJECTS,
+        "class_names": CLASS_NAMES,
+        "neighbor_thresholds": list(NBR_THRESHOLDS),
+        "binary": {
+            "n_train_total": int(len(Xb)),
+            "n_iter_prod": int(n_iter_b),
+            "loso_mean_auc": float(bm["auc"].mean()),
+            "loso_mean_ap": float(bm["ap"].mean()),
+            "loso_mean_brier": float(bm["brier"].mean()),
+            "loso_mean_acc05": float(bm["acc@0.5"].mean()),
+        },
+        "four_class": {
+            "n_train_total": int(len(Xm)),
+            "n_iter_prod": int(n_iter_m),
+            "loso_mean_acc": float(mm["acc"].mean()),
+            "loso_mean_f1_macro": float(mm["f1_macro"].mean()),
+        },
+    }
+    (CACHE / "roi_quality_stage3_meta_v2.json").write_text(json.dumps(meta, indent=2))
+    print(f"\nmeta saved -> {CACHE / 'roi_quality_stage3_meta_v2.json'}")
+    print(f"per-subject oof saved under {CACHE}/<sid>_stage3_*_v2.parquet")
+    print(f"summaries under {OUT}")
+
+
+if __name__ == "__main__":
+    main()

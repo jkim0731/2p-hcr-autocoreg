@@ -1,0 +1,793 @@
+"""
+S11 / Step 4b — STANDALONE HCR ROI labelling GUI (no Jupyter).
+
+A pure matplotlib-window application.  Run from a shell with a
+display::
+
+    python code/sessions/v3_S11_roi_quality/04b_label_gui_app.py \
+        --sid 788406 --reviewer alice
+
+Why this exists alongside `04_label_gui.ipynb`: the notebook flavour
+needs `ipyevents` + `pyarrow` inside the live kernel, which is
+brittle (kernel restarts, user-site vs conda paths, etc.).  This
+standalone app uses only matplotlib's bundled widgets — no extra
+runtime requirements beyond the same data-loading helpers.
+
+Both flavours share `gui.py`'s helpers, so labels written here land
+in the same JSONL and feed Step 5 with no conversion.
+
+Layout (3-D orthoview)::
+
+    +-----------+ +-----------+ +-----------+ ┌─────────┐
+    | xy axial  | | xz coronal| | yz sagit. | │ feature │
+    +-----------+ +-----------+ +-----------+ │ panel   │
+    | header (sid / hcr_id / score / i / N)   │  (full  │
+    | z [───────●───────────]  Slider         │ height, │
+    | (405)(488)(overlay)  [☐ MIP]            │  right  │
+    | [Good][Bad][Unsure][Skip][Undo][Quit]   │  side)  │
+    | last: good(14328) bad(14329) ...        │         │
+    +-----------------------------------------+ └─────────┘
+
+Keyboard:
+    g / b / u            label good / bad / unsure (and advance)
+    s                    skip          z   undo            q  quit
+    j / down-arrow       z − 1
+    k / up-arrow         z + 1
+    mouse wheel          z ± 1 (over any panel)
+    m                    toggle MIP / single-slice
+    1 / 2 / 3            channel = 405 / 488 / overlay
+    n / p                next / previous subject (when --sid lists multiple)
+"""
+from __future__ import annotations
+
+import argparse
+import datetime as _dt
+import sys
+import uuid
+from pathlib import Path
+
+import matplotlib
+
+# Pick a backend that supports interactive windows.  TkAgg is in the
+# Python stdlib so it's the safest default; fall back to QtAgg if Tk
+# isn't available, then to the matplotlib default.
+for _bk in ("TkAgg", "QtAgg", "Qt5Agg"):
+    try:
+        matplotlib.use(_bk, force=True)
+        break
+    except Exception:  # pragma: no cover — backend probing
+        continue
+
+import matplotlib.pyplot as plt
+import numpy as np
+from matplotlib.widgets import Button, CheckButtons, RadioButtons, Slider, TextBox
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+
+from gui import (  # noqa: E402  (sys.path mutation above is intentional)
+    CACHE,
+    KEY_DISPLAY_FEATURES,
+    LABEL_LOG,
+    ROOT,
+    TIGHT_BBOX,
+    _ROI,
+    _RoiCrops,
+    _append_label,
+    _load_label_log,
+    _load_roi_crops,
+    _planes_for_channel,
+    _sample_uncertain,
+)
+import pandas as pd  # noqa: E402  (used by the local samplers)
+
+
+# ---------------------------------------------------------------------------
+# small utilities
+# ---------------------------------------------------------------------------
+def _format_features_text(features: dict) -> str:
+    lines = []
+    for k in KEY_DISPLAY_FEATURES:
+        if k not in features:
+            continue
+        v = features[k]
+        if v is None or (isinstance(v, float) and np.isnan(v)):
+            txt = "—"
+        elif isinstance(v, (bool, np.bool_)):
+            txt = "True" if v else "False"
+        elif isinstance(v, (int, np.integer)):
+            txt = f"{int(v)}"
+        else:
+            txt = f"{float(v):.3g}"
+        lines.append(f"{k:<28s} {txt}")
+    return "\n".join(lines)
+
+
+def _now_iso() -> str:
+    return _dt.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
+
+def _active_labels(label_log: pd.DataFrame, sid: str) -> dict[int, str]:
+    """Return {hcr_id: label} for `sid`, replaying `_undone_` tombstones.
+
+    A `_undone_` record cancels the most recent label for a (sid, hcr_id)
+    pair.  The result is the *current* labelled state.
+    """
+    if label_log.empty:
+        return {}
+    sub = label_log[label_log["sid"] == sid].copy()
+    if sub.empty:
+        return {}
+    tomb_keys: set[int] = set()
+    if "label" in sub.columns and (sub["label"] == "_undone_").any():
+        for _, r in sub[sub["label"] == "_undone_"].iterrows():
+            ub = r.get("undoes") or {}
+            try:
+                tomb_keys.add(int(ub.get("hcr_id", -1)))
+            except (TypeError, ValueError):
+                pass
+    sub = sub[sub["label"].isin(["good", "bad", "unsure"])]
+    sub = sub[~sub["hcr_id"].astype(int).isin(tomb_keys)]
+    if "ts" in sub.columns:
+        sub = sub.sort_values("ts")
+    sub = sub.drop_duplicates(subset=["hcr_id"], keep="last")
+    return dict(zip(sub["hcr_id"].astype(int), sub["label"]))
+
+
+def _sample_labelled(
+    sid: str,
+    n_rois: int,
+    rng: np.random.Generator,
+    label_log: pd.DataFrame,
+) -> tuple[list[_ROI], dict[int, str]]:
+    """Sample previously-labelled ROIs for review (re-walk current labels)."""
+    active = _active_labels(label_log, sid)
+    if not active:
+        return [], {}
+    feats = pd.read_parquet(CACHE / f"{sid}_features.parquet")
+    scores = pd.read_parquet(CACHE / f"{sid}_stage1_score.parquet")
+    bbox = pd.read_parquet(TIGHT_BBOX / f"{sid}_hcr_cell_tight_bbox_v1.parquet")
+    df = feats.merge(scores, on="hcr_id").merge(bbox, on="hcr_id", how="inner")
+    df = df[df["hcr_id"].astype(int).isin(active.keys())]
+    if df.empty:
+        return [], {}
+
+    n = min(n_rois, len(df))
+    idx = rng.choice(len(df), size=n, replace=False)
+    sub = df.iloc[idx]
+    rois: list[_ROI] = []
+    for _, r in sub.iterrows():
+        rois.append(
+            _ROI(
+                sid=sid,
+                hcr_id=int(r["hcr_id"]),
+                score=float(r["score"]),
+                bbox=(
+                    int(r["zmin_vox"]), int(r["zmax_vox"]),
+                    int(r["ymin_vox"]), int(r["ymax_vox"]),
+                    int(r["xmin_vox"]), int(r["xmax_vox"]),
+                ),
+                centroid=(
+                    float(r["zc_vox"]), float(r["yc_vox"]), float(r["xc_vox"]),
+                ),
+                features={k: r.get(k) for k in KEY_DISPLAY_FEATURES if k in r.index},
+            )
+        )
+    prior_labels = {roi.hcr_id: active[roi.hcr_id] for roi in rois}
+    return rois, prior_labels
+
+
+# ---------------------------------------------------------------------------
+# main app
+# ---------------------------------------------------------------------------
+class StandaloneLabeller:
+    """Single-window 3-D orthoview labelling app."""
+
+    def __init__(
+        self,
+        sids: list[str],
+        n_rois: int,
+        score_band: tuple[float, float],
+        reviewer: str,
+        seed: int,
+    ) -> None:
+        if not sids:
+            raise ValueError("at least one sid is required")
+        self.sids = list(sids)
+        self.subject_idx = 0
+        self.n_rois = n_rois
+        self.score_band = score_band
+        self.reviewer = reviewer
+        self.seed = seed
+        self.token = uuid.uuid4().hex[:8]
+
+        # Per-subject ROI list and walk position; reset by _load_subject().
+        self.rois: list[_ROI] = []
+        self.idx = 0
+
+        # Cross-subject history stack — undo always undoes the most recent
+        # label regardless of which subject it was on.
+        self.history: list[dict] = []
+        self.crops: _RoiCrops | None = None
+        self._suppress_slider = False
+        self._suppress_subject_radio = False
+
+        # Channel / MIP state (preserved across subjects)
+        self._channel = "405"
+        self._mip = False
+
+        # Sampling mode: "new" walks uncertain band (skipping already-labelled);
+        # "review" re-walks ROIs that have a current (non-undone) label.
+        self._mode = "new"
+        self._prior_labels: dict[int, str] = {}
+
+        # Load the initial subject's ROI pool; auto-advance past any
+        # subjects with no work to do for the current mode, so the
+        # user lands on the first one that has ROIs.
+        self._load_subject()
+        for _ in range(len(self.sids)):
+            if self.rois:
+                break
+            self.subject_idx = (self.subject_idx + 1) % len(self.sids)
+            self._load_subject()
+        if not self.rois:
+            raise RuntimeError(
+                f"No ROIs to {self._mode}-label in any of the requested "
+                f"subjects ({self.sids}) within score band {self.score_band}."
+            )
+
+        # ---- figure layout (axes positions in figure coords) ----
+        # Left region (x < 0.74) holds the three image panels and all
+        # controls.  Right region (x > 0.76) is reserved for the
+        # features panel so its text can never overflow into buttons.
+        title = (
+            f"S11 labeller — sid={self.sids[0]}"
+            if len(self.sids) == 1
+            else f"S11 labeller — {len(self.sids)} subjects"
+        )
+        self.fig = plt.figure(f"{title}  reviewer={reviewer}", figsize=(15.5, 9.0))
+
+        # Three image panels (top 53% of the figure, left region)
+        self.ax_xy = self.fig.add_axes([0.030, 0.45, 0.225, 0.50])
+        self.ax_xz = self.fig.add_axes([0.265, 0.45, 0.225, 0.50])
+        self.ax_yz = self.fig.add_axes([0.500, 0.45, 0.225, 0.50])
+        for ax, ttl in [
+            (self.ax_xy, "xy (axial)"),
+            (self.ax_xz, "xz (coronal)"),
+            (self.ax_yz, "yz (sagittal)"),
+        ]:
+            ax.set_title(ttl, fontsize=10)
+            ax.set_xticks([])
+            ax.set_yticks([])
+
+        self._im_xy = self.ax_xy.imshow(np.zeros((1, 1)), cmap="gray", vmin=0, vmax=1)
+        self._im_xz = self.ax_xz.imshow(
+            np.zeros((1, 1)), cmap="gray", vmin=0, vmax=1, aspect="auto"
+        )
+        self._im_yz = self.ax_yz.imshow(
+            np.zeros((1, 1)), cmap="gray", vmin=0, vmax=1, aspect="auto"
+        )
+        self._contour_artists: list = []
+        self._crosshair_artists: list = []
+
+        # Header line (left region)
+        self.ax_header = self.fig.add_axes([0.030, 0.395, 0.69, 0.04])
+        self.ax_header.axis("off")
+        self.text_header = self.ax_header.text(
+            0, 0.5, "", va="center", ha="left", fontsize=11
+        )
+
+        # Z slider (left region)
+        self.ax_slider = self.fig.add_axes([0.075, 0.345, 0.65, 0.028])
+        self.slider = Slider(
+            self.ax_slider, "z", 0, 1, valinit=0, valstep=1, valfmt="%d"
+        )
+        self.slider.on_changed(self._on_slider)
+
+        # Subject "dropdown" (RadioButtons — matplotlib's closest equivalent).
+        # Hidden when only one subject is in play, but always present so the
+        # callback wiring is uniform.
+        n_sub = max(2, len(self.sids))  # min height ratio still readable
+        sub_h = max(0.08, min(0.16, 0.026 * n_sub))
+        self.ax_subject = self.fig.add_axes(
+            [0.030, 0.345 - sub_h, 0.105, sub_h]
+        )
+        self.ax_subject.set_title("subject (n/p)", fontsize=8.5, loc="left", pad=2)
+        self.subject_radio = RadioButtons(
+            self.ax_subject, tuple(self.sids), active=self.subject_idx
+        )
+        self.subject_radio.on_clicked(self._on_subject_radio)
+        if len(self.sids) <= 1:
+            self.ax_subject.set_visible(False)
+
+        # Channel radio
+        self.ax_radio = self.fig.add_axes([0.150, 0.235, 0.085, 0.10])
+        self.ax_radio.set_title("channel (1/2/3)", fontsize=8.5, loc="left", pad=2)
+        self.radio = RadioButtons(self.ax_radio, ("405", "488", "overlay"), active=0)
+        self.radio.on_clicked(self._on_channel)
+
+        # Mode radio (new vs review)
+        self.ax_mode = self.fig.add_axes([0.245, 0.260, 0.085, 0.075])
+        self.ax_mode.set_title("mode", fontsize=8.5, loc="left", pad=2)
+        self.mode_radio = RadioButtons(self.ax_mode, ("new", "review"), active=0)
+        self.mode_radio.on_clicked(self._on_mode)
+
+        # MIP checkbox
+        self.ax_check = self.fig.add_axes([0.340, 0.275, 0.075, 0.055])
+        self.check = CheckButtons(self.ax_check, ("MIP (m)",), actives=[False])
+        self.check.on_clicked(self._on_mip)
+
+        # Reviewer TextBox — editable inside the GUI.  Press Enter to save.
+        self.ax_reviewer = self.fig.add_axes([0.495, 0.285, 0.20, 0.040])
+        self.tb_reviewer = TextBox(
+            self.ax_reviewer, "reviewer ", initial=self.reviewer
+        )
+        self.tb_reviewer.on_submit(self._on_reviewer)
+
+        # Action buttons — single row, no overlap with anything above
+        btn_w, btn_h, btn_y = 0.095, 0.055, 0.10
+        btn_xs = [0.030, 0.135, 0.240, 0.345, 0.450, 0.625]
+        btn_labels = [
+            "Good (g)", "Bad (b)", "Unsure (u)", "Skip (s)", "Undo (z)", "Quit (q)"
+        ]
+        btn_colors = ["#a8e6a8", "#f5b5b5", "#ffe4a3", "#dcdcdc", "#dcdcdc", "#dcdcdc"]
+        callbacks = [
+            lambda _e: self._record("good"),
+            lambda _e: self._record("bad"),
+            lambda _e: self._record("unsure"),
+            lambda _e: self._advance(),
+            lambda _e: self._undo(),
+            lambda _e: self._quit(),
+        ]
+        self.buttons = []
+        for x, lbl, color, cb in zip(btn_xs, btn_labels, btn_colors, callbacks):
+            ax = self.fig.add_axes([x, btn_y, btn_w, btn_h])
+            b = Button(ax, lbl, color=color, hovercolor="#bcd")
+            b.on_clicked(cb)
+            self.buttons.append(b)
+
+        # History strip (bottom of left region)
+        self.ax_hist = self.fig.add_axes([0.030, 0.030, 0.69, 0.04])
+        self.ax_hist.axis("off")
+        self.text_hist = self.ax_hist.text(
+            0, 0.5, "", va="center", ha="left", fontsize=9, color="#444"
+        )
+
+        # Features panel — right region, full vertical extent so text
+        # never overlaps anything else regardless of how many lines we
+        # render.  Lines clipped to axes box just in case.
+        self.ax_feat = self.fig.add_axes([0.760, 0.030, 0.230, 0.93])
+        self.ax_feat.axis("off")
+        self.ax_feat.set_title("Features", fontsize=10, loc="left")
+        self.text_feat = self.ax_feat.text(
+            0.0, 0.985, "", va="top", ha="left",
+            fontsize=9.5, family="monospace", clip_on=True,
+            transform=self.ax_feat.transAxes,
+        )
+
+        # Keyboard + mouse wheel
+        self.fig.canvas.mpl_connect("key_press_event", self._on_key)
+        self.fig.canvas.mpl_connect("scroll_event", self._on_scroll)
+
+        # Render the first ROI
+        self._render()
+
+    # ---------------------------------------------------------------- events
+    def _on_key(self, event) -> None:
+        k = (event.key or "").lower()
+        if k == "g":
+            self._record("good")
+        elif k == "b":
+            self._record("bad")
+        elif k == "u":
+            self._record("unsure")
+        elif k == "s":
+            self._advance()
+        elif k == "z":
+            self._undo()
+        elif k == "q":
+            self._quit()
+        elif k in ("j", "down"):
+            self._step_z(-1)
+        elif k in ("k", "up"):
+            self._step_z(+1)
+        elif k == "m":
+            # Programmatic toggle of CheckButton — call set_active to fire callback
+            self.check.set_active(0)
+        elif k in ("1", "2", "3"):
+            new = ["405", "488", "overlay"][int(k) - 1]
+            # set_active also fires on_clicked
+            self.radio.set_active({"405": 0, "488": 1, "overlay": 2}[new])
+        elif k == "n":
+            self._switch_subject(+1)
+        elif k == "p":
+            self._switch_subject(-1)
+
+    def _on_scroll(self, event) -> None:
+        # event.step is +1 / -1 (or fractional on some backends);
+        # event.button is 'up' / 'down' as a fallback.
+        delta = 0
+        if getattr(event, "step", None):
+            delta = int(np.sign(event.step))
+        elif getattr(event, "button", None) == "up":
+            delta = +1
+        elif getattr(event, "button", None) == "down":
+            delta = -1
+        if delta:
+            self._step_z(delta)
+
+    def _on_slider(self, _val) -> None:
+        if self._suppress_slider:
+            return
+        self._redraw_orthoview()
+
+    def _on_channel(self, label) -> None:
+        self._channel = label
+        self._redraw_orthoview()
+
+    def _on_mip(self, _label) -> None:
+        # CheckButtons.get_status() -> [bool]
+        self._mip = bool(self.check.get_status()[0])
+        self._redraw_orthoview()
+
+    def _on_subject_radio(self, label) -> None:
+        if self._suppress_subject_radio:
+            return
+        try:
+            target = self.sids.index(label)
+        except ValueError:
+            return
+        self._select_subject(target)
+
+    def _on_mode(self, label) -> None:
+        if self._mode == label:
+            return
+        self._mode = label
+        self._load_subject()
+        self._render()
+
+    def _on_reviewer(self, text) -> None:
+        new = (text or "").strip() or "anonymous"
+        if new == self.reviewer:
+            return
+        self.reviewer = new
+        # Refresh just the header with the new name; no need to reload images.
+        self._update_header_only()
+
+    def _update_header_only(self) -> None:
+        roi = self._current()
+        if roi is None or self.crops is None:
+            return
+        Z, Y, X = self.crops.shape
+        prior = self._prior_label_text(roi)
+        self.text_header.set_text(
+            f"sid={roi.sid}   hcr_id={roi.hcr_id}   score={roi.score:.3f}   "
+            f"shape (Z×Y×X)={Z}×{Y}×{X}   "
+            f"[{self.idx + 1} / {len(self.rois)}]"
+            f"{self._subject_tag()}   reviewer={self.reviewer}{prior}"
+        )
+        self.fig.canvas.draw_idle()
+
+    def _prior_label_text(self, roi) -> str:
+        if self._mode != "review":
+            return ""
+        prev = self._prior_labels.get(roi.hcr_id)
+        if prev is None:
+            return ""
+        color_label = {"good": "GOOD", "bad": "BAD", "unsure": "UNSURE"}.get(
+            prev, prev.upper()
+        )
+        return f"   prior={color_label}"
+
+    # ---------------------------------------------------------------- subject
+    def _load_subject(self) -> None:
+        """Resample the ROI pool for the current (subject, mode) combo.
+
+        new mode:    walk uncertain-band ROIs not yet in the label log.
+        review mode: walk ROIs that currently have a non-undone label.
+        """
+        sid = self.sids[self.subject_idx]
+        log = _load_label_log()
+        rng = np.random.default_rng(self.seed + self.subject_idx)
+        if self._mode == "review":
+            rois, prior = _sample_labelled(sid, self.n_rois, rng, log)
+            self.rois = rois
+            self._prior_labels = prior
+        else:
+            skip = (
+                set(log.loc[log["sid"] == sid, "hcr_id"].astype(int))
+                if not log.empty
+                else set()
+            )
+            self.rois = _sample_uncertain(
+                sid, self.n_rois, self.score_band, rng, skip
+            )
+            self._prior_labels = {}
+        self.idx = 0
+        self.crops = None
+
+    def _select_subject(self, target_idx: int) -> None:
+        if target_idx == self.subject_idx or not (0 <= target_idx < len(self.sids)):
+            return
+        self.subject_idx = target_idx
+        self._load_subject()
+        self._suppress_subject_radio = True
+        try:
+            self.subject_radio.set_active(target_idx)
+        finally:
+            self._suppress_subject_radio = False
+        self._render()
+
+    def _switch_subject(self, delta: int) -> None:
+        if len(self.sids) <= 1:
+            return
+        self._select_subject((self.subject_idx + delta) % len(self.sids))
+
+    # ---------------------------------------------------------------- nav
+    def _step_z(self, delta: int) -> None:
+        if self.crops is None:
+            return
+        Z = self.crops.shape[0]
+        new_z = int(np.clip(self.slider.val + delta, 0, Z - 1))
+        self.slider.set_val(new_z)  # fires _on_slider
+
+    def _current(self) -> _ROI | None:
+        if self.idx >= len(self.rois):
+            return None
+        return self.rois[self.idx]
+
+    def _record(self, label: str) -> None:
+        roi = self._current()
+        if roi is None:
+            return
+        rec = {
+            "ts": _now_iso(),
+            "sid": roi.sid,
+            "hcr_id": roi.hcr_id,
+            "label": label,
+            "stage1_score": roi.score,
+            "reviewer": self.reviewer,
+            "session_token": self.token,
+        }
+        _append_label(rec)
+        self.history.append(rec)
+        self._advance()
+
+    def _advance(self) -> None:
+        self.idx += 1
+        self._render()
+
+    def _undo(self) -> None:
+        if not self.history or self.idx == 0:
+            return
+        last = self.history.pop()
+        tomb = {
+            "ts": _now_iso(),
+            "sid": last["sid"],
+            "hcr_id": last["hcr_id"],
+            "label": "_undone_",
+            "undoes": last,
+            "reviewer": self.reviewer,
+            "session_token": self.token,
+        }
+        _append_label(tomb)
+        self.idx = max(0, self.idx - 1)
+        self._render()
+
+    def _quit(self) -> None:
+        self.text_header.set_text(
+            f"Session ended — {len(self.history)} labels written to "
+            f"{LABEL_LOG.relative_to(ROOT)}.  You can close this window."
+        )
+        self.fig.canvas.draw_idle()
+        plt.close(self.fig)
+
+    # ---------------------------------------------------------------- render
+    def _clear_overlay(self) -> None:
+        for art in self._contour_artists:
+            try:
+                art.remove()
+            except Exception:
+                pass
+        self._contour_artists = []
+        for art in self._crosshair_artists:
+            try:
+                art.remove()
+            except Exception:
+                pass
+        self._crosshair_artists = []
+
+    def _draw_overlay(self, xy_mask, xz_mask, yz_mask) -> None:
+        for ax, m in [
+            (self.ax_xy, xy_mask),
+            (self.ax_xz, xz_mask),
+            (self.ax_yz, yz_mask),
+        ]:
+            if m.any():
+                cs = ax.contour(
+                    m.astype(np.uint8), levels=[0.5],
+                    colors="red", linewidths=1.0,
+                )
+                self._contour_artists.append(cs)
+        if self._mip or self.crops is None:
+            return
+        z_idx = int(self.slider.val)
+        yc = self.crops.y_anchor
+        xc = self.crops.x_anchor
+        self._crosshair_artists.append(
+            self.ax_xy.axvline(xc, color="cyan", lw=0.5, alpha=0.7))
+        self._crosshair_artists.append(
+            self.ax_xy.axhline(yc, color="cyan", lw=0.5, alpha=0.7))
+        self._crosshair_artists.append(
+            self.ax_xz.axvline(xc, color="cyan", lw=0.5, alpha=0.7))
+        self._crosshair_artists.append(
+            self.ax_xz.axhline(z_idx, color="cyan", lw=0.5, alpha=0.7))
+        self._crosshair_artists.append(
+            self.ax_yz.axvline(yc, color="cyan", lw=0.5, alpha=0.7))
+        self._crosshair_artists.append(
+            self.ax_yz.axhline(z_idx, color="cyan", lw=0.5, alpha=0.7))
+
+    def _redraw_orthoview(self) -> None:
+        if self.crops is None:
+            return
+        z_idx = int(self.slider.val)
+        (xy_img, xy_mask), (xz_img, xz_mask), (yz_img, yz_mask) = _planes_for_channel(
+            self.crops, channel=self._channel, mip=self._mip, z_idx=z_idx
+        )
+        self._im_xy.set_data(xy_img)
+        self._im_xz.set_data(xz_img)
+        self._im_yz.set_data(yz_img)
+        self._clear_overlay()
+        self._draw_overlay(xy_mask, xz_mask, yz_mask)
+        self.fig.canvas.draw_idle()
+
+    def _resize_axes_for_crop(self) -> None:
+        Z, Y, X = self.crops.shape
+        self._im_xy.set_extent((-0.5, X - 0.5, Y - 0.5, -0.5))
+        self.ax_xy.set_xlim(-0.5, X - 0.5)
+        self.ax_xy.set_ylim(Y - 0.5, -0.5)
+        self._im_xz.set_extent((-0.5, X - 0.5, Z - 0.5, -0.5))
+        self.ax_xz.set_xlim(-0.5, X - 0.5)
+        self.ax_xz.set_ylim(Z - 0.5, -0.5)
+        self._im_yz.set_extent((-0.5, Y - 0.5, Z - 0.5, -0.5))
+        self.ax_yz.set_xlim(-0.5, Y - 0.5)
+        self.ax_yz.set_ylim(Z - 0.5, -0.5)
+
+    def _update_slider_for_crop(self) -> None:
+        Z = self.crops.shape[0]
+        new_max = max(0, Z - 1)
+        self._suppress_slider = True
+        try:
+            self.slider.valmax = new_max
+            self.slider.ax.set_xlim(self.slider.valmin, new_max)
+            self.slider.set_val(int(self.crops.z_anchor))
+        finally:
+            self._suppress_slider = False
+
+    def _update_history_strip(self) -> None:
+        items = []
+        for h in self.history[-6:]:
+            color = {"good": "#1a7f37", "bad": "#cf222e", "unsure": "#9a6700"}.get(
+                h["label"], "#666"
+            )
+            items.append(f"{h['label']}(#{h['hcr_id']})")
+            _ = color  # color in matplotlib text is per-segment, omit for brevity
+        self.text_hist.set_text("last: " + ", ".join(items) if items else "")
+
+    def _subject_tag(self) -> str:
+        if len(self.sids) <= 1:
+            return ""
+        return f"  subj {self.subject_idx + 1}/{len(self.sids)} (n,p)"
+
+    def _render(self) -> None:
+        roi = self._current()
+        if roi is None:
+            n_g = sum(1 for h in self.history if h["label"] == "good")
+            n_b = sum(1 for h in self.history if h["label"] == "bad")
+            n_u = sum(1 for h in self.history if h["label"] == "unsure")
+            cur_sid = self.sids[self.subject_idx]
+            tail = (
+                "  press n for next subject" if len(self.sids) > 1 else ""
+            )
+            self.text_header.set_text(
+                f"sid={cur_sid} DONE — session totals: {len(self.history)} labels "
+                f"({n_g} good / {n_b} bad / {n_u} unsure)."
+                f"{self._subject_tag()}{tail}"
+            )
+            self.text_feat.set_text("")
+            self._clear_overlay()
+            self._im_xy.set_data(np.zeros((1, 1)))
+            self._im_xz.set_data(np.zeros((1, 1)))
+            self._im_yz.set_data(np.zeros((1, 1)))
+            self._update_history_strip()
+            self.fig.canvas.draw_idle()
+            return
+
+        try:
+            self.crops = _load_roi_crops(roi)
+        except Exception as exc:
+            self.text_header.set_text(
+                f"sid={roi.sid}  hcr_id={roi.hcr_id} — load error: {exc}"
+            )
+            self.fig.canvas.draw_idle()
+            return
+
+        Z, Y, X = self.crops.shape
+        self._update_slider_for_crop()
+        self.text_header.set_text(
+            f"sid={roi.sid}   hcr_id={roi.hcr_id}   score={roi.score:.3f}   "
+            f"shape (Z×Y×X)={Z}×{Y}×{X}   "
+            f"[{self.idx + 1} / {len(self.rois)}]"
+            f"{self._subject_tag()}   reviewer={self.reviewer}"
+            f"{self._prior_label_text(roi)}"
+        )
+        self.text_feat.set_text(_format_features_text(roi.features))
+        self._resize_axes_for_crop()
+        self._redraw_orthoview()
+        self._update_history_strip()
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+_BENCHMARK_SUBJECTS = ["755252", "767018", "767022", "782149", "788406", "790322"]
+
+
+def _parse_sids(spec: str) -> list[str]:
+    """Accept a single sid, a comma-separated list, or the literal `all`."""
+    spec = spec.strip()
+    if spec.lower() == "all":
+        return list(_BENCHMARK_SUBJECTS)
+    out = [s.strip() for s in spec.split(",") if s.strip()]
+    if not out:
+        raise argparse.ArgumentTypeError(f"invalid --sid value: {spec!r}")
+    return out
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        description="Standalone HCR ROI labelling GUI (no Jupyter).",
+    )
+    p.add_argument(
+        "--sid", default=None, type=_parse_sids,
+        help="Subject ID, e.g. 788406.  Comma-separated list (e.g. "
+             "788406,790322) or `all` cycles through subjects via n / p keys.  "
+             f"Default: all 6 benchmark subjects ({', '.join(_BENCHMARK_SUBJECTS)}).",
+    )
+    p.add_argument("--n-rois", type=int, default=80, help="ROIs to sample per subject")
+    p.add_argument("--score-min", type=float, default=0.3,
+                   help="Lower bound of Stage-1 uncertain band")
+    p.add_argument("--score-max", type=float, default=0.7,
+                   help="Upper bound of Stage-1 uncertain band")
+    p.add_argument("--reviewer", default="anonymous",
+                   help="Reviewer name to record in every label")
+    p.add_argument("--seed", type=int, default=20260429,
+                   help="RNG seed for reproducible sampling")
+    return p.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    sids: list[str] = args.sid if args.sid else list(_BENCHMARK_SUBJECTS)
+    print(f"S11 standalone labeller  backend={matplotlib.get_backend()}")
+    print(f"  sids={sids}  n_rois={args.n_rois}  "
+          f"band=({args.score_min}, {args.score_max})  reviewer={args.reviewer}")
+    app = StandaloneLabeller(
+        sids=sids,
+        n_rois=args.n_rois,
+        score_band=(args.score_min, args.score_max),
+        reviewer=args.reviewer,
+        seed=args.seed,
+    )
+    print(f"  loaded {len(app.rois)} ROIs for sid={sids[app.subject_idx]}  log={LABEL_LOG}")
+    print("  shortcuts: g/b/u label  s skip  z undo  q quit  "
+          "j/k arrows or mouse-wheel scroll z  m MIP  1/2/3 channel  "
+          "n/p next/prev subject")
+    print("  GUI controls: subject + mode dropdowns on left, reviewer TextBox "
+          "(press Enter to save)")
+    plt.show()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

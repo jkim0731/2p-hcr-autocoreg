@@ -1,0 +1,274 @@
+"""
+S11 / Step 3 — Stage-1 GBT trained on heuristic pseudo-labels.
+
+Reads:
+    code/dev_code/cached_roi_quality/<sid>_features.parquet
+    code/dev_code/cached_roi_quality/<sid>_pseudo_labels.parquet
+
+Writes:
+    code/dev_code/cached_roi_quality/<sid>_stage1_score.parquet
+        per-ROI Stage-1 probability (out-of-fold from the LOSO model)
+        cols: [hcr_id, score, pseudo_label, source]
+    code/dev_code/cached_roi_quality/roi_quality_stage1.txt
+        LightGBM model trained on all labelled rows (production scorer)
+    code/sessions/v3_S11_roi_quality/outputs/stage1_loso_metrics.csv
+    code/sessions/v3_S11_roi_quality/outputs/stage1_feature_importance.csv
+
+LOSO protocol
+-------------
+For each subject `t` in the 6 benchmark subjects:
+    train_subjects = SUBJECTS - {t}
+    train rows     = labelled rows (label in {0,1}) of train_subjects
+    test  rows     = labelled rows of subject `t`     (held-out heuristic labels)
+    predict        = ALL rows of subject `t`           (this is what we cache)
+Metrics on the held-out heuristic labels are only a coarse upper bound
+(they are heuristic, not human).  Real validation is in Step 5.
+
+The "production" model is retrained on every labelled row across all 6
+subjects so the scorer used by 04_label_gui.ipynb sees the maximum
+amount of pseudo-label evidence; the LOSO out-of-fold scores are kept
+in the per-subject parquet so we can compare in Step 5.
+"""
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+import lightgbm as lgb
+import numpy as np
+import pandas as pd
+from sklearn.metrics import (
+    average_precision_score,
+    brier_score_loss,
+    roc_auc_score,
+)
+
+ROOT = Path("/root/capsule")
+CACHE = ROOT / "code/dev_code/cached_roi_quality"
+OUT = ROOT / "code/sessions/v3_S11_roi_quality/outputs"
+SUBJECTS = ["755252", "767018", "767022", "782149", "788406", "790322"]
+
+# Columns that are not features (identifiers, all-NaN, or the label itself)
+DROP_FEATURES = {
+    "hcr_id",
+    "sphericity",  # always NaN per Step 1 notes
+}
+
+LGB_PARAMS = dict(
+    objective="binary",
+    learning_rate=0.05,
+    num_leaves=63,
+    max_depth=-1,
+    min_data_in_leaf=200,
+    feature_fraction=0.85,
+    bagging_fraction=0.85,
+    bagging_freq=5,
+    lambda_l2=1.0,
+    metric=["binary_logloss", "auc"],
+    verbosity=-1,
+    seed=20260429,
+)
+N_ESTIMATORS = 600
+EARLY_STOP = 40
+
+
+PROBE_SUFFIXES = ["mean", "std", "p10", "p50", "p90", "fg_minus_margin_p50"]
+
+
+def _harmonise_probe(f: pd.DataFrame) -> pd.DataFrame:
+    """Rename whichever probe channel exists (561 or 514) to `cprobe_*`,
+    so feature columns are consistent across subjects."""
+    src = "c561" if any(c.startswith("c561_") for c in f.columns) else "c514"
+    rename = {f"{src}_{s}": f"cprobe_{s}" for s in PROBE_SUFFIXES if f"{src}_{s}" in f.columns}
+    f = f.rename(columns=rename)
+    # Drop the *other* probe column block if it's lurking (defence in depth)
+    other = "c514" if src == "c561" else "c561"
+    f = f.drop(columns=[c for c in f.columns if c.startswith(f"{other}_")], errors="ignore")
+    return f
+
+
+def load_subject(sid: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+    f = pd.read_parquet(CACHE / f"{sid}_features.parquet")
+    f = _harmonise_probe(f)
+    lab = pd.read_parquet(CACHE / f"{sid}_pseudo_labels.parquet")
+    f["sid"] = sid
+    lab["sid"] = sid
+    return f, lab
+
+
+def build_matrix(features: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
+    feat_cols = [
+        c for c in features.columns
+        if c not in DROP_FEATURES and c != "sid"
+        and pd.api.types.is_numeric_dtype(features[c])
+        or pd.api.types.is_bool_dtype(features[c])
+    ]
+    # Cast bool to float (LightGBM accepts both, but keep types consistent)
+    X = features[feat_cols].copy()
+    for c in X.columns:
+        if pd.api.types.is_bool_dtype(X[c]):
+            X[c] = X[c].astype("float32")
+    return X, feat_cols
+
+
+def main() -> None:
+    OUT.mkdir(parents=True, exist_ok=True)
+
+    feats, labs = {}, {}
+    for sid in SUBJECTS:
+        f, l = load_subject(sid)
+        feats[sid] = f
+        labs[sid] = l
+
+    feature_columns: list[str] | None = None
+    fold_metrics = []
+    importances = {}
+
+    for held in SUBJECTS:
+        train_X_parts = []
+        train_y_parts = []
+        for sid in SUBJECTS:
+            if sid == held:
+                continue
+            f = feats[sid]
+            l = labs[sid][["hcr_id", "label"]].copy()
+            merged = f.merge(l, on="hcr_id", how="left")
+            mask = merged["label"].isin([0.0, 1.0])
+            sub = merged[mask]
+            X, cols = build_matrix(sub.drop(columns=["label"]))
+            if feature_columns is None:
+                feature_columns = cols
+            else:
+                X = X[feature_columns]
+            train_X_parts.append(X)
+            train_y_parts.append(sub["label"].astype("int8"))
+        X_train = pd.concat(train_X_parts, axis=0).reset_index(drop=True)
+        y_train = pd.concat(train_y_parts, axis=0).reset_index(drop=True)
+
+        # Held-out subject: full features for prediction, labelled rows for metrics
+        f_held = feats[held]
+        l_held = labs[held][["hcr_id", "label", "source"]]
+        full = f_held.merge(l_held, on="hcr_id", how="left")
+        X_full = full[feature_columns]
+        labelled = full["label"].isin([0.0, 1.0])
+        X_eval = X_full[labelled]
+        y_eval = full.loc[labelled, "label"].astype("int8")
+
+        # Hold out 10% of training rows for early stopping
+        rng = np.random.default_rng(42)
+        idx = np.arange(len(X_train))
+        rng.shuffle(idx)
+        cut = int(len(idx) * 0.9)
+        tr, va = idx[:cut], idx[cut:]
+        train_set = lgb.Dataset(X_train.iloc[tr], y_train.iloc[tr])
+        valid_set = lgb.Dataset(X_train.iloc[va], y_train.iloc[va], reference=train_set)
+
+        booster = lgb.train(
+            LGB_PARAMS,
+            train_set,
+            num_boost_round=N_ESTIMATORS,
+            valid_sets=[valid_set],
+            callbacks=[lgb.early_stopping(EARLY_STOP), lgb.log_evaluation(0)],
+        )
+
+        full_pred = booster.predict(X_full, num_iteration=booster.best_iteration)
+        y_pred_eval = full_pred[labelled.to_numpy()]
+
+        auc = roc_auc_score(y_eval, y_pred_eval)
+        ap = average_precision_score(y_eval, y_pred_eval)
+        brier = brier_score_loss(y_eval, y_pred_eval)
+        fold_metrics.append(
+            {
+                "held_subject": held,
+                "n_train": int(len(X_train)),
+                "n_eval": int(len(y_eval)),
+                "auc": auc,
+                "ap": ap,
+                "brier": brier,
+                "best_iter": booster.best_iteration,
+            }
+        )
+        print(
+            f"[hold {held}] n_tr={len(X_train):>6}  n_ev={len(y_eval):>6}  "
+            f"AUC={auc:.4f}  AP={ap:.4f}  Brier={brier:.4f}  iter={booster.best_iteration}"
+        )
+
+        # Cache per-ROI Stage-1 score for this subject (out-of-fold)
+        out_df = pd.DataFrame(
+            {
+                "hcr_id": full["hcr_id"].astype("int64"),
+                "score": full_pred.astype("float32"),
+                "pseudo_label": full["label"],
+                "source": full["source"],
+            }
+        )
+        out_df.to_parquet(CACHE / f"{held}_stage1_score.parquet", index=False)
+
+        gain = booster.feature_importance(importance_type="gain")
+        for c, g in zip(feature_columns, gain):
+            importances.setdefault(c, []).append(g)
+
+    metrics_df = pd.DataFrame(fold_metrics).sort_values("held_subject")
+    metrics_df.to_csv(OUT / "stage1_loso_metrics.csv", index=False)
+    print("\n=== LOSO summary ===")
+    print(metrics_df.to_string(index=False))
+    print(
+        f"\nmean AUC={metrics_df['auc'].mean():.4f}  "
+        f"mean AP={metrics_df['ap'].mean():.4f}  "
+        f"mean Brier={metrics_df['brier'].mean():.4f}"
+    )
+
+    fi = (
+        pd.DataFrame({c: pd.Series(v) for c, v in importances.items()})
+        .mean()
+        .sort_values(ascending=False)
+        .rename("mean_gain")
+        .reset_index()
+        .rename(columns={"index": "feature"})
+    )
+    fi.to_csv(OUT / "stage1_feature_importance.csv", index=False)
+    print("\n=== top 15 features by mean gain ===")
+    print(fi.head(15).to_string(index=False))
+
+    # ---------- production model on every labelled row ----------
+    full_X_parts, full_y_parts = [], []
+    for sid in SUBJECTS:
+        f = feats[sid]
+        l = labs[sid][["hcr_id", "label"]]
+        m = f.merge(l, on="hcr_id", how="left")
+        mask = m["label"].isin([0.0, 1.0])
+        X, _ = build_matrix(m[mask].drop(columns=["label"]))
+        X = X[feature_columns]
+        full_X_parts.append(X)
+        full_y_parts.append(m.loc[mask, "label"].astype("int8"))
+    X_all = pd.concat(full_X_parts, axis=0).reset_index(drop=True)
+    y_all = pd.concat(full_y_parts, axis=0).reset_index(drop=True)
+    n_iter_prod = int(np.median([m["best_iter"] for m in fold_metrics]))
+    n_iter_prod = max(n_iter_prod, 100)
+    train_set = lgb.Dataset(X_all, y_all)
+    prod = lgb.train(
+        LGB_PARAMS,
+        train_set,
+        num_boost_round=n_iter_prod,
+        callbacks=[lgb.log_evaluation(0)],
+    )
+    model_path = CACHE / "roi_quality_stage1.txt"
+    prod.save_model(str(model_path))
+    meta = {
+        "feature_columns": feature_columns,
+        "n_train": int(len(X_all)),
+        "n_iter_prod": n_iter_prod,
+        "loso_mean_auc": float(metrics_df["auc"].mean()),
+        "loso_mean_ap": float(metrics_df["ap"].mean()),
+        "loso_mean_brier": float(metrics_df["brier"].mean()),
+        "subjects": SUBJECTS,
+        "params": LGB_PARAMS,
+    }
+    (CACHE / "roi_quality_stage1_meta.json").write_text(json.dumps(meta, indent=2))
+    print(f"\nproduction model saved -> {model_path}")
+    print(f"meta saved -> {CACHE / 'roi_quality_stage1_meta.json'}")
+
+
+if __name__ == "__main__":
+    main()
