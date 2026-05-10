@@ -7,7 +7,7 @@ ARG GIT_ASKPASS
 COPY git-ask-pass /
 
 # Update python to 3.11
-RUN CONDA_NO_PLUGINS=true mamba install -y -c conda-forge python=3.11 zarr>=3.0.0 pyqt=5
+RUN CONDA_NO_PLUGINS=true mamba install -y -c conda-forge python=3.11 "zarr>=3.0.0" pyqt=5
 
 # VS Code, numlockx gthumb
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -49,7 +49,15 @@ RUN pip install -U --no-cache-dir \
     jupyter \
     ipykernel \
     ipywidgets \
-    ipympl
+    ipympl \
+    open3d \
+    simpleitk \
+    pyarrow \
+    dash \
+    lightgbm \
+    widgetsnbextension \
+    jedi \
+    pygments
 
 # Register Python kernel for Jupyter
 RUN python3 -m ipykernel install --sys-prefix --name python3 --display-name "Python 3"

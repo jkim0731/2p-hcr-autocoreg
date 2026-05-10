@@ -1,0 +1,138 @@
+{
+  "755252": {
+    "subject": "755252",
+    "n_hcr_total": 84233,
+    "n_matched": 639,
+    "n_in_overlap": 12317,
+    "n_matched_in_overlap": 535,
+    "n_unmixed_rows": 39895,
+    "n_matched_in_unmixed": 551,
+    "n_matched_missing_in_unmixed": 88,
+    "unmixed": {
+      "K_star": 6,
+      "cutoff": 67.4018998856434,
+      "bic": -37077.556993361286,
+      "n_all_full": 39895,
+      "n_all_overlap": 10411,
+      "n_matched_full": 551,
+      "n_matched_overlap": 497,
+      "matched_above_cut_full": 322,
+      "matched_above_cut_overlap": 311
+    },
+    "baseline": {
+      "feature": "mean_minus_bg",
+      "log_base": "log10",
+      "K_star": 6,
+      "cutoff": 215.11596457652217,
+      "bic": 139957.16906427464,
+      "n_all_full": 77785,
+      "n_all_overlap": 11578,
+      "n_matched_full": 639,
+      "n_matched_overlap": 535,
+      "matched_above_cut_full": 448,
+      "matched_above_cut_overlap": 427
+    }
+  },
+  "767022": {
+    "subject": "767022",
+    "n_hcr_total": 76336,
+    "n_matched": 793,
+    "n_in_overlap": 13326,
+    "n_matched_in_overlap": 674,
+    "n_unmixed_rows": 40701,
+    "n_matched_in_unmixed": 676,
+    "n_matched_missing_in_unmixed": 117,
+    "unmixed": {
+      "K_star": 6,
+      "cutoff": 100.76724378190079,
+      "bic": -24844.029448781515,
+      "n_all_full": 40701,
+      "n_all_overlap": 11770,
+      "n_matched_full": 676,
+      "n_matched_overlap": 605,
+      "matched_above_cut_full": 509,
+      "matched_above_cut_overlap": 485
+    },
+    "baseline": {
+      "feature": "mean_minus_bg",
+      "log_base": "log10",
+      "K_star": 6,
+      "cutoff": 140.24591714638075,
+      "bic": 144306.470549928,
+      "n_all_full": 72213,
+      "n_all_overlap": 12785,
+      "n_matched_full": 793,
+      "n_matched_overlap": 674,
+      "matched_above_cut_full": 696,
+      "matched_above_cut_overlap": 637
+    }
+  },
+  "782149": {
+    "subject": "782149",
+    "n_hcr_total": 39291,
+    "n_matched": 303,
+    "n_in_overlap": 4310,
+    "n_matched_in_overlap": 278,
+    "n_unmixed_rows": 25721,
+    "n_matched_in_unmixed": 224,
+    "n_matched_missing_in_unmixed": 79,
+    "unmixed": {
+      "K_star": 6,
+      "cutoff": 98.14598348450593,
+      "bic": -16537.243081855824,
+      "n_all_full": 25721,
+      "n_all_overlap": 3201,
+      "n_matched_full": 224,
+      "n_matched_overlap": 205,
+      "matched_above_cut_full": 218,
+      "matched_above_cut_overlap": 199
+    },
+    "baseline": {
+      "feature": "density",
+      "log_base": "ln",
+      "K_star": 4,
+      "cutoff": 0.001706092683315217,
+      "bic": 98934.57987700794,
+      "n_all_full": 29556,
+      "n_all_overlap": 3472,
+      "n_matched_full": 303,
+      "n_matched_overlap": 278,
+      "matched_above_cut_full": 293,
+      "matched_above_cut_overlap": 271
+    }
+  },
+  "788406": {
+    "subject": "788406",
+    "n_hcr_total": 127275,
+    "n_matched": 787,
+    "n_in_overlap": 12926,
+    "n_matched_in_overlap": 736,
+    "n_unmixed_rows": 81426,
+    "n_matched_in_unmixed": 569,
+    "n_matched_missing_in_unmixed": 218,
+    "unmixed": {
+      "K_star": 6,
+      "cutoff": 159.05509282050102,
+      "bic": -4643.883539127403,
+      "n_all_full": 81426,
+      "n_all_overlap": 9474,
+      "n_matched_full": 569,
+      "n_matched_overlap": 527,
+      "matched_above_cut_full": 516,
+      "matched_above_cut_overlap": 478
+    },
+    "baseline": {
+      "feature": "density",
+      "log_base": "ln",
+      "K_star": 6,
+      "cutoff": 0.0013757035085830138,
+      "bic": 342303.4816955167,
+      "n_all_full": 90814,
+      "n_all_overlap": 10495,
+      "n_matched_full": 787,
+      "n_matched_overlap": 736,
+      "matched_above_cut_full": 742,
+      "matched_above_cut_overlap": 692
+    }
+  }
+}

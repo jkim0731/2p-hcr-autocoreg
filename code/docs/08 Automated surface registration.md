@@ -2,7 +2,7 @@
 
 > **Path note (2026-04-28):** the development-home path
 > `code/sessions/08_surface_vascular_match/` cited below was moved to
-> `/root/capsule/data/claude_data/sessions/08_surface_vascular_match/`
+> `/root/capsule/data/claude-data_ophys-mfish-autocoreg_260503/sessions/08_surface_vascular_match/`
 > (read-only). The promoted module + cache are still under `code/`
 > (`code/dev_code/...`).
 
@@ -10,7 +10,7 @@
 **Module:** `code/dev_code/surface_registration_v2.py`
 **Cache:** `code/dev_code/cached_surface_registration/<sid>.json`
 **Development home / regression tests:**
-`data/claude_data/sessions/08_surface_vascular_match/` (read-only;
+`data/claude-data_ophys-mfish-autocoreg_260503/sessions/08_surface_vascular_match/` (read-only;
 formerly `code/sessions/08_surface_vascular_match/`).
 
 ## What this stage produces

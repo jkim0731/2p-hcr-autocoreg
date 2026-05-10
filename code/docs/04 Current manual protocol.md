@@ -2,10 +2,10 @@
 
 > **Path note (2026-04-28):** `notebooks/`, `sessions/`, and
 > `full_automatic_execution_01/` were moved to
-> `/root/capsule/data/claude_data/` (read-only). Any reference to
+> `/root/capsule/data/claude-data_ophys-mfish-autocoreg_260503/` (read-only). Any reference to
 > `code/notebooks/...`, `code/sessions/...`, or
 > `code/full_automatic_execution_01/...` below resolves to
-> `data/claude_data/<same suffix>`. New writes must live under
+> `data/claude-data_ophys-mfish-autocoreg_260503/<same suffix>`. New writes must live under
 > `/root/capsule/code/`.
 
 - Manual coregistration and cell by cell QC

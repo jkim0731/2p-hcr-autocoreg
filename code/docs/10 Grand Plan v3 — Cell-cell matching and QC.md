@@ -4,7 +4,7 @@
 > **Author:** automatic
 > **Supersedes:** the "Stage A → Stage B → Stage C" rough-registration sections of `09 Full automatic v2 plan.md`. Stage D / E / F (cell-cell + QC) are reframed and absorbed here. The v1 catalog ledger in `07 Grand Plan.md` §11 is still the authoritative record of failed/abandoned candidates; this plan adds the **constrained-revival** angle: revisit failures *inside the small overlap volume* delivered by the now-locked initial registration.
 >
-> **Path note (2026-04-28).** `notebooks/`, `sessions/`, and `full_automatic_execution_01/` are read-only under `/root/capsule/data/claude_data/`. v2 sessions/code under `/root/capsule/data/claude_data/full_automatic_execution_02/` (read-only). Any new session/code must be written under `/root/capsule/code/` (tree to recreate as needed).
+> **Path note (2026-04-28).** `notebooks/`, `sessions/`, and `full_automatic_execution_01/` are read-only under `/root/capsule/data/claude-data_ophys-mfish-autocoreg_260503/`. v2 sessions/code under `/root/capsule/data/claude-data_ophys-mfish-autocoreg_260503/full_automatic_execution_02/` (read-only). Any new session/code must be written under `/root/capsule/code/` (tree to recreate as needed).
 
 ---
 
@@ -59,17 +59,17 @@ These tracks are not exclusive. The default v3 pipeline is **Track A produces th
 | Locked-prior warm-start (Stage A) | **promoted** (2026-05-02) | `code/dev_code/locked_prior_warm.py` (`LockedPriorWarmStart`, `compute_locked_prior_warm_start`, `apply_to_cz_um`) |
 | Slab-rigid `sz` estimator (Stage B iter 7) | **promoted** (2026-05-02; 6/6 within ±0.30 of GT) | `code/dev_code/sz_estimator.py` (`get_sz(s)` JSON-cached, `estimate_sz_image_ncc`); cache `code/dev_code/cached_sz/<sid>.json` |
 | 3-D **overlap crop** of CZ→HCR after (R, sxy, surface 2-D affine, sz) | **promoted** (2026-05-02) | `code/dev_code/overlap_crop.py` (`get_overlap_crop(s, margin_frac=0.10)`, `crop_hcr_volume(s, vol, margin_frac=0.10)`) |
-| `M3-ICP-locked` candidate (SE(3) refinement, sxy + sz pinned) | shipped | `data/claude_data/full_automatic_execution_02/sessions/v2_S03_revival_pass/bench_e_m3_icp_szpinned.py` |
-| Gated ensemble (M3-ICP gate, else C5_szp) | shipped | `data/claude_data/full_automatic_execution_02/sessions/v2_S03_revival_pass/bench_g_ensemble.py` |
-| Stage D iter 8 K-subset TPS-NCC seed picker | shipped | `data/claude_data/full_automatic_execution_02/sessions/v2_S04_seed_constellation/iter8_search_constellation.py` |
+| `M3-ICP-locked` candidate (SE(3) refinement, sxy + sz pinned) | shipped | `data/claude-data_ophys-mfish-autocoreg_260503/full_automatic_execution_02/sessions/v2_S03_revival_pass/bench_e_m3_icp_szpinned.py` |
+| Gated ensemble (M3-ICP gate, else C5_szp) | shipped | `data/claude-data_ophys-mfish-autocoreg_260503/full_automatic_execution_02/sessions/v2_S03_revival_pass/bench_g_ensemble.py` |
+| Stage D iter 8 K-subset TPS-NCC seed picker | shipped | `data/claude-data_ophys-mfish-autocoreg_260503/full_automatic_execution_02/sessions/v2_S04_seed_constellation/iter8_search_constellation.py` |
 | **HCR per-ROI quality classifier (S11, subgoal 4.4) — stage-2 v5d** | **promoted** (2026-05-01; binary AUC 0.917, 4-class f1_macro 0.720 @ 1648 labels) | `code/dev_code/roi_quality_v5d.py` (`extract_features`, `predict`, `predict_subject`, `train`); models + meta + OOF parquets in `code/dev_code/cached_roi_quality/` |
 | HCR ROI labelling GUI (standalone matplotlib app) | promoted | `code/dev_code/roi_label_gui.py` |
-| F1/F2/F4/F6/F7/F8/F9 foundations | first-pass-done (some need promotion to `code/`) | `data/claude_data/full_automatic_execution_01/sessions/0[1-8]_*` |
+| F1/F2/F4/F6/F7/F8/F9 foundations | first-pass-done (some need promotion to `code/`) | `data/claude-data_ophys-mfish-autocoreg_260503/full_automatic_execution_01/sessions/0[1-8]_*` |
 | `cz_voronoi_labels` (per-cell CZ label volume) | shipped | `code/dev_code/cz_labels.py` (S48) |
 | `hcr_quality(s)` per-cell HCR image quality | shipped | `lib/image_quality.py` (S47) |
 | HCR cellpose segmentation `metrics.pickle` (4 of 6 subjects) | shipped | `{hcr_dir}/cell_body_segmentation/metrics.pickle` |
-| C5 (P1⊕P4⊕P6 ensemble), all candidates F9-callable | shipped | `data/claude_data/full_automatic_execution_01/bench/candidate_impls/` |
-| G1-review GUI (ipywidgets) | first-pass-done | `data/claude_data/full_automatic_execution_01/sessions/25_G1_review_gui/` |
+| C5 (P1⊕P4⊕P6 ensemble), all candidates F9-callable | shipped | `data/claude-data_ophys-mfish-autocoreg_260503/full_automatic_execution_01/bench/candidate_impls/` |
+| G1-review GUI (ipywidgets) | first-pass-done | `data/claude-data_ophys-mfish-autocoreg_260503/full_automatic_execution_01/sessions/25_G1_review_gui/` |
 
 **Do not re-implement.** When a session needs any of these, it imports from the listed location. As of 2026-05-02 the v2 lib modules (`locked_prior_warm.py`, sz iter-7) are now promoted to `code/dev_code/`; new sessions should import from there directly. (S06 in §6.1 is therefore retired; that line is kept for record only.)
 
@@ -279,11 +279,11 @@ Current environment: **16 CPU cores, 124 GB RAM, no GPU** (`torch.cuda.is_availa
 
 The simplicity × likely-success ordering for v3.
 
-> **Numbering note.** v2 ended at `v2_S05_tps_expansion`. v3 sessions continue at **S06** under `code/sessions/v3_S0{N}_*/`. Lib code that needs to be promoted from `data/claude_data/full_automatic_execution_02/lib/` lands in `code/dev_code/` (where the v2 surface / sz / sxy modules already live).
+> **Numbering note.** v2 ended at `v2_S05_tps_expansion`. v3 sessions continue at **S06** under `code/sessions/v3_S0{N}_*/`. Lib code that needs to be promoted from `data/claude-data_ophys-mfish-autocoreg_260503/full_automatic_execution_02/lib/` lands in `code/dev_code/` (where the v2 surface / sz / sxy modules already live).
 
 ### 6.1 Promotion of shipped v2 lib code to `code/dev_code/`
 
-**S06** — Promote `locked_prior_warm.py`, `sz_estimator.py` (iter-7 helpers), `M3-ICP-locked`, gated ensemble, and the iter-8 K-subset TPS-NCC seed picker from `data/claude_data/full_automatic_execution_02/` to `/root/capsule/code/dev_code/`. **One session.** Output: importable Python modules + a regression test that re-runs the gated ensemble and reproduces the published 2.95 sum r@20.
+**S06** — Promote `locked_prior_warm.py`, `sz_estimator.py` (iter-7 helpers), `M3-ICP-locked`, gated ensemble, and the iter-8 K-subset TPS-NCC seed picker from `data/claude-data_ophys-mfish-autocoreg_260503/full_automatic_execution_02/` to `/root/capsule/code/dev_code/`. **One session.** Output: importable Python modules + a regression test that re-runs the gated ensemble and reproduces the published 2.95 sum r@20.
 
 ### 6.2 Track B (image-side) per-pair scoring (subgoal 4.2)
 
@@ -354,8 +354,8 @@ code/
 │   ├── surface_registration_v2.py
 │   ├── cz_labels.py                        # S48 voronoi labels
 │   ├── cached_surface_registration/<sid>.json
-│   ├── locked_prior_warm.py                # promoted in S06 from data/claude_data
-│   ├── sz_estimator.py                     # promoted in S06 from data/claude_data
+│   ├── locked_prior_warm.py                # promoted in S06 from data/claude-data_ophys-mfish-autocoreg_260503
+│   ├── sz_estimator.py                     # promoted in S06 from data/claude-data_ophys-mfish-autocoreg_260503
 │   ├── icp_locked.py                       # M3-ICP-locked + gated ensemble (S06)
 │   ├── seed_constellation.py               # iter-8 K-subset TPS-NCC picker (S06)
 │   ├── pair_scoring.py                     # subgoal 4.2 — S07
@@ -380,7 +380,7 @@ code/
     └── v3_S14_patch_cnn/
 ```
 
-(Read-only v1/v2 references stay at `/root/capsule/data/claude_data/`.)
+(Read-only v1/v2 references stay at `/root/capsule/data/claude-data_ophys-mfish-autocoreg_260503/`.)
 
 ---
 
@@ -391,7 +391,7 @@ code/
 * `code/docs/09 Full automatic v2 plan.md`
 * `code/docs/Notes.md` (2026-04-29 — the four open questions this plan answers)
 * `code/docs/04 Current protocol.md` §2.1–2.5 (manual workflow; the spec for subgoals 4.5/4.7)
-* `data/claude_data/full_automatic_execution_02/sessions/v2_S03_revival_pass/log.md` (gated-ensemble baseline = 2.95 sum r@20)
-* `data/claude_data/full_automatic_execution_02/sessions/v2_S04_seed_constellation/log.md` (iter 7/8 — TPS hull-restricted NCC; iter-8 K-subset selection)
-* `data/claude_data/full_automatic_execution_02/sessions/v2_S05_tps_expansion/log.md` (E.TPS aniso-only failure — fixed in v3 §4.5)
-* `data/claude_data/full_automatic_execution_01/reassess_with_surfaces/reassessment.md` (sxy + sz pin reasoning)
+* `data/claude-data_ophys-mfish-autocoreg_260503/full_automatic_execution_02/sessions/v2_S03_revival_pass/log.md` (gated-ensemble baseline = 2.95 sum r@20)
+* `data/claude-data_ophys-mfish-autocoreg_260503/full_automatic_execution_02/sessions/v2_S04_seed_constellation/log.md` (iter 7/8 — TPS hull-restricted NCC; iter-8 K-subset selection)
+* `data/claude-data_ophys-mfish-autocoreg_260503/full_automatic_execution_02/sessions/v2_S05_tps_expansion/log.md` (E.TPS aniso-only failure — fixed in v3 §4.5)
+* `data/claude-data_ophys-mfish-autocoreg_260503/full_automatic_execution_01/reassess_with_surfaces/reassessment.md` (sxy + sz pin reasoning)

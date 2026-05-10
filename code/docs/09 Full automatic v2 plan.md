@@ -2,11 +2,11 @@
 
 > **Path note (2026-04-28):** `notebooks/`, `sessions/`, and
 > `full_automatic_execution_01/` (the v1 archive that this plan
-> compares against) were moved to `/root/capsule/data/claude_data/`
+> compares against) were moved to `/root/capsule/data/claude-data_ophys-mfish-autocoreg_260503/`
 > (read-only). v1 references in this doc (e.g.,
 > `code/full_automatic_execution_01/reassess_with_surfaces/...`,
 > `code/sessions/07f_sz_from_zbbox/...`) resolve to
-> `data/claude_data/<same suffix>`. v2 sessions and code stay under
+> `data/claude-data_ophys-mfish-autocoreg_260503/<same suffix>`. v2 sessions and code stay under
 > `/root/capsule/code/full_automatic_execution_02/`.
 
 **Status (2026-04-28):** in progress.

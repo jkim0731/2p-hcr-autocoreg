@@ -2,11 +2,11 @@
 
 > **Path note (2026-04-28):** `notebooks/`, `sessions/`, and
 > `full_automatic_execution_01/` were moved to
-> `/root/capsule/data/claude_data/` (read-only). All references below
+> `/root/capsule/data/claude-data_ophys-mfish-autocoreg_260503/` (read-only). All references below
 > to `code/sessions/NN_*`, `code/notebooks/...`, or
 > `code/full_automatic_execution_01/...` resolve to
-> `data/claude_data/<same suffix>`. v1 stays under
-> `data/claude_data/full_automatic_execution_01/` and is read-only;
+> `data/claude-data_ophys-mfish-autocoreg_260503/<same suffix>`. v1 stays under
+> `data/claude-data_ophys-mfish-autocoreg_260503/full_automatic_execution_01/` and is read-only;
 > v2 work continues under
 > `/root/capsule/code/full_automatic_execution_02/`.
 
