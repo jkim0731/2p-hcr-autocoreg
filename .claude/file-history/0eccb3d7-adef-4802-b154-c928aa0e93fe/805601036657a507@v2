@@ -1,0 +1,94 @@
+---
+name: Session 13 pairwise-unmixing GFP+ via 07c BIC GMM — DOES NOT HELP
+description: Pairwise-unmixing R*-488-GFP counts on 4 subjects (755252, 767022, 782149, 788406); BIC-GMM K∈[2,6] on log(count) and log(count/volume) both produce GFP+ sets whose depth profile is more depth-biased than the v2.2 baseline; per-bin CV vs CZ rises from 0.226→0.370 (788406) and 0.332→0.544 (782149). Continuous count/volume restores bimodality but profile is even worse (GFP+ drifts to deep cortex, opposite of CZ inhibitory peak).
+type: project
+originSessionId: 0eccb3d7-adef-4802-b154-c928aa0e93fe
+---
+**What was tested.** Four new pairwise-unmixing datasets
+(`HCR_<sid>_pairwise-unmixing_2026-04-29_*`) provide per-cell unmixed
+spot counts with column `R{1,2}-488-GFP` (R1 for 782149/788406, R2 for
+755252/767022) inside `pairwise_unmixing/all_cells_unmixed/unmixed_all_cells.csv`.
+The `cell_id` matches HCR `hcr_id` (level-2 centroid id space). Coverage
+is partial (47–66 % of total HCR cells per subject) — the unmixed CSV
+drops cells filtered by unmixing QC.
+
+Two feature variants were threshold-fit with the 07c pipeline
+(`fit_gmm_sweep` K∈[2,6], BIC-selected, intersection of top-two
+components) and gated by `gt_density_gate` (per-bin CV of
+ρ_GFP+/ρ_CZ inside GT-Procrustes-mapped overlap, 25-µm bins, 0.20
+bar from 07c):
+
+|              | 755252 | 767022 | 782149 | 788406 |
+|--------------|-------:|-------:|-------:|-------:|
+| baseline (density) CV | n/a* | n/a* | **0.332** | **0.226** |
+| unmixed count CV      | 0.394 | 0.342 | 0.544 | 0.370 |
+| unmixed count/vol CV  | n/a† | n/a† | 0.561 | 0.456 |
+| baseline n_strict / total | n/a | n/a | 3450/29 556 (11.7 %) | 10 729/90 814 (11.8 %) |
+| unmixed n_strict / total  | 2216/39 895 | 2388/40 701 | 2673/25 721 | 7572/81 426 |
+| K* baseline | n/a | n/a | 4 | 6 |
+| K* unmixed-count | 6 | 6 | 6 | 6 |
+| K* unmixed-density | n/a† | n/a† | 4 | 5 |
+
+\* `cell_data_mean_{sid}_R1.csv` not present in this env (likely moved
+when archived dirs went read-only on 2026-04-28). Baseline for these
+two subjects could not be re-run for direct apples-to-apples. †
+`cell_body_segmentation/metrics.pickle` missing for the two older HCR
+processings (`HCR_755252_2025-07-02…`, `HCR_767022_2025-07-03…`),
+so volume could not be joined for unmixed-density.
+
+**Why unmixed counts are bad for GMM-on-log.** The per-cell unmixed
+GFP count is integer-valued and dominated by a delta-spike at 0/1 spots
+(frac_zero = 0.44–0.70). On log axis this is a discrete spike near
+ln 1 = 0 plus a sparse heavy tail to ln ≈ 7. BIC happily picks K=6 to fit
+the spikes; the rightmost-pair intersection still produces a cutoff but
+the GMM bimodality assumption is violated.
+
+**Why unmixed density still loses.** Joining counts with HCR cell
+volume restores a smooth bimodal log-distribution
+(`fig figures/{sid}_unmixed_density.png` left panels), but on the gate
+the depth profile of unmixed GFP+ is *more* concentrated in deep cortex
+than the baseline. The CZ inhibitory profile peaks mid-cortex
+(~200–500 µm); unmixed GFP+ peaks ~300–500 µm (782149) or rises
+monotonically toward 800–1000 µm (788406). Pairwise unmixing
+preferentially removes spots near other cells, so it demotes more
+cells in **dense** mid-cortical layers and fewer in **sparse** deep
+layers, increasing depth bias rather than reducing it.
+
+**Verdict.** Pairwise unmixing in its current form **does not improve**
+the BIC-GMM GFP+ threshold's depth-density CV. None of the 4 subjects
+pass the 0.20 bar with unmixed features. On the two subjects with a
+direct comparison, CV worsens by ~+0.14–0.21 absolute (~+45 % to
++65 % relative). 755252/767022 have unmixed CV inside the historical
+07c "0.21–0.38" range so we cannot rule unmixing in or out for them
+without recovering `cell_data_mean_*_R1.csv`.
+
+**Implications.** The 07c-era memory line "next candidate is image-level
+488 NCC" still stands. Pairwise-unmixing GFP+ counts are not a drop-in
+replacement for `*_spot_488_counts.csv` in 04/R1 GFP+ thresholding —
+adopting them would *worsen* the depth-density profile, which already
+caps M1 sz at −70.8 % systematic bias.
+
+**Possible follow-ups (NOT done):**
+1. Re-run intensity baseline for 755252/767022 by recovering
+   `cell_data_mean_*_R1.csv` from the archived `claude_data/` (read-only)
+   to confirm whether unmixing helps the *intensity-only* subjects
+   relative to the previous intensity-threshold baseline (where it might
+   actually be a net positive — unmixed spot counts at least give a
+   spot-count feature where none existed).
+2. Test depth-stratified unmixing thresholds (per-depth-bin BIC) — but
+   this leaks the very signal we're trying to measure.
+3. Test combining baseline-density AND unmixed-density via product /
+   intersection: keep cells flagged by both.
+
+**Reusable artifacts:**
+- `code/sessions/13_pairwise_unmix_gfp/run_compare.py` — baseline vs
+  unmixed-count comparison, runs `gfp07b.fit_gmm_sweep` +
+  `gtgate07c.gt_density_gate` end-to-end.
+- `code/sessions/13_pairwise_unmix_gfp/run_unmixed_density.py` —
+  unmixed-count / volume variant.
+- `code/sessions/13_pairwise_unmix_gfp/results.json`,
+  `results_unmixed_density.json`,
+  `figures/{sid}_gmm.png`, `figures/{sid}_density.png`,
+  `figures/{sid}_unmixed_density.png`.
+
+**Where:** `code/sessions/13_pairwise_unmix_gfp/`. Date: 2026-05-07.

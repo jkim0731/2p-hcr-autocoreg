@@ -2,7 +2,7 @@
 
 > **Path note (2026-04-28):** the old `notebooks/`, `sessions/`, and
 > `full_automatic_execution_01/` directories were moved to
-> `/root/capsule/data/claude_data/` (read-only). When following rule 5
+> `/root/capsule/data/claude-data_ophys-mfish-autocoreg_260503/` (read-only). When following rule 5
 > below, write **new** notebooks under `/root/capsule/code/notebooks/`
 > (recreate the directory if needed) and **new** v2 sessions under
 > `/root/capsule/code/full_automatic_execution_02/sessions/`. Do not

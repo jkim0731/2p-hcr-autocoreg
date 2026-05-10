@@ -61,6 +61,8 @@
     "defaultMode": "dontAsk"
   },
   "model": "opus",
+  "effortLevel": "xhigh",
   "skipDangerousModePermissionPrompt": true,
-  "effortLevel": "xhigh"
+  "theme": "light",
+  "agentPushNotifEnabled": true
 }

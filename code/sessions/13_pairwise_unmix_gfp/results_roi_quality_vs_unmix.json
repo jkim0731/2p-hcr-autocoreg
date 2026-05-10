@@ -1,0 +1,134 @@
+{
+  "755252": {
+    "subject": "755252",
+    "n_total": 84233,
+    "n_unmixed": 39895,
+    "n_dropped": 44338,
+    "score_kept_mean": 0.8183735013008118,
+    "score_kept_median": 0.9694781303405762,
+    "score_dropped_mean": 0.6808114051818848,
+    "score_dropped_median": 0.8919403553009033,
+    "auc_drop_pred_by_lowscore": 0.629156959568373,
+    "matched": {
+      "n_total": 639,
+      "n_unmixed": 551,
+      "n_dropped": 88,
+      "score_kept_mean": 0.790319561958313,
+      "score_kept_median": 0.9349133968353271,
+      "score_dropped_mean": 0.6688942909240723,
+      "score_dropped_median": 0.9323010444641113,
+      "auc_drop_pred_by_lowscore": 0.5222941758785679
+    },
+    "class_means_kept": {
+      "p_good": 0.644041758277672,
+      "p_bad": 0.10499388848505035,
+      "p_bad_ok": 0.20342401152822148,
+      "p_merged": 0.04754034170905617
+    },
+    "class_means_dropped": {
+      "p_good": 0.464318604175706,
+      "p_bad": 0.25694779718050514,
+      "p_bad_ok": 0.24174462023199242,
+      "p_merged": 0.03698897841179646
+    }
+  },
+  "767022": {
+    "subject": "767022",
+    "n_total": 76336,
+    "n_unmixed": 40701,
+    "n_dropped": 35635,
+    "score_kept_mean": 0.8793004155158997,
+    "score_kept_median": 0.9951199889183044,
+    "score_dropped_mean": 0.7120027542114258,
+    "score_dropped_median": 0.9446068406105042,
+    "auc_drop_pred_by_lowscore": 0.6813751389390065,
+    "matched": {
+      "n_total": 793,
+      "n_unmixed": 676,
+      "n_dropped": 117,
+      "score_kept_mean": 0.9112294316291809,
+      "score_kept_median": 0.9878453016281128,
+      "score_dropped_mean": 0.7031846046447754,
+      "score_dropped_median": 0.9198470711708069,
+      "auc_drop_pred_by_lowscore": 0.7190676680321652
+    },
+    "class_means_kept": {
+      "p_good": 0.792018867145201,
+      "p_bad": 0.09360966881652796,
+      "p_bad_ok": 0.08799684434183615,
+      "p_merged": 0.026374619696434846
+    },
+    "class_means_dropped": {
+      "p_good": 0.5926957954860986,
+      "p_bad": 0.24177057072451885,
+      "p_bad_ok": 0.1259933105303618,
+      "p_merged": 0.039540323259020634
+    }
+  },
+  "782149": {
+    "subject": "782149",
+    "n_total": 39291,
+    "n_unmixed": 25721,
+    "n_dropped": 13570,
+    "score_kept_mean": 0.7632858753204346,
+    "score_kept_median": 0.9599924683570862,
+    "score_dropped_mean": 0.301070898771286,
+    "score_dropped_median": 0.056792356073856354,
+    "auc_drop_pred_by_lowscore": 0.7943280134022486,
+    "matched": {
+      "n_total": 303,
+      "n_unmixed": 224,
+      "n_dropped": 79,
+      "score_kept_mean": 0.7562729716300964,
+      "score_kept_median": 0.876009464263916,
+      "score_dropped_mean": 0.7220279574394226,
+      "score_dropped_median": 0.8546420931816101,
+      "auc_drop_pred_by_lowscore": 0.5256555153707052
+    },
+    "class_means_kept": {
+      "p_good": 0.7304091764071036,
+      "p_bad": 0.1652101665892106,
+      "p_bad_ok": 0.060679019162411925,
+      "p_merged": 0.043701637841273996
+    },
+    "class_means_dropped": {
+      "p_good": 0.22098660831722897,
+      "p_bad": 0.6513972707580427,
+      "p_bad_ok": 0.09822402767090906,
+      "p_merged": 0.029392093253819352
+    }
+  },
+  "788406": {
+    "subject": "788406",
+    "n_total": 127275,
+    "n_unmixed": 81426,
+    "n_dropped": 45849,
+    "score_kept_mean": 0.8194556832313538,
+    "score_kept_median": 0.9664372205734253,
+    "score_dropped_mean": 0.7939993739128113,
+    "score_dropped_median": 0.928619921207428,
+    "auc_drop_pred_by_lowscore": 0.6082315777065643,
+    "matched": {
+      "n_total": 787,
+      "n_unmixed": 569,
+      "n_dropped": 218,
+      "score_kept_mean": 0.8867325186729431,
+      "score_kept_median": 0.9592602252960205,
+      "score_dropped_mean": 0.8451136350631714,
+      "score_dropped_median": 0.8921335935592651,
+      "auc_drop_pred_by_lowscore": 0.6642830654133277
+    },
+    "class_means_kept": {
+      "p_good": 0.7743384286987599,
+      "p_bad": 0.12678622423442185,
+      "p_bad_ok": 0.06642963824746627,
+      "p_merged": 0.03244570881935201
+    },
+    "class_means_dropped": {
+      "p_good": 0.6712333038345848,
+      "p_bad": 0.147522537842239,
+      "p_bad_ok": 0.1532495569317639,
+      "p_merged": 0.02799460139141231
+    }
+  }
+}
