@@ -1,12 +1,12 @@
 {
-  "numStartups": 47,
+  "numStartups": 48,
   "installMethod": "native",
   "autoUpdates": false,
   "theme": "light",
   "hasSeenTasksHint": true,
   "tipsHistory": {
     "new-user-warmup": 9,
-    "plan-mode-for-complex-tasks": 42,
+    "plan-mode-for-complex-tasks": 47,
     "terminal-setup": 42,
     "memory-command": 46,
     "theme-command": 41,
@@ -38,8 +38,9 @@
     "frontend-design-plugin": 33,
     "remote-control": 46
   },
-  "promptQueueUseCount": 1112,
+  "promptQueueUseCount": 1113,
   "btwUseCount": 13,
+  "showExpandedTodos": true,
   "cachedGrowthBookFeatures": {
     "tengu_session_memory": false,
     "tengu_claudeai_mcp_connectors": true,
@@ -482,54 +483,38 @@
       "hasClaudeMdExternalIncludesWarningShown": false,
       "lastGracefulShutdown": false,
       "hasCompletedProjectOnboarding": true,
-      "lastCost": 5.127837499999998,
-      "lastAPIDuration": 583998,
-      "lastAPIDurationWithoutRetries": 583934,
-      "lastToolDuration": 168499,
-      "lastDuration": 52873697,
-      "lastLinesAdded": 555,
-      "lastLinesRemoved": 33,
-      "lastTotalInputTokens": 188,
-      "lastTotalOutputTokens": 37892,
-      "lastTotalCacheCreationInputTokens": 131076,
-      "lastTotalCacheReadInputTokens": 6720745,
+      "lastCost": 0,
+      "lastAPIDuration": 0,
+      "lastAPIDurationWithoutRetries": 0,
+      "lastToolDuration": 0,
+      "lastDuration": 68086,
+      "lastLinesAdded": 0,
+      "lastLinesRemoved": 0,
+      "lastTotalInputTokens": 0,
+      "lastTotalOutputTokens": 0,
+      "lastTotalCacheCreationInputTokens": 0,
+      "lastTotalCacheReadInputTokens": 0,
       "lastTotalWebSearchRequests": 0,
-      "lastModelUsage": {
-        "claude-opus-4-7": {
-          "inputTokens": 188,
-          "outputTokens": 37892,
-          "cacheReadInputTokens": 6720745,
-          "cacheCreationInputTokens": 131076,
-          "webSearchRequests": 0,
-          "costUSD": 5.127837499999998
-        }
-      },
-      "lastSessionId": "ed31c08c-8756-40c2-a756-764e593b4971",
+      "lastModelUsage": {},
+      "lastSessionId": "0eccb3d7-adef-4802-b154-c928aa0e93fe",
       "lastSessionMetrics": {
-        "hook_duration_ms_count": 23,
-        "hook_duration_ms_min": 0,
-        "hook_duration_ms_max": 16,
-        "hook_duration_ms_avg": 1.0434782608695652,
-        "hook_duration_ms_p50": 0,
-        "hook_duration_ms_p95": 1,
-        "hook_duration_ms_p99": 12.700000000000017,
-        "frame_duration_ms_count": 14516,
-        "frame_duration_ms_min": 0.3424809999996796,
-        "frame_duration_ms_max": 60.66155099999992,
-        "frame_duration_ms_avg": 1.5835198912230346,
-        "frame_duration_ms_p50": 1.445634500007145,
-        "frame_duration_ms_p95": 2.688999849918763,
-        "frame_duration_ms_p99": 3.665816840023034,
-        "pre_tool_hook_duration_ms_count": 48,
-        "pre_tool_hook_duration_ms_min": 0,
-        "pre_tool_hook_duration_ms_max": 13,
-        "pre_tool_hook_duration_ms_avg": 0.5833333333333334,
-        "pre_tool_hook_duration_ms_p50": 0,
-        "pre_tool_hook_duration_ms_p95": 4.249999999999993,
-        "pre_tool_hook_duration_ms_p99": 10.180000000000007
+        "hook_duration_ms_count": 1,
+        "hook_duration_ms_min": 37,
+        "hook_duration_ms_max": 37,
+        "hook_duration_ms_avg": 37,
+        "hook_duration_ms_p50": 37,
+        "hook_duration_ms_p95": 37,
+        "hook_duration_ms_p99": 37,
+        "frame_duration_ms_count": 15,
+        "frame_duration_ms_min": 1.0250479999999698,
+        "frame_duration_ms_max": 181.91168500000003,
+        "frame_duration_ms_avg": 13.82257146666728,
+        "frame_duration_ms_p50": 1.9696719999919878,
+        "frame_duration_ms_p95": 56.76146819999985,
+        "frame_duration_ms_p99": 156.88164163999994
       },
-      "lastFpsAverage": 0.27,
-      "lastFpsLow1Pct": 128.06,
+      "lastFpsAverage": 0.22,
+      "lastFpsLow1Pct": 5.5,
       "exampleFiles": [
         "postInstall",
         "step_1_process_files.ipynb",
@@ -538,9 +523,9 @@
         "extensions.builtin.cache"
       ],
       "exampleFilesGeneratedAt": 1777788194190,
-      "lastHintSessionId": "0eccb3d7-adef-4802-b154-c928aa0e93fe",
-      "lastSessionFirstPrompt": "read claude.md and docs. There has been an update in spot counting, by pairwise unmixing. Only 4 sample results were added to /data folder yet. I want to know if this unmixing helps GFP+ threshold usi",
-      "lastSessionModified": 1778192844704
+      "lastHintSessionId": "ec1dae73-e036-406d-8c5e-b8f3a3c21f96",
+      "lastSessionFirstPrompt": "read claude.md and docs. Your goal is to check if running cellpose-sam on the HCR 405 channel data can improve ROi segmentation quality compared to the ones already in data. Perform ROI segmentation o",
+      "lastSessionModified": 1778392344213
     },
     "/home/claude-user": {
       "allowedTools": [],
@@ -565,7 +550,7 @@
     }
   },
   "effortCalloutV2Dismissed": true,
-  "lastReleaseNotesSeen": "2.1.132",
+  "lastReleaseNotesSeen": "2.1.138",
   "officialMarketplaceAutoInstallAttempted": true,
   "officialMarketplaceAutoInstalled": true,
   "groveConfigCache": {
@@ -610,7 +595,7 @@
       "lastUsedAt": 1777447200094
     }
   },
-  "changelogLastFetched": 1778192771960,
+  "changelogLastFetched": 1778392087051,
   "opus47LaunchSeenCount": 12,
   "passesEligibilityCache": {
     "9ae27bc8-b056-4e59-ae85-52fe2e2368d8": {
@@ -665,5 +650,6 @@
     "tengu_willow_prism"
   ],
   "closedIssuesLastChecked": 1778388933085,
-  "remoteControlUpsellSeenCount": 1
+  "remoteControlUpsellSeenCount": 1,
+  "routineFiredWatermark": "2026-05-10T05:48:06.877Z"
 }

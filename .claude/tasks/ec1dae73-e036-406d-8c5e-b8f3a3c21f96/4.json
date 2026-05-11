@@ -1,0 +1,9 @@
+{
+  "id": "4",
+  "subject": "Match cellpose ROIs to existing ROIs via centroid + IoU",
+  "description": "For each cellpose ROI, find the existing HCR ROI by centroid distance + IoU threshold; produce matched/unmatched bookkeeping.",
+  "activeForm": "Matching ROIs across two segmentations",
+  "status": "pending",
+  "blocks": [],
+  "blockedBy": []
+}

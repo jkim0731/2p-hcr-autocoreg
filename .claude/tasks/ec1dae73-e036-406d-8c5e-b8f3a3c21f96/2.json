@@ -1,0 +1,9 @@
+{
+  "id": "2",
+  "subject": "Build crop-around-GT-matched-volume helper",
+  "description": "Use HCR centroids of coreg_table-matched HCR cells to define a tight bounding box (with small margin); slice 405 channel + existing seg mask to that box.",
+  "activeForm": "Building GT-volume cropper",
+  "status": "in_progress",
+  "blocks": [],
+  "blockedBy": []
+}

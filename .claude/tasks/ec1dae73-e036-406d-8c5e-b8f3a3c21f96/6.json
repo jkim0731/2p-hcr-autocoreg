@@ -1,0 +1,9 @@
+{
+  "id": "6",
+  "subject": "Compare and summarize results",
+  "description": "Per subject: number of cellpose vs existing ROIs in crop; matched fraction; quality histograms; cellprob -3 vs 0 effect.",
+  "activeForm": "Summarizing comparison",
+  "status": "pending",
+  "blocks": [],
+  "blockedBy": []
+}

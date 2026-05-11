@@ -1,0 +1,9 @@
+{
+  "id": "1",
+  "subject": "Survey HCR data layout for 405 channel + GT volume",
+  "description": "Find HCR 405 zarr, the existing segmentation_mask.zarr / metrics.pickle, and the GT-matched cell ids/centroids per subject. Confirm levels and µm/voxel.",
+  "activeForm": "Surveying HCR data layout",
+  "status": "completed",
+  "blocks": [],
+  "blockedBy": []
+}

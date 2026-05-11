@@ -1,0 +1,9 @@
+{
+  "id": "5",
+  "subject": "Score both ROI sets with roi_quality_v5d classifier",
+  "description": "Run the production classifier on (a) existing matched ROIs and (b) cellpose ROIs (need adapter to feed cellpose masks/metrics); compare per-cell quality and aggregates.",
+  "activeForm": "Scoring with v5d classifier",
+  "status": "pending",
+  "blocks": [],
+  "blockedBy": []
+}

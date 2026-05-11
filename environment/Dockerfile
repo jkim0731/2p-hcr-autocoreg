@@ -1,21 +1,34 @@
-# hash:sha256:cd9202243f7b0bdc21726b37f46ef52f4a0a77c30e65cc2f3b5a7dd3bfe49156
+# hash:sha256:f269ec634647fd5e087176f1dddbde786cddcbfdff7383c6178273f2a49eed55
 ARG REGISTRY_HOST
-FROM $REGISTRY_HOST/codeocean/ubuntu-desktop-igv-fiji-mambaforge:23.1.0-4-python3.10.12-fiji20231107-1617-firefox120.0-igv2.16.1-guacamole1.5.2-ubuntu22.04
+FROM $REGISTRY_HOST/codeocean/ubuntu-desktop-pytorch:2.5.1-cuda12.1-mambaforge24.11.3-2-python3.12.9-fiji20250521-1118-firefox139.0-igv2.19.4-guacamole1.5.5-ubuntu24.04
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG GIT_ASKPASS
 COPY git-ask-pass /
 
 # Update python to 3.11
-RUN CONDA_NO_PLUGINS=true mamba install -y -c conda-forge python=3.11 "zarr>=3.0.0" pyqt=5
+RUN CONDA_NO_PLUGINS=true mamba install -y -c conda-forge "zarr>=3.0.0" pyqt=5
 
 # VS Code, numlockx gthumb
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libgbm1 libasound2 libnss3 libxkbcommon-x11-0 \
-    libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 \
-    libxcb-render-util0 libxcb-xinerama0 libxcb-xinput0 \
-    libxcb-xfixes0 libxcb-shape0 libxcb-cursor0 \
-    numlockx gthumb \
+    curl \
+    ca-certificates \
+    libgbm1 \
+    libasound2t64 \
+    libnss3 \
+    libxkbcommon-x11-0 \
+    libxcb-icccm4 \
+    libxcb-image0 \
+    libxcb-keysyms1 \
+    libxcb-randr0 \
+    libxcb-render-util0 \
+    libxcb-xinerama0 \
+    libxcb-xinput0 \
+    libxcb-xfixes0 \
+    libxcb-shape0 \
+    libxcb-cursor0 \
+    numlockx \
+    gthumb \
     && curl -L "https://update.code.visualstudio.com/latest/linux-x64/stable" -o /tmp/vscode.tar.gz \
     && mkdir -p /opt/vscode \
     && tar -xzf /tmp/vscode.tar.gz -C /opt/vscode --strip-components=1 \

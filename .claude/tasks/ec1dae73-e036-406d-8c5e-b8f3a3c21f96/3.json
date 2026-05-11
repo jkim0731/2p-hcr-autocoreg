@@ -1,0 +1,9 @@
+{
+  "id": "3",
+  "subject": "Run cellpose-SAM on 405 crops at cellprob_threshold {-3, 0}",
+  "description": "Run 3D cellpose-SAM on cropped 405 volume per subject for the two thresholds; save labels.",
+  "activeForm": "Running cellpose-SAM on 405",
+  "status": "pending",
+  "blocks": [],
+  "blockedBy": []
+}
