@@ -1,5 +1,5 @@
 {
-  "numStartups": 48,
+  "numStartups": 49,
   "installMethod": "native",
   "autoUpdates": false,
   "theme": "light",
@@ -648,6 +648,6 @@
     "tengu_tussock_oriole",
     "tengu_willow_prism"
   ],
-  "closedIssuesLastChecked": 1778388933085,
+  "closedIssuesLastChecked": 1778476661511,
   "remoteControlUpsellSeenCount": 2
 }

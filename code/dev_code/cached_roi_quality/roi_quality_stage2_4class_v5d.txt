@@ -1,1 +1,0 @@
-roi_quality_stage2_4class_v5d_um.txt
