@@ -1678,6 +1678,24 @@
       "homepage": "https://www.sanity.io"
     },
     {
+      "name": "sap-fiori-mcp-server",
+      "description": "MCP server for SAP Fiori development tools for Claude Code. Build and modify SAP Fiori applications with AI assistance.",
+      "author": {
+        "name": "SAP SE",
+        "email": "ospo@sap.com",
+        "url": "https://www.sap.com"
+      },
+      "category": "development",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/SAP/open-ux-tools.git",
+        "path": "packages/fiori-mcp-server",
+        "ref": "main",
+        "sha": "d9d4ab7e69fe453f8fd682304ff1e3ac40a216c6"
+      },
+      "homepage": "https://github.com/SAP/open-ux-tools/tree/main/packages/fiori-mcp-server"
+    },
+    {
       "name": "sap-mdk-server",
       "description": "MCP server for SAP Mobile Development Kit (MDK). Build and modify MDK applications with AI assistance — schema lookups, action validation, rule editing, and project scaffolding.",
       "author": {
@@ -2049,7 +2067,7 @@
       "source": {
         "source": "url",
         "url": "https://github.com/vercel/vercel-plugin.git",
-        "sha": "78de7b549d3a8e197759c0c61859a8ccb69647c4"
+        "sha": "61f1903bed7b322c9745f6ba67095bc006de7e63"
       },
       "homepage": "https://github.com/vercel/vercel-plugin"
     },

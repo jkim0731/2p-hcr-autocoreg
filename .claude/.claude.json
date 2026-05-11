@@ -1,5 +1,5 @@
 {
-  "numStartups": 47,
+  "numStartups": 48,
   "installMethod": "native",
   "autoUpdates": false,
   "theme": "light",
@@ -15,7 +15,7 @@
     "prompt-queue": 1,
     "enter-to-steer-in-relatime": 41,
     "todo-list": 41,
-    "ide-upsell-external-terminal": 44,
+    "ide-upsell-external-terminal": 48,
     "install-github-app": 45,
     "install-slack-app": 45,
     "drag-and-drop-images": 46,
@@ -23,7 +23,7 @@
     "continue": 46,
     "shift-tab": 46,
     "image-paste": 45,
-    "web-app": 33,
+    "web-app": 48,
     "mobile-app": 33,
     "voice-mode": 46,
     "custom-agents": 36,
@@ -480,7 +480,7 @@
       "projectOnboardingSeenCount": 0,
       "hasClaudeMdExternalIncludesApproved": false,
       "hasClaudeMdExternalIncludesWarningShown": false,
-      "lastGracefulShutdown": true,
+      "lastGracefulShutdown": false,
       "hasCompletedProjectOnboarding": true,
       "lastCost": 0,
       "lastAPIDuration": 0,
@@ -649,5 +649,5 @@
     "tengu_willow_prism"
   ],
   "closedIssuesLastChecked": 1778388933085,
-  "remoteControlUpsellSeenCount": 1
+  "remoteControlUpsellSeenCount": 2
 }
