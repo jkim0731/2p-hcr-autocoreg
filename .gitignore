@@ -1,3 +1,7 @@
 /data/
 
 .vscode
+code/__pycache__
+.claude/.credentials.json
+.local
+.cache
