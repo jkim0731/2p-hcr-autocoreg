@@ -1,0 +1,5 @@
+,pred_bad,pred_bad_ok,pred_good,pred_merged
+true_bad,229,40,18,22
+true_bad_ok,51,283,84,58
+true_good,23,122,374,54
+true_merged,14,29,30,414

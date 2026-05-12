@@ -182,15 +182,15 @@ Every subgoal below operates inside the cropped overlap volume from `surface_reg
 
 1. **Per-ROI feature extractor** (no re-segmentation). For every HCR ROI, compute:
    * **Shape / size** from `metrics.pickle`: volume, surface area, equivalent diameter, axis ratios, sphericity, voxel count.
-   * **Intensity stats** at the ROI on every available channel (488 GFP, **405 nuclear / DAPI**, 561, 594): mean, std, p10/p50/p90, foreground-vs-margin contrast.
-   * **Nuclear-channel agreement (405).** Mean / p90 of 405 inside the ROI vs in a 1-voxel-eroded core vs in a small dilated shell. A "real" cell should peak inside; a segmentation artefact often does not. **This is the new signal added per the user's hint.**
+   * **Intensity stats** at the ROI on every available channel (488 GFP, **405 Rn28S** (28S rRNA HCR; cytoplasmic / perinuclear, *not* DAPI / nuclear), 561, 594): mean, std, p10/p50/p90, foreground-vs-margin contrast.
+   * **Rn28S-channel agreement (405).** Mean / p90 of 405 inside the ROI vs in a 1-voxel-eroded core vs in a small dilated shell. A "real" cell should have Rn28S signal inside; a segmentation artefact often does not. **This is the new signal added per the user's hint.**
    * **Local context patch** at the ROI centroid: small 3-D crop on 405 (and optionally 488) at level 2 covering ~30 µm; downsampled to a fixed-size feature volume or summarised by mean / std / Laplacian per radial shell.
    * **Neighbour density / spacing** from `hcr_centroids` (existing): k-NN distances, count of GFP+ neighbours within 30 µm, ratio of GFP+ to all neighbours.
    * **GFP+ score** (`peakgauss3_density_p0.1` or `peakgauss3_mean_bg_p1`) — kept as a feature, not as the gate.
    * **Mask consistency** with the level-0 `segmentation_mask.zarr`: overlap fraction between the ROI's metrics-pickle bbox and the actual mask label region (catches the "level mislabel" issue documented in `reference_hcr_seg_zarr_levels`).
 2. **Labels — bootstrap with rule-based pseudo-labels, then refine with a small human pass.** This problem is HCR-internal (no CZ↔HCR matching), so the CLAUDE.md rule "no benchmark for design" doesn't bite — `coreg_table.csv` is irrelevant; what's needed is HCR-only ROI quality labels.
    * **Stage 1 — heuristic pseudo-labels (no human, per subject).**
-     * **Easy negatives (bad ROI):** volume in bottom 1 % (debris / fragments) or top 1 % (merged blobs); ROIs touching xy or z boundary of the seg volume; ROIs whose 405 intensity at the centroid is below the local background (no nucleus where one should be); ROIs with solidity < 0.6 or axis aspect > 4 (highly non-convex / extreme elongation); ROIs whose `metrics.pickle` bbox does not intersect a label region in `segmentation_mask.zarr` (catches level-mislabel + stale pickle).
+     * **Easy negatives (bad ROI):** volume in bottom 1 % (debris / fragments) or top 1 % (merged blobs); ROIs touching xy or z boundary of the seg volume; ROIs whose 405 (Rn28S) intensity at the centroid is below the local background (no Rn28S signal where one should be); ROIs with solidity < 0.6 or axis aspect > 4 (highly non-convex / extreme elongation); ROIs whose `metrics.pickle` bbox does not intersect a label region in `segmentation_mask.zarr` (catches level-mislabel + stale pickle).
      * **Synthetic negatives:** programmatically force-merge two adjacent ROIs (label = bad) and force-split one ROI through its centroid plane (label = bad). Adds the failure modes the heuristics can't cover.
      * **Easy positives (good ROI):** volume in the middle 50 %; 405 peak inside the ROI mask; solidity > 0.85; not boundary-touching; stable 405/488 statistics across the eroded core vs the dilated shell.
      * Drop ROIs that satisfy neither set ("ambiguous"); they go to Stage 2.
@@ -331,10 +331,10 @@ The simplicity × likely-success ordering for v3.
 ## 8. Risks and open issues
 
 1. **Over-fitting the classifier to 6 subjects.** Mitigation: LOSO-CV mandatory; F8 synthetic positives for Stage 1; never tune hyperparameters on validation subjects.
-2. **HCR ROI segmentation drift across subjects.** Different cellpose runs and pipeline versions exist (`Notes.md`). Mitigation: per-ROI pass/fail classifier in subgoal 4.4 — uses existing segmentation + 405 nuclear-channel context, no rerun. Filters out bad ROIs before they reach the matcher; trained per-feature so the model itself stays subject-agnostic.
+2. **HCR ROI segmentation drift across subjects.** Different cellpose runs and pipeline versions exist (`Notes.md`). Mitigation: per-ROI pass/fail classifier in subgoal 4.4 — uses existing segmentation + 405 Rn28S-channel context, no rerun. Filters out bad ROIs before they reach the matcher; trained per-feature so the model itself stays subject-agnostic.
 3. **Locked frame errors propagating.** PWR4×4 can over-fit on subjects with sparse vasculature. Mitigation: per-subject Δ-NCC vs rigid is logged; if Δ < 0.02 the v3 pipeline falls back to affine for that subject.
 4. **782149 still hardest.** With only ~3.8 k GFP+ cells and a 12 ° pia tilt, even a perfect classifier can run out of evidence. Plan B = manual-seed mode in §7.
-5. **HCR 405 channel availability per subject.** The pass/fail classifier in subgoal 4.4 leans on 405 / nuclear context as a key feature. If 405 is missing or mis-aligned for a subject, the classifier degrades to shape + 488 + neighbour-density features only. Mitigation: confirm 405 availability before S11; if missing, drop the patch branch and accept reduced AUC.
+5. **HCR 405 channel availability per subject.** The pass/fail classifier in subgoal 4.4 leans on 405 / Rn28S context as a key feature. If 405 is missing or mis-aligned for a subject, the classifier degrades to shape + 488 + neighbour-density features only. Mitigation: confirm 405 availability before S11; if missing, drop the patch branch and accept reduced AUC.
 
 ---
 

@@ -1,9 +1,50 @@
 ---
-name: S11 v5d promoted to main (expansion-rate-independent)
-description: 2026-05-01 v5d (drop µm + voxel companions, shell=4 vox from boundary) is the production stage-2 model. v5 superseded. Latest retrain on 1648 labels.
+name: S11 v5d production = µm-feature variant, no rank, no v6_vox (2026-05-08 swap)
+description: Canonical `*_v5d.parquet` / `roi_quality_stage2_*_v5d.{txt,json}` now SYMLINK to `*_v5d_um.*` (µm features, no within-subject ranks, no v6_vox extractor). LOSO @ 1845 labels: bin AUC 0.9206, 4cls acc 0.7033, f1_macro 0.6981 — within noise of vox+rank variant. v6_vox extractor no longer needed.
 type: project
 originSessionId: b738b938-e542-46a0-8ca4-0ef155358066
 ---
+
+**2026-05-08 production swap.** A/B retrain compared µm vs vox feature
+variants, both with PCT_RANK disabled (rank features are sample-prep
+sensitive — e.g. tissue thickness shifts the population a cell is ranked
+against). Result was a tie within CV noise (Δ AUC = 0.0001, Δ f1_macro
+= 0.002 in vox's favour). **µm variant promoted** because v6_vox is the
+heaviest extractor (~58 % of feature-extraction CPU) and the cohort's
+voxel pitch only spans ±1 % so the two variants carry essentially the
+same information.
+
+Canonical filenames in `code/dev_code/cached_roi_quality/` are now
+**symlinks** pointing at the µm trainer outputs:
+- `{sid}_stage2_{binary_score,4class_proba}_v5d.parquet` → `*_v5d_um.parquet`
+- `roi_quality_stage2_{binary,4class}_v5d.txt` → `*_v5d_um.txt`
+- `roi_quality_stage2_meta_v5d.json` → `*_v5d_um.json`
+
+The 2026-05-08-morning rank+vox retrain outputs (the previous canonical)
+are kept under `*_v5d_legacy_rank_vox.*` for rollback.
+
+Updated config (vs the 2026-05-01 promotion below):
+- **PCT_RANK_COLS = []** (rank features disabled)
+- **µm features kept**, v6_vox features dropped (DROP_UM_FEATURES NOT
+  applied; v6_vox parquet NOT loaded)
+- **n_features = 91** (was 92 with rank)
+- 1845 labels (1983 actions in JSONL → 1845 valid after undo/unsure
+  filtering)
+
+Trainer: `code/sessions/13_pairwise_unmix_gfp/train_stage2_um_vs_vox_ab.py`
+(`--modes um --write-production`). Replaces the v6_vox-using
+`05h_train_stage2_v5d.py` for production swaps.
+
+**Downstream impact.** `_v5d.parquet`, `_v5d.txt`, `_v5d.json` paths still
+work transparently via the symlinks. Loaders reading these files do not
+need code changes. The v6_vox extractor (`01g_extract_features_v6.py`)
+is no longer required for production v5d — full extraction runtime drops
+from ~140 min/subject to ~56 min/subject (no more v6_vox redundant pass).
+
+---
+
+## 2026-05-01 entry (superseded above; kept for context)
+
 **Decision (2026-05-01)**: v5d replaces v5 as the S11 stage-2 production
 model. Rationale = expansion-rate independence: per-sample µm calibration is
 metadata-level only (not biological expansion factor), but the user wants

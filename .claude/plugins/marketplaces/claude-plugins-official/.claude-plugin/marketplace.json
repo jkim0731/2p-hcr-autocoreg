@@ -82,6 +82,22 @@
       "homepage": "https://github.com/AikidoSec/aikido-claude-plugin"
     },
     {
+      "name": "airtable",
+      "description": "Airtable is the database and operations layer for your agents — whether running product, marketing, sales, ops, HR, or a custom business app. It combines structured data with multiplayer visual surfaces (grid, kanban, calendar, gallery, timeline) humans and agents share — plus sync integrations to Jira, Salesforce, Zendesk, Google Drive, Databricks, and the rest of your stack, all backed by enterprise governance. This plugin makes Claude fluent in Airtable: creating bases and schema, working with records, and sharing UI for collaboration. Bundles the official Airtable MCP server.",
+      "author": {
+        "name": "Airtable"
+      },
+      "category": "productivity",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/Airtable/skills.git",
+        "path": "plugins/airtable",
+        "ref": "main",
+        "sha": "aaeb4f3ec8d462d694a13fe5c3d249c291bf8899"
+      },
+      "homepage": "https://www.airtable.com"
+    },
+    {
       "name": "alloydb",
       "description": "Create, connect, and interact with an AlloyDB for PostgreSQL database and data.",
       "author": {
@@ -368,6 +384,11 @@
     {
       "name": "cds-mcp",
       "description": "AI-assisted development of SAP Cloud Application Programming Model (CAP) projects. Search CDS models and CAP documentation.",
+      "author": {
+        "name": "SAP SE",
+        "email": "ospo@sap.com",
+        "url": "https://www.sap.com"
+      },
       "category": "development",
       "source": {
         "source": "url",
@@ -1164,6 +1185,22 @@
       "homepage": "https://github.com/anthropics/claude-plugins-official/tree/main/plugins/mcp-server-dev"
     },
     {
+      "name": "mercadopago",
+      "description": "Mercado Pago full-product integration toolkit. Covers online checkout (Pro, Bricks, API), in-store (QR, Point), subscriptions, marketplace, wallet, money-out, security (3DS, PCI), reporting, SDKs, and specialized integrations. Hybrid architecture: 13 skills provide stable integration intelligence, MCP provides live API data.",
+      "author": {
+        "name": "Mercado Pago Developer Experience"
+      },
+      "category": "development",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/mercadopago/mercadopago-claude-marketplace.git",
+        "path": "plugins/mercadopago",
+        "ref": "main",
+        "sha": "1de8d97e1c875136e93bc8eea8494ebf982a08b8"
+      },
+      "homepage": "https://github.com/mercadopago/mercadopago-claude-marketplace/tree/main/plugins/mercadopago"
+    },
+    {
       "name": "microsoft-docs",
       "description": "Access official Microsoft documentation, API references, and code samples for Azure, .NET, Windows, and more.",
       "category": "development",
@@ -1678,10 +1715,46 @@
       "homepage": "https://www.sanity.io"
     },
     {
+      "name": "sap-cds-mcp",
+      "description": "AI-assisted development of SAP Cloud Application Programming Model (CAP) projects. Search CDS models and CAP documentation.",
+      "author": {
+        "name": "SAP SE",
+        "email": "ospo@sap.com",
+        "url": "https://www.sap.com"
+      },
+      "category": "development",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/cap-js/mcp-server.git",
+        "sha": "8ce2e13ac70bd78415aedeaab0061af9396d3372"
+      },
+      "homepage": "https://cap.cloud.sap/"
+    },
+    {
+      "name": "sap-fiori-mcp-server",
+      "description": "MCP server for SAP Fiori development tools for Claude Code. Build and modify SAP Fiori applications with AI assistance.",
+      "author": {
+        "name": "SAP SE",
+        "email": "ospo@sap.com",
+        "url": "https://www.sap.com"
+      },
+      "category": "development",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/SAP/open-ux-tools.git",
+        "path": "packages/fiori-mcp-server",
+        "ref": "main",
+        "sha": "d9d4ab7e69fe453f8fd682304ff1e3ac40a216c6"
+      },
+      "homepage": "https://github.com/SAP/open-ux-tools/tree/main/packages/fiori-mcp-server"
+    },
+    {
       "name": "sap-mdk-server",
       "description": "MCP server for SAP Mobile Development Kit (MDK). Build and modify MDK applications with AI assistance — schema lookups, action validation, rule editing, and project scaffolding.",
       "author": {
-        "name": "SAP"
+        "name": "SAP SE",
+        "email": "ospo@sap.com",
+        "url": "https://www.sap.com"
       },
       "category": "development",
       "source": {
@@ -1746,7 +1819,7 @@
         "source": "git-subdir",
         "url": "https://github.com/ServiceNow/sdk.git",
         "path": "providers/claude/plugin",
-        "ref": "main",
+        "ref": "master",
         "sha": "06adf37ca78c270a57f93e7b9dfbb7bf16e24611"
       },
       "homepage": "https://servicenow.github.io/sdk/"
@@ -2005,6 +2078,11 @@
     {
       "name": "ui5",
       "description": "SAPUI5 / OpenUI5 plugin for Claude. Create and validate UI5 projects, access API documentation, run UI5 linter, get development guidelines and best practices for UI5 development.",
+      "author": {
+        "name": "SAP SE",
+        "email": "openui5@sap.com",
+        "url": "https://www.sap.com"
+      },
       "category": "development",
       "source": {
         "source": "git-subdir",
@@ -2018,6 +2096,11 @@
     {
       "name": "ui5-typescript-conversion",
       "description": "SAPUI5 / OpenUI5 plugin for Claude. Convert JavaScript based UI5 projects to TypeScript.",
+      "author": {
+        "name": "SAP SE",
+        "email": "openui5@sap.com",
+        "url": "https://www.sap.com"
+      },
       "category": "development",
       "source": {
         "source": "git-subdir",
@@ -2049,7 +2132,7 @@
       "source": {
         "source": "url",
         "url": "https://github.com/vercel/vercel-plugin.git",
-        "sha": "78de7b549d3a8e197759c0c61859a8ccb69647c4"
+        "sha": "61f1903bed7b322c9745f6ba67095bc006de7e63"
       },
       "homepage": "https://github.com/vercel/vercel-plugin"
     },
