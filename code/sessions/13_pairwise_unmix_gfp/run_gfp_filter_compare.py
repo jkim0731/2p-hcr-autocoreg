@@ -119,7 +119,18 @@ def _load_volumes(sid: str) -> pd.Series | None:
 # Feature loaders
 # ---------------------------------------------------------------------------
 def load_spot_density(sid: str) -> pd.DataFrame | None:
-    """`density` = spot counts / cell volume from the original 488 detection."""
+    """``density`` = (GFP spot count) / (cell volume).
+
+    Source priority (all proven bit-identical on overlap — see
+    `verify_mixed_cellbygene_equivalence` notes in summary):
+
+      1. ``*spot_488_counts.csv`` in the coreg dir (782149/788406/790322).
+      2. R1 ``mixed_cell_by_gene.csv`` (gene == "GFP") from
+         ``pairwise-unmixing/{sid}_R1/`` — equivalent for 767018 (R1 worked).
+      3. R2 ``mixed_cell_by_gene.csv`` (gene == "GFP") from
+         ``pairwise-unmixing/{sid}_R2/`` — used for **755252 and 767022**,
+         whose R1 GFP probe failed and were re-probed in R2.
+    """
     s = load_subject(sid)
     csv = list(Path(s.coreg_dir).glob("*spot_488_counts.csv"))
     if csv:
@@ -133,28 +144,30 @@ def load_spot_density(sid: str) -> pd.DataFrame | None:
         df["value"] = df["density"].astype(float)
         return df[["hcr_id", "value"]].dropna()
 
-    # Fallback: image_spot_detection + metrics.pickle
-    vols = _load_volumes(sid)
-    if vols is None:
-        return None
-    spots = Path(s.hcr_dir) / "image_spot_detection" / "channel_488_spots" / "spots.csv"
-    if not spots.exists():
-        return None
-    sp = pd.read_csv(spots)
-    if "cell_id" not in sp.columns:
-        # try SEG_ID
-        for c in ("SEG_ID", "label", "cell"):
-            if c in sp.columns:
-                sp = sp.rename(columns={c: "cell_id"})
-                break
-    if "cell_id" not in sp.columns:
-        return None
-    counts = sp["cell_id"].astype(int).value_counts()
-    df = pd.DataFrame({"hcr_id": counts.index, "counts": counts.values})
-    df = df.merge(vols.rename("volume"), left_on="hcr_id", right_index=True, how="left")
-    df = df.dropna(subset=["volume"])
-    df["value"] = df["counts"] / df["volume"]
-    return df[["hcr_id", "value"]].dropna()
+    # Fallback: R{1,2}/mixed_cell_by_gene.csv with gene == "GFP".
+    pat_r1 = f"/root/capsule/data/HCR_{sid}_pairwise-unmixing_*/pairwise_unmixing/{sid}_R1/mixed_cell_by_gene.csv"
+    pat_r1_flat = f"/root/capsule/data/HCR_{sid}_pairwise-unmixing_*/{sid}_R1/mixed_cell_by_gene.csv"
+    pat_r2 = f"/root/capsule/data/HCR_{sid}_pairwise-unmixing_*/pairwise_unmixing/{sid}_R2/mixed_cell_by_gene.csv"
+    pat_r2_flat = f"/root/capsule/data/HCR_{sid}_pairwise-unmixing_*/{sid}_R2/mixed_cell_by_gene.csv"
+    for pat in (pat_r1, pat_r1_flat, pat_r2, pat_r2_flat):
+        from glob import glob as _glob
+        hits = sorted(_glob(pat))
+        if not hits:
+            continue
+        mix = pd.read_csv(hits[0])
+        if "gene" not in mix.columns:
+            continue
+        sub = mix[mix["gene"].astype(str).str.upper().isin(["GFP", "488", "488-GFP"])]
+        if sub.empty:
+            continue
+        sub = sub.rename(columns={"cell_id": "hcr_id"})
+        if "volume" not in sub.columns or "spot_count" not in sub.columns:
+            continue
+        sub = sub[["hcr_id", "spot_count", "volume"]].dropna()
+        sub["hcr_id"] = sub["hcr_id"].astype(int)
+        sub["value"] = sub["spot_count"].astype(float) / sub["volume"].astype(float)
+        return sub[["hcr_id", "value"]]
+    return None
 
 
 def _find_unmix_csv(sid: str) -> Path | None:

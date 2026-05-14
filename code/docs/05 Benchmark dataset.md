@@ -13,7 +13,13 @@
 
 ## Notes
 1. 782149 has thinner HCR section
-2. 755252 and 767022 do not have spot data - using intensity instead (/root/capsule/data/cell_data_mean_*_R1.csv; 488 is GFP channel)
+2. 755252 and 767022 do not have R1 spot data (R1 GFP probe failed). Spot
+   data IS available in R2: `HCR_{sid}_pairwise-unmixing_*/pairwise_unmixing/{sid}_R2/mixed_cell_by_gene.csv`
+   filtered to `gene == "GFP"` (columns `spot_count`, `volume`) — equivalent
+   to `spot_488_counts.csv` for the other subjects (bit-identical on
+   782149/788406/790322 R1 mixed vs direct). Intensity-only fallback
+   (`/root/capsule/data/cell_data_mean_*_R1.csv` channel 488) remains
+   available.
 
 ## Priorities
 - Test with 788406 and 790322 first.

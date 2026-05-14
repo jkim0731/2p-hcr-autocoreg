@@ -1,0 +1,249 @@
+"""Export cropped HCR (405, 488) and filtered HCR segmentation, all
+resampled into the CZ-stack voxel frame (CZ extent + margin), for
+BigWarp inspection of pairwise-unmix missed cells.
+
+Per subject we emit:
+  cz_stack.tif         — CZ 488 zstack, zero-padded to match output grid
+  hcr_405_in_cz.tif    — HCR 405 (level-2 source) warped into CZ frame
+  hcr_488_in_cz.tif    — HCR 488 (level-2 source) warped into CZ frame
+  hcr_seg_in_cz.tif    — HCR seg (level-0 source) filtered to
+                         (coreg_table.hcr_id ∪ unmixed_all_cells.cell_id),
+                         NN-resampled into CZ frame
+  metadata.json        — voxel sizes, transform params, ID set sizes,
+                         output grid spec
+"""
+from __future__ import annotations
+
+import argparse
+import glob
+import json
+import sys
+import time
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import tifffile
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "dev_code"))
+# dev_code imports reference `/data/claude_data/sessions/...` but the archive
+# was re-attached at `claude-data_ophys-mfish-autocoreg_260503/`. Prepend the
+# two needed session paths so the top-level imports in
+# surface_registration_v2 / surfaces_iter08 resolve.
+_ARCHIVE_SESSIONS = Path("/root/capsule/data/claude-data_ophys-mfish-autocoreg_260503/sessions")
+for _sub in ("08_surface_vascular_match", "03c_onset_features/iterations"):
+    _p = _ARCHIVE_SESSIONS / _sub
+    if _p.exists() and str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
+
+from benchmark_analysis import hcr_level_resolution
+from benchmark_data_loader import load_subject
+from cz_volume import load_cz_volume
+from hcr_to_cz_warp import (
+    build_cz_output_grid,
+    cz_mean_depth_um,
+    pad_cz_stack,
+    warp_hcr_zarr_to_cz_grid,
+    _effective_translation,
+)
+from locked_prior_warm import compute_locked_prior_warm_start
+from sz_estimator import get_sz
+
+SESSION_13_SUBJECTS = ["755252", "767022", "782149", "788406"]
+OUT_ROOT = Path("/root/capsule/code/sessions/13_pairwise_unmix_gfp/outputs/bigwarp_export")
+
+
+def _find_unmixed_csv(sid: str) -> Path | None:
+    pat = f"/root/capsule/data/HCR_{sid}_pairwise-unmixing_*/pairwise_unmixing/all_cells_unmixed/unmixed_all_cells.csv"
+    hits = sorted(glob.glob(pat))
+    return Path(hits[-1]) if hits else None
+
+
+def _load_unmixed_ids(sid: str) -> set[int]:
+    p = _find_unmixed_csv(sid)
+    if p is None:
+        return set()
+    df = pd.read_csv(p, usecols=lambda c: c == "cell_id")
+    return set(int(x) for x in df["cell_id"].dropna().astype(int).unique())
+
+
+def _save_ome_tiff(path: Path, vol: np.ndarray, xy_um: float, z_um: float) -> None:
+    """Write a 3D volume as an OME-TIFF with physical pixel sizes (µm)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tifffile.imwrite(
+        str(path),
+        vol,
+        photometric="minisblack",
+        metadata={
+            "axes": "ZYX",
+            "PhysicalSizeX": xy_um,
+            "PhysicalSizeY": xy_um,
+            "PhysicalSizeZ": z_um,
+            "PhysicalSizeXUnit": "µm",
+            "PhysicalSizeYUnit": "µm",
+            "PhysicalSizeZUnit": "µm",
+        },
+        bigtiff=vol.nbytes >= (1 << 31),
+    )
+
+
+def export_subject(sid: str, *, margin_um: float = 20.0, dry_run: bool = False) -> dict:
+    t0 = time.time()
+    s = load_subject(sid)
+    out_dir = OUT_ROOT / sid
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"\n=== {sid} ===", flush=True)
+
+    # --- Load registration + sz ---
+    lp = compute_locked_prior_warm_start(s)
+    sz_dict = get_sz(s)
+    sz_best = float(sz_dict["sz_best"])
+    cz_depth_um = cz_mean_depth_um(s, lp)
+    T_eff = _effective_translation(lp, sz_best, cz_depth_um)
+    print(f"  sz_lp={lp.scales[0]:.3f}  sz_best={sz_best:.3f}  "
+          f"cz_mean_depth={cz_depth_um:.1f}µm", flush=True)
+
+    # --- CZ volume ---
+    cz_vol = load_cz_volume(s)
+    grid = build_cz_output_grid(s, margin_um=margin_um, cz_shape=cz_vol.shape)
+    print(f"  CZ shape={cz_vol.shape}  output grid={grid.shape}  "
+          f"margin={margin_um}µm  (cz_voxel xy={s.cz_xy_um}µm z={s.cz_z_um}µm)", flush=True)
+
+    cz_padded = pad_cz_stack(cz_vol, grid, s).astype(np.float32)
+
+    # --- ID sets ---
+    coreg_ids = set(int(x) for x in s.coreg_table["hcr_id"].dropna().astype(int).unique())
+    unmix_ids = _load_unmixed_ids(sid)
+    keep_ids = coreg_ids | unmix_ids
+    print(f"  coreg_ids={len(coreg_ids)}  unmixed_ids={len(unmix_ids)}  "
+          f"union={len(keep_ids)}", flush=True)
+
+    # --- HCR zarr paths ---
+    ch_root = s.hcr_dir / "image_tile_fusing" / "fused"
+    path_405 = ch_root / "channel_405.zarr"
+    path_488 = ch_root / "channel_488.zarr"
+    path_seg = s.hcr_dir / "cell_body_segmentation" / "segmentation_mask.zarr"
+    for p in (path_405, path_488, path_seg):
+        if not p.exists():
+            raise FileNotFoundError(f"Missing zarr: {p}")
+
+    # --- 405 (L2) ---
+    xy_l2, z_l2 = hcr_level_resolution(s, 2)
+    t_405 = time.time()
+    vol_405, info_405 = warp_hcr_zarr_to_cz_grid(
+        str(path_405), level=2,
+        hcr_xy_um=xy_l2, hcr_z_um=z_l2,
+        lp=lp, sz=sz_best, T_eff=T_eff, grid=grid,
+        order=1, cval=0.0, dtype_out=np.uint16, chunk_out_z=64,
+    )
+    print(f"  405 L2: {len(info_405['chunks'])} chunks  warp={time.time()-t_405:.1f}s", flush=True)
+
+    # --- 488 (L2) ---
+    t_488 = time.time()
+    vol_488, info_488 = warp_hcr_zarr_to_cz_grid(
+        str(path_488), level=2,
+        hcr_xy_um=xy_l2, hcr_z_um=z_l2,
+        lp=lp, sz=sz_best, T_eff=T_eff, grid=grid,
+        order=1, cval=0.0, dtype_out=np.uint16, chunk_out_z=64,
+    )
+    print(f"  488 L2: {len(info_488['chunks'])} chunks  warp={time.time()-t_488:.1f}s", flush=True)
+
+    # --- Seg (L0, filtered) ---
+    xy_l0 = float(s.hcr_xy_um) / 4.0  # level-0 xy (level-2 / 4)
+    z_l0 = float(s.hcr_z_um)
+    t_seg = time.time()
+    vol_seg, info_seg = warp_hcr_zarr_to_cz_grid(
+        str(path_seg), level=0,
+        hcr_xy_um=xy_l0, hcr_z_um=z_l0,
+        lp=lp, sz=sz_best, T_eff=T_eff, grid=grid,
+        order=0, cval=0, label_keep_set=keep_ids, dtype_out=np.uint32,
+        chunk_out_z=16,
+    )
+    nonzero_ids = np.unique(vol_seg[vol_seg > 0])
+    print(f"  seg L0: {len(info_seg['chunks'])} chunks  warp={time.time()-t_seg:.1f}s  "
+          f"kept_ids_in_output={len(nonzero_ids)}", flush=True)
+
+    if dry_run:
+        return {"sid": sid, "out_dir": str(out_dir), "dry_run": True}
+
+    # --- Write ---
+    _save_ome_tiff(out_dir / "cz_stack.tif", cz_padded,
+                   xy_um=s.cz_xy_um, z_um=s.cz_z_um)
+    _save_ome_tiff(out_dir / "hcr_405_in_cz.tif", vol_405,
+                   xy_um=s.cz_xy_um, z_um=s.cz_z_um)
+    _save_ome_tiff(out_dir / "hcr_488_in_cz.tif", vol_488,
+                   xy_um=s.cz_xy_um, z_um=s.cz_z_um)
+    _save_ome_tiff(out_dir / "hcr_seg_in_cz.tif", vol_seg,
+                   xy_um=s.cz_xy_um, z_um=s.cz_z_um)
+
+    meta = {
+        "subject_id": sid,
+        "cz_dir": str(s.coreg_dir),
+        "hcr_dir": str(s.hcr_dir),
+        "margin_um": margin_um,
+        "output_shape_zyx": list(grid.shape),
+        "output_voxel_um": {"z": s.cz_z_um, "y": s.cz_xy_um, "x": s.cz_xy_um},
+        "cz_stack_shape_zyx": list(cz_vol.shape),
+        "hcr_level2_voxel_um": {"xy": xy_l2, "z": z_l2},
+        "hcr_level0_voxel_um": {"xy": xy_l0, "z": z_l0},
+        "locked_prior": {
+            "R": lp.R.tolist(),
+            "scales_sz_sy_sx": lp.scales.tolist(),
+            "translation_zyx_um": lp.translation.tolist(),
+            "src_mean_zyx_um": lp.src_mean.tolist(),
+            "sxy_value": lp.sxy_value,
+            "sxy_source": lp.sxy_source,
+            "rotation_deg_z": lp.rotation_deg_z,
+            "pwr_method": lp.pwr_method,
+            "pwr_ncc": lp.pwr_ncc,
+        },
+        "sz_best": sz_best,
+        "sz_lp": float(lp.scales[0]),
+        "T_eff_zyx_um": T_eff.tolist(),
+        "cz_mean_depth_um": cz_depth_um,
+        "id_sets": {
+            "coreg_hcr_id_count": len(coreg_ids),
+            "unmixed_cell_id_count": len(unmix_ids),
+            "union_count": len(keep_ids),
+            "union_ids_in_output_count": int(len(nonzero_ids)),
+        },
+        "warp_info": {
+            "ch405_L2": info_405,
+            "ch488_L2": info_488,
+            "seg_L0": info_seg,
+        },
+        "elapsed_sec": time.time() - t0,
+    }
+    (out_dir / "metadata.json").write_text(json.dumps(meta, indent=2))
+    print(f"  wrote → {out_dir}  ({time.time()-t0:.1f}s total)", flush=True)
+    return meta
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("subjects", nargs="*", default=None,
+                        help="Subset of session-13 subjects (default: all 4)")
+    parser.add_argument("--margin-um", type=float, default=20.0)
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args()
+    subjects = args.subjects or SESSION_13_SUBJECTS
+    results = []
+    for sid in subjects:
+        try:
+            results.append(export_subject(sid, margin_um=args.margin_um,
+                                          dry_run=args.dry_run))
+        except Exception as e:
+            print(f"  !! {sid} FAILED: {e}", flush=True)
+            results.append({"sid": sid, "error": str(e)})
+    print("\nSummary:")
+    for r in results:
+        sid = r.get("sid") or r.get("subject_id", "?")
+        if "error" in r:
+            print(f"  {sid}: FAIL — {r['error']}")
+        else:
+            print(f"  {sid}: OK  ({r.get('elapsed_sec', 0):.1f}s)")
+
+
+if __name__ == "__main__":
+    main()
