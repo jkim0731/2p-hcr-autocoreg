@@ -1,0 +1,13 @@
+// Beanshell: open the 4 exported TIFFs and launch BigWarp on 782149.
+// Start with HCR-405 (moving) + CZ-stack (target); user can add 488 + seg
+// via BDV's "Add source" menu inside BigWarp.
+import ij.IJ;
+
+String DIR = "/root/capsule/code/sessions/13_pairwise_unmix_gfp/outputs/bigwarp_export/782149/";
+
+IJ.openImage(DIR + "hcr_405_in_cz.tif").show();
+IJ.openImage(DIR + "hcr_488_in_cz.tif").show();
+IJ.openImage(DIR + "hcr_seg_in_cz.tif").show();
+IJ.openImage(DIR + "cz_stack.tif").show();
+
+IJ.run("Big Warp", "moving=hcr_405_in_cz.tif target=cz_stack.tif");
