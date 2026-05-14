@@ -1,0 +1,7 @@
+// ImageJ macro: open 4 TIFFs of 782149 and launch BigWarp.
+DIR = "/root/capsule/code/sessions/13_pairwise_unmix_gfp/outputs/bigwarp_export/782149/";
+open(DIR + "cz_stack.tif");
+open(DIR + "hcr_405_in_cz.tif");
+open(DIR + "hcr_488_in_cz.tif");
+open(DIR + "hcr_seg_in_cz.tif");
+run("Big Warp", "moving=hcr_405_in_cz.tif target=cz_stack.tif");

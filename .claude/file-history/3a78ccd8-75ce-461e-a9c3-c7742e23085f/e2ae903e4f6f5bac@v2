@@ -1,0 +1,165 @@
+"""Per-subject GIF sweeping top→bottom of the CZ output grid, compositing:
+  - HCR ROIs in coreg_table AND in unmixing/cell-typing table → GREEN
+    (i.e. hcr_seg_coreg \\ hcr_seg_missed)
+  - HCR ROIs in coreg_table but NOT in the cell×gene table → RED
+    (i.e. hcr_seg_missed)
+Background: CZ 488 zstack at dimmed grayscale for context.
+Top-right label: z position in CZ µm (0 = top of CZ stack).
+"""
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+
+import imageio.v3 as iio
+import numpy as np
+import tifffile
+from PIL import Image, ImageDraw, ImageFont
+from scipy.ndimage import binary_dilation
+
+OUT_ROOT = Path("/root/capsule/code/sessions/13_pairwise_unmix_gfp/outputs/bigwarp_export")
+GIF_DIR = OUT_ROOT / "_gifs"
+
+
+def _normalize_grayscale(vol: np.ndarray, p_lo: float = 1.0, p_hi: float = 99.0,
+                          bg_alpha: float = 0.45) -> np.ndarray:
+    """Per-volume percentile normalization to [0, 1] then scaled to bg_alpha."""
+    nz = vol[vol > 0]
+    if nz.size == 0:
+        return np.zeros_like(vol, dtype=np.float32)
+    lo = np.percentile(nz, p_lo)
+    hi = np.percentile(nz, p_hi)
+    span = max(hi - lo, 1.0)
+    norm = np.clip((vol.astype(np.float32) - lo) / span, 0.0, 1.0)
+    return norm * bg_alpha
+
+
+def _try_font(size: int = 18) -> ImageFont.ImageFont:
+    for cand in (
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/Fiji.app/jars/ij-1.54f.jar",  # not a font, just placeholder
+    ):
+        try:
+            return ImageFont.truetype(cand, size)
+        except Exception:
+            continue
+    return ImageFont.load_default()
+
+
+def make_gif(sid: str, *, fps: int = 12, z_stride: int = 1,
+             dilate_radius: int = 2, dim_alpha: float = 0.45,
+             gif_path: Path | None = None) -> Path:
+    d = OUT_ROOT / sid
+    print(f"\n=== {sid} ===", flush=True)
+    meta = json.loads((d / "metadata.json").read_text())
+    cz_z_um = meta["output_voxel_um"]["z"]
+    margin_um = meta["margin_um"]
+
+    cz = tifffile.imread(d / "cz_stack.tif")
+    coreg = tifffile.imread(d / "hcr_seg_coreg_in_cz.tif")
+    missed = tifffile.imread(d / "hcr_seg_missed_in_cz.tif")
+    print(f"  shapes  cz={cz.shape}  coreg={coreg.shape}  missed={missed.shape}", flush=True)
+
+    if cz.shape != coreg.shape or cz.shape != missed.shape:
+        raise ValueError("Shape mismatch between cz/coreg/missed.")
+
+    bg_full = _normalize_grayscale(cz, bg_alpha=dim_alpha)
+    Z, Y, X = cz.shape
+
+    if gif_path is None:
+        GIF_DIR.mkdir(parents=True, exist_ok=True)
+        gif_path = GIF_DIR / f"{sid}_coreg_vs_missed.gif"
+
+    font = _try_font(20)
+    font_small = _try_font(14)
+
+    structure = np.ones((1 + 2 * dilate_radius,) * 2, dtype=bool) if dilate_radius > 0 else None
+
+    frames = []
+    n_kept_total = 0
+    n_missed_total = 0
+    for z in range(0, Z, z_stride):
+        bg = bg_full[z]  # (Y, X) in [0, dim_alpha]
+        coreg_z = coreg[z]
+        missed_z = missed[z]
+        # green = coreg AND NOT missed; red = missed (already ⊂ coreg)
+        green = (coreg_z > 0) & (missed_z == 0)
+        red = missed_z > 0
+
+        if structure is not None and (green.any() or red.any()):
+            green = binary_dilation(green, structure=structure, iterations=1)
+            red = binary_dilation(red, structure=structure, iterations=1)
+            # If a voxel got both via dilation, prefer red so missed cells stay visible.
+            green = green & ~red
+
+        n_kept_total += int(green.sum())
+        n_missed_total += int(red.sum())
+
+        rgb = np.stack([bg, bg, bg], axis=-1)
+        rgb[green] = [0.0, 1.0, 0.0]
+        rgb[red] = [1.0, 0.0, 0.0]
+        rgb_u8 = (np.clip(rgb, 0.0, 1.0) * 255).astype(np.uint8)
+
+        im = Image.fromarray(rgb_u8, mode="RGB")
+        draw = ImageDraw.Draw(im)
+        z_um = (z * cz_z_um) - margin_um
+        # Depth label top-right
+        label = f"z = {z_um:+.1f} µm"
+        try:
+            bbox = draw.textbbox((0, 0), label, font=font)
+            tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        except Exception:
+            tw, th = 110, 22
+        x_text = X - tw - 8
+        y_text = 6
+        # subtle shadow box for readability
+        draw.rectangle([x_text - 4, y_text - 2, X - 4, y_text + th + 4], fill=(0, 0, 0))
+        draw.text((x_text, y_text), label, fill=(255, 255, 255), font=font)
+        # Legend bottom-left
+        legend = "green: in cell×gene  red: missed"
+        try:
+            lbbox = draw.textbbox((0, 0), legend, font=font_small)
+            lw, lh = lbbox[2] - lbbox[0], lbbox[3] - lbbox[1]
+        except Exception:
+            lw, lh = 200, 14
+        draw.rectangle([4, Y - lh - 12, lw + 12, Y - 4], fill=(0, 0, 0))
+        draw.text((8, Y - lh - 10), legend, fill=(220, 220, 220), font=font_small)
+        # Subject label top-left
+        sub_label = f"{sid}"
+        try:
+            sbbox = draw.textbbox((0, 0), sub_label, font=font)
+            sw, sh = sbbox[2] - sbbox[0], sbbox[3] - sbbox[1]
+        except Exception:
+            sw, sh = 70, 22
+        draw.rectangle([4, 4, sw + 12, sh + 12], fill=(0, 0, 0))
+        draw.text((8, 6), sub_label, fill=(255, 255, 255), font=font)
+
+        frames.append(np.asarray(im))
+
+    print(f"  {len(frames)} frames  green_px_total={n_kept_total}  red_px_total={n_missed_total}",
+          flush=True)
+    iio.imwrite(str(gif_path), frames, duration=int(1000 / max(fps, 1)), loop=0)
+    print(f"  wrote {gif_path}  ({gif_path.stat().st_size / 1e6:.1f} MB)", flush=True)
+    return gif_path
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("subjects", nargs="+")
+    ap.add_argument("--fps", type=int, default=12,
+                    help="GIF playback rate (default 12)")
+    ap.add_argument("--z-stride", type=int, default=1,
+                    help="Skip every Nth z-slice to keep GIFs small (default 1)")
+    ap.add_argument("--dilate-radius", type=int, default=2,
+                    help="Pixel dilation applied to seg masks so sparse ROIs "
+                         "show up at low zoom (default 2)")
+    args = ap.parse_args()
+    for sid in args.subjects:
+        make_gif(sid, fps=args.fps, z_stride=args.z_stride,
+                 dilate_radius=args.dilate_radius)
+
+
+if __name__ == "__main__":
+    main()

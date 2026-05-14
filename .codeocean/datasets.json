@@ -50,6 +50,10 @@
 			"mount": "multiplane-ophys_788406_2025-07-18_12-17-32_cortical-zstack-registration_2025-11-11_20-55-55"
 		},
 		{
+			"id": "46e316e3-db87-4815-b091-a4ef82c8a3f9",
+			"mount": "HCR_767018_pairwise-unmixing_2026-03-06_12-00-00"
+		},
+		{
 			"id": "557ed1b4-fed2-4f26-9d9b-e7519f4fce07",
 			"mount": "Oi1_Oi4_confocal"
 		},
@@ -84,6 +88,10 @@
 		{
 			"id": "949ad52c-bb95-4526-a37c-09944aa4bd29",
 			"mount": "HCR_782149_pairwise-unmixing_2026-04-29_18-02-29"
+		},
+		{
+			"id": "98b62b05-814d-41d9-a1c0-0985f53fbb0a",
+			"mount": "HCR-ROI-classifier-comparison_2026-05-13"
 		},
 		{
 			"id": "9b1d5612-76da-46a9-9c5e-6bcc67fd9280",

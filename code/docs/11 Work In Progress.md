@@ -64,6 +64,69 @@ The active v3 plan is `docs/10 Grand Plan v3 — Cell-cell matching and QC.md`.
 
 ---
 
+## Session 13b — GFP+ threshold feature compare (2026-05-14)
+
+Compared three per-cell GFP signals on all 6 benchmark subjects using
+BIC-best GMM on `log(positive feature)` fit to the v5d-kept (good +
+bad_ok) ROI subset:
+
+1. **spot_density** — `spot_count / volume` from the per-subject best
+   spot source (`spot_488_counts.csv` / R1 aggregated spots / R2
+   `mixed_cell_by_gene.csv` for the R1-failed subjects 755252 + 767022).
+2. **unmix_density** — `spot_count / volume` from `unmixed_all_cells.csv`.
+3. **mean_minus_bg** — channel-488 `mean − background` from
+   `cell_data_mean_*_R1.csv` (computed on the fly from L2 zarrs for the
+   four subjects without the CSV).
+
+Metric: `shape_score = (μ_right − μ_next) / max(σ_right, σ_next)` on the
+top two GMM components (right-most positive mode separation from its
+left neighbour). Higher = cleaner bimodality.
+
+| subject | mean−bg | spot | unmix |
+|---------|--------:|-----:|------:|
+| 755252  | 2.41    | 1.00 | 2.62  |
+| 767018  | 2.72    | 4.17 | 4.58  |
+| 767022  | 2.61    | 2.63 | 2.53  |
+| 782149  | 3.07    | 4.03 | 1.53  |
+| 788406  | 2.62    | 3.41 | 1.76  |
+| 790322  | 2.49    | 3.67 | 2.06  |
+| **mean**| **2.65**| **3.15** | **2.51** |
+
+Fraction of coreg-matched-and-kept cells that fall above the BIC cutoff
+(recall on the GT match set, per fit_subset='kept'):
+
+| subject | mean−bg | spot | unmix |
+|---------|--------:|-----:|------:|
+| 755252  | 0.648   | 0.707| 0.479 |
+| 767018  | 0.856   | 0.975| 0.980 |
+| 767022  | 0.883   | 0.796| 0.770 |
+| 782149  | 0.878   | 0.956| 0.961 |
+| 788406  | 0.862   | 0.937| 0.883 |
+| 790322  | 0.978   | 0.950| 0.988 |
+| **mean**| **0.851**| **0.887**| **0.844** |
+
+**Findings:**
+- Spot-density wins shape_score on 4/6 subjects (767018, 782149,
+  788406, 790322) and the column mean (3.15 vs 2.65 / 2.51) and recall
+  mean (0.887 vs 0.851 / 0.844).
+- The two R1-failed subjects (755252, 767022) are spot-density's only
+  losses; their R2 GFP probe likely has lower SNR than the other
+  subjects' R1 probe — but spot-density still beats unmix-density
+  there.
+- Unmix-density is competitive only on 767018; it underperforms on
+  every spot subject (the unmixing trims spots in a way that flattens
+  the bimodal mode separation).
+- mean−bg is the most consistent fallback (2.4–3.1 across subjects)
+  but rarely wins.
+
+**Action:** stay with **spot_density + BIC-best GMM** for GFP+
+thresholding across all 6 subjects (now feasible since the R2
+`mixed_cell_by_gene.csv` is plugged in for 755252/767022). Code:
+`code/sessions/13_pairwise_unmix_gfp/run_gfp_filter_compare.py`; output:
+`outputs/gfp_filter_compare/summary.csv` (36 rows) + 18 PNG histograms.
+
+---
+
 ## Working-volume contract (binding for all future v3 sessions, 2026-05-02)
 
 **Rule.** Every future session — registration refinement, cell-cell

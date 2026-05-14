@@ -56,20 +56,31 @@ and `code/sessions/01_analyze_benchmark_data/`.
   GFP+ subset ≈ 25 k–78 k at a 5-spot-per-cell threshold (matching the 2p
   GCaMP+ neurons).
 - 3D ROI segmentation from Rn28S; 488-channel GFP quantification comes from
-  one of three sources (same convention as
+  one of four equivalent sources (same convention as
   `manual workflow/step_2_automatic_mapping_for_qc.ipynb`):
   1. pre-aggregated per-cell counts
      `{coreg_dir}/*_spot_488_counts.csv` (782149, 788406, 790322).
   2. raw per-spot CSV aggregated on the fly via `SEG_ID.value_counts()` and
      joined with `cell_body_segmentation/metrics.pickle` for volume/density
      (767018 and any subject that lacks the pre-aggregated file).
-  3. per-cell mean intensity `data/cell_data_mean_{subj}_R1.csv` channel 488
-     (755252, 767022). No spot count is available here, only a fluorescence
-     intensity.
+  3. R1 `mixed_cell_by_gene.csv` from `HCR_{sid}_pairwise-unmixing_*/pairwise_unmixing/{sid}_R1/`,
+     filtered to `gene == "GFP"`. The `spot_count` and `volume` columns there
+     are **bit-identical** to (1) on the cell-overlap subset
+     (verified for 782149/788406/790322, corr = 1.000).
+  4. **R2 `mixed_cell_by_gene.csv`** from `HCR_{sid}_pairwise-unmixing_*/pairwise_unmixing/{sid}_R2/`,
+     filtered to `gene == "GFP"`. Use this for **755252 and 767022**, whose R1
+     GFP probe failed and were re-probed in R2. Equivalent to (1)–(3) by the
+     same R1↔direct correspondence verified above.
   A GFP+ cell is defined by `counts >= gfp_min_spots` (default 5) when a spot
   count exists. The loader exposes `gfp_min_spots` as a parameter so the
-  threshold can be revised from later analyses. Intensity-only subjects use
-  the raw `mean` and must be thresholded by the caller.
+  threshold can be revised from later analyses.
+
+- For 755252/767022 a per-cell 488 mean intensity is also published in
+  `cell_data_mean_{subj}_R1.csv` (channel 488: `cell_id, sum, count, mean,
+  background`). This is the fluorescence-based fallback used when no spot
+  count exists, but with the R2 spot data above the same density-based
+  threshold method (BIC-GMM on `log(counts/volume)`) is now applicable to all
+  six benchmark subjects.
 - Top part contains blank buffer. Thickness is unknown, varies across subjects
   (measured pia offsets: 30–410 um), and is **slanted** (measured pia-plane
   tilt: 1.2°–11.6°, with 782149 the most tilted).
@@ -82,9 +93,9 @@ GFP+ counts below use the default 5-spot threshold where applicable.
 
 | subject | CZ cells | HCR total | HCR GFP+ (source, threshold)          | coreg matched | match rate |
 |---------|---------:|----------:|---------------------------------------|--------------:|-----------:|
-| 755252  | 835      | 84 233    | 77 785 (intensity_r1, no threshold)   | 639           | 76.5%      |
+| 755252  | 835      | 84 233    | 35 750 (R2 mixed_cell_by_gene, ≥5)    | 639           | 76.5%      |
 | 767018  | 785      | 108 506   | 58 959 (aggregated_spots_csv, ≥5)     | 273           | 34.8%      |
-| 767022  | 926      | 76 336    | 72 213 (intensity_r1, no threshold)   | 793           | 85.6%      |
+| 767022  | 926      | 76 336    | 32 979 (R2 mixed_cell_by_gene, ≥5)    | 793           | 85.6%      |
 | 782149  | 894      | 39 291    | 25 251 (spot_counts_csv, ≥5)          | 303           | 33.9%      |
 | 788406  | 932      | 127 275   | 69 680 (spot_counts_csv, ≥5)          | 787           | 84.4%      |
 | 790322  | 1016     | 106 379   | 72 532 (spot_counts_csv, ≥5)          | 778           | 76.6%      |
@@ -94,9 +105,12 @@ Notes:
   `image_spot_detection/channel_488_spots/spots.csv` (4.86 M puncta). The
   loader aggregates it per `SEG_ID` at load time. At a 5-spot threshold,
   76 607 cells with ≥1 spot reduce to 58 959 GFP+.
-- For 755252/767022 the "GFP+" figure is every HCR cell with a non-zero 488
-  intensity measurement (no spot threshold available). A downstream intensity
-  threshold is required to obtain a comparable GFP+ count.
+- For 755252/767022 the R2 `mixed_cell_by_gene.csv` (gene='GFP') is sparse
+  — it only contains cells with `spot_count ≥ 1` (37 291 and 34 438
+  respectively). The ≥5 threshold leaves 35 750 / 32 979 GFP+ cells.
+- 755252/767022's old intensity-only figures (77 785 / 72 213, no threshold)
+  used `cell_data_mean_*_R1.csv` channel 488 and overcounted by treating
+  every cell with measurable autofluorescence as GFP+.
 
 ## Key relationship between 2p and HCR
 
@@ -270,7 +284,9 @@ Measured on all 6 subjects:
 | HCR centroid NPY | `[z, y, x, id]` | pixels (HCR level-2 ~0.988 um XY, 1 um Z) | |
 | Landmark CSV | `[ids, active, cz_x, cz_y, cz_z, hcr_x, hcr_y, hcr_z]` | pixels in each modality's native space | no header |
 | `spot_488_counts.csv` | `[hcr_id, counts, volume, global_bbox, density]` | 488 GFP feature | only for 782149/788406/790322 |
-| `cell_data_mean_*_R1.csv` | channel-indexed intensity means | raw intensity | GFP+ proxy for 755252/767022 |
+| `mixed_cell_by_gene.csv` (R1) | `[cell_id, gene, spot_count, volume, …]` | 488 GFP feature (gene='GFP') | equivalent to spot_488_counts; available for 767018 + the 3 spot subjects |
+| `mixed_cell_by_gene.csv` (R2) | `[cell_id, gene, spot_count, volume, …]` | 488 GFP feature (gene='GFP') | **only spot-based source for 755252/767022** (R1 failed) |
+| `cell_data_mean_*_R1.csv` | channel-indexed intensity means | raw intensity | intensity-only fallback for 755252/767022 |
 | Coreg table | `[czstack_id, hcr_id]` | — | final mapping |
 
 ## Data-format variations across subjects
@@ -281,9 +297,16 @@ Measured on all 6 subjects:
   `cell_body_segmentation/cell_centroids.npy`. GFP+ is derived by aggregating
   the raw `image_spot_detection/channel_488_spots/spots.csv` on `SEG_ID` at
   load time (no pre-aggregated `spot_488_counts.csv`).
-- **755252, 767022**: no `spot_488_counts.csv`. Use
-  `/root/capsule/data/cell_data_mean_{subject}_R1.csv` with channel 488 mean
-  intensity as GFP+ proxy. Thresholding is required to obtain a true GFP+ set.
+- **755252, 767022**: their R1 GFP probe failed; no `spot_488_counts.csv`
+  and the R1 mixed/unmixed cell×gene tables omit GFP. **Use the R2
+  `mixed_cell_by_gene.csv`** under
+  `HCR_{sid}_pairwise-unmixing_*/pairwise_unmixing/{sid}_R2/`, filtered to
+  `gene == "GFP"` — its `spot_count` and `volume` columns are equivalent to
+  the direct `spot_488_counts.csv` used for the other subjects (correlation
+  1.000 verified on 782149/788406/790322 using their R1 mixed tables).
+  `cell_data_mean_{subject}_R1.csv` (channel 488 mean intensity) is still
+  available as an intensity-only fallback when the R2 spot data is not
+  desired.
 - **782149**: thinner HCR section (878 um Z vs 1160–1329 um for others);
   strongest pia tilt (~12°); lowest match rate (~34%).
 - **Landmark file naming**: older subjects (755252, 767018, 767022) use a
