@@ -66,10 +66,6 @@
 			"mount": "multiplane-ophys_767018_2025-02-13_14-09-49_cortical-zstack-seg_2025-10-08_15-36-00"
 		},
 		{
-			"id": "67a348d5-46b1-43af-8015-c985e3ba94b1",
-			"mount": "claude-data_ophys-mfish-autocoreg_soma-print_260616"
-		},
-		{
 			"id": "6e8cb0ee-ddae-460b-aefb-41676e224dba",
 			"mount": "multiplane-ophys_767018_2025-02-18_12-28-32_cortical-zstack-reg_2025-03-09_22-40-48"
 		},
