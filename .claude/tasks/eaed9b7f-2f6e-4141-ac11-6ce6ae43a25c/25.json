@@ -1,0 +1,9 @@
+{
+  "id": "25",
+  "subject": "Step 3 v2 Path B driver",
+  "description": "Path A + LOO image NCC δ filter (every round). 80 µm cube, Δ_NCC ≥ 0 default. Expensive (~hours).",
+  "activeForm": "Building Path B driver",
+  "status": "in_progress",
+  "blocks": [],
+  "blockedBy": []
+}

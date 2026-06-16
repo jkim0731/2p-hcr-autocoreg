@@ -1,0 +1,9 @@
+{
+  "id": "11",
+  "subject": "GT-free failure-mode diagnostic",
+  "description": "Per-subject GT-free signals: (a) histogram of CZ→nearest-HCR distance under locked frame, (b) image MIP comparison at multiple depths (100 µm slabs), (c) cached surface-registration NCC scores, (d) candidate-count distributions. Diagnose failure mode for 755252/767022/782149 from these.",
+  "activeForm": "Running GT-free diagnostics",
+  "status": "completed",
+  "blocks": [],
+  "blockedBy": []
+}

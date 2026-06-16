@@ -1,0 +1,9 @@
+{
+  "id": "12",
+  "subject": "Depth-dependent registration analysis",
+  "description": "Per subject, slice the working volume into Z slabs. Measure per slab: median CZ→HCR NN distance, mean displacement vector (dz/dy/dx), cell densities, image-NCC if feasible. Identify whether registration degrades with depth and how it differs between Step-2 winners and losers.",
+  "activeForm": "Investigating depth-dependent registration",
+  "status": "completed",
+  "blocks": [],
+  "blockedBy": []
+}

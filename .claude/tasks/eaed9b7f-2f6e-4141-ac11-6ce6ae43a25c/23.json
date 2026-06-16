@@ -1,0 +1,9 @@
+{
+  "id": "23",
+  "subject": "Step 3 v2 Path A driver",
+  "description": "run_step3_v2.py --path a: round 0 = mutual-best + local-flow filter (LOO TPS residual style, p90 threshold); round 1+ = mutual K-NN + soma score + anchor-vote 5/5 vs prior accepted; TPS refit each round; stop at convergence.",
+  "activeForm": "Building Path A driver",
+  "status": "completed",
+  "blocks": [],
+  "blockedBy": []
+}

@@ -1,0 +1,9 @@
+{
+  "id": "10",
+  "subject": "Export matches for visual review",
+  "description": "Per subject save: matches CSV (BigWarp-style + napari-friendly), missed GT CSV, TPS warp pickle, round_log CSV. Place under outputs/step3_subjects/&lt;sid&gt;/.",
+  "activeForm": "Exporting matches for visual review",
+  "status": "pending",
+  "blocks": [],
+  "blockedBy": []
+}

@@ -1,0 +1,9 @@
+{
+  "id": "21",
+  "subject": "Step 2.6 — Wang iterative refinement",
+  "description": "Implement TRU-FACT rounds 2+ on top of Step 2.5: rebuild each cell's soma-print using the n nearest already-matched anchors (CZ side) and their matched HCR counterparts (HCR side), re-score, re-mutual-best, iterate. Compare to Step 2.5 single-round numbers.",
+  "activeForm": "Running Wang iterations",
+  "status": "completed",
+  "blocks": [],
+  "blockedBy": []
+}

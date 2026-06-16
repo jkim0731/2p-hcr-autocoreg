@@ -1,0 +1,81 @@
+(base) root@0ab1e1abac6e:~/capsule/code/sessions/15_geom_features# python qc_qt_app.py --sid 790322 --variant local_flow
+QStandardPaths: XDG_RUNTIME_DIR not set, defaulting to '/tmp/runtime-root'
+QStandardPaths: XDG_RUNTIME_DIR not set, defaulting to '/tmp/runtime-root'
+[overlap_crop] 790322: raw CZ bbox in HCR µm z=[-72, 1355] y=[749, 1508] x=[716, 1441]  extents: dz=1427 dy=759 dx=725 µm
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+Traceback (most recent call last):
+  File "/root/capsule/code/sessions/15_geom_features/qc_qt_app.py", line 652, in <module>
+    main()
+  File "/root/capsule/code/sessions/15_geom_features/qc_qt_app.py", line 646, in main
+    win = QCApp(args.sid, args.variant, args.cube_um, args.start)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/capsule/code/sessions/15_geom_features/qc_qt_app.py", line 159, in __init__
+    self._load_data()
+  File "/root/capsule/code/sessions/15_geom_features/qc_qt_app.py", line 222, in _load_data
+    inp = subject_inputs(self.sid, sz_pins=sz_pins)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/capsule/code/sessions/15_geom_features/_data.py", line 134, in subject_inputs
+    crop = get_overlap_crop(s, margin_frac=0.10)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/capsule/code/dev_code/overlap_crop.py", line 136, in get_overlap_crop
+    hcr_vol, hcr_xy_um, hcr_z_um = load_hcr_volume(
+                                   ^^^^^^^^^^^^^^^^
+  File "/root/capsule/code/dev_code/benchmark_analysis.py", line 1083, in load_hcr_volume
+    vol = np.asarray(z[str(level)][0, 0])
+                     ~~~~~~~~~~~~~^^^^^^
+  File "/opt/conda/lib/python3.11/site-packages/zarr/core/array.py", line 2868, in __getitem__
+    return self.get_orthogonal_selection(pure_selection, fields=fields)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/conda/lib/python3.11/site-packages/zarr/core/array.py", line 3339, in get_orthogonal_selection
+    return sync(
+           ^^^^^
+  File "/opt/conda/lib/python3.11/site-packages/zarr/core/sync.py", line 159, in sync
+    raise return_result
+  File "/opt/conda/lib/python3.11/site-packages/zarr/core/sync.py", line 119, in _runner
+    return await coro
+           ^^^^^^^^^^
+  File "/opt/conda/lib/python3.11/site-packages/zarr/core/array.py", line 1565, in _get_selection
+    await self.codec_pipeline.read(
+  File "/opt/conda/lib/python3.11/site-packages/zarr/core/codec_pipeline.py", line 473, in read
+    await concurrent_map(
+  File "/opt/conda/lib/python3.11/site-packages/zarr/core/common.py", line 116, in concurrent_map
+    return await asyncio.gather(*[asyncio.ensure_future(run(item)) for item in items])
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/conda/lib/python3.11/site-packages/zarr/core/common.py", line 114, in run
+    return await func(*item)
+           ^^^^^^^^^^^^^^^^^
+  File "/opt/conda/lib/python3.11/site-packages/zarr/core/codec_pipeline.py", line 270, in read_batch
+    chunk_bytes_batch = await concurrent_map(
+                        ^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/conda/lib/python3.11/site-packages/zarr/core/common.py", line 116, in concurrent_map
+    return await asyncio.gather(*[asyncio.ensure_future(run(item)) for item in items])
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/conda/lib/python3.11/site-packages/zarr/core/common.py", line 114, in run
+    return await func(*item)
+           ^^^^^^^^^^^^^^^^^
+  File "/opt/conda/lib/python3.11/site-packages/zarr/storage/_common.py", line 168, in get
+    return await self.store.get(self.path, prototype=prototype, byte_range=byte_range)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/conda/lib/python3.11/site-packages/zarr/storage/_local.py", line 205, in get
+    return await asyncio.to_thread(_get, path, prototype, byte_range)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/conda/lib/python3.11/asyncio/threads.py", line 25, in to_thread
+    return await loop.run_in_executor(None, func_call)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/conda/lib/python3.11/concurrent/futures/thread.py", line 58, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/conda/lib/python3.11/site-packages/zarr/storage/_local.py", line 32, in _get
+    return prototype.buffer.from_bytes(path.read_bytes())
+                                       ^^^^^^^^^^^^^^^^^
+  File "/opt/conda/lib/python3.11/pathlib.py", line 1051, in read_bytes
+    return f.read()
+           ^^^^^^^^
+OSError: [Errno 5] Input/output error
+Task was destroyed but it is pending!
+task: <Task pending name='Task-3755' coro=<concurrent_map.<locals>.run() running at /opt/conda/lib/python3.11/site-packages/zarr/core/common.py:114> wait_for=<_GatheringFuture pending cb=[Task.task_wakeup()]> cb=[gather.<locals>._done_callback() at /opt/conda/lib/python3.11/asyncio/tasks.py:764]>
+sys:1: RuntimeWarning: coroutine 'concurrent_map.<locals>.run' was never awaited
+RuntimeWarning: Enable tracemalloc to get the object allocation traceback
+Task was destroyed but it is pending!
+task: <Task pending name='Task-11701' coro=<concurrent_map.<locals>.run() running at /opt/conda/lib/python3.11/site-packages/zarr/core/common.py:112> cb=[gather.<locals>._done_callback() at /opt/conda/lib/python3.11/asyncio/tasks.py:764]>

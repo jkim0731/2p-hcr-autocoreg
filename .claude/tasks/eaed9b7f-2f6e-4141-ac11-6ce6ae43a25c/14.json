@@ -1,0 +1,9 @@
+{
+  "id": "14",
+  "subject": "Step 2.5 — locked with density-derived R_cand + Z-density boundary",
+  "description": "Re-run Step 2 with: (a) per-subject R_cand from CZ→HCR NN distribution (GT-free), (b) Z bounds from intersection of CZ/HCR ROI-density-vs-z curves, (c) without GFP+ filter (use only argmax-ok).",
+  "activeForm": "Running Step 2.5",
+  "status": "completed",
+  "blocks": [],
+  "blockedBy": []
+}
