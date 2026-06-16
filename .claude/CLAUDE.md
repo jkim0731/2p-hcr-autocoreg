@@ -44,6 +44,26 @@ Within an asset:
 
 These assets hold material too big to keep in the live `.claude/`. They are **read-only** — consult them for past context, but write new work under `/root/capsule/code/` (or `/results`).
 
+## ⚠️ Secret redaction before publishing (MANDATORY)
+
+Session transcripts under `.claude/projects/` capture **everything printed to a shell**, including any secret accidentally echoed (e.g. an `env` dump exposing a token). Before copying `.claude/` — or any transcripts — into a data asset under `/results`, you **must** scrub secrets and exclude live credential files.
+
+**Step — run the redactor (dry-run first, then `--apply`):**
+
+```bash
+# canonical location (install once, as root):
+#   cp /scratch/tools/redact_secrets.py /root/capsule/code/tools/redact_secrets.py
+python /root/capsule/code/tools/redact_secrets.py /results/<asset>/.claude            # dry-run, lists hits
+python /root/capsule/code/tools/redact_secrets.py /results/<asset>/.claude --apply    # writes redactions
+```
+
+It redacts provider-prefixed tokens (GitHub `ghp_`/`github_pat_`, GitLab, Slack, HuggingFace, `sk-ant-`, AWS `AKIA/ASIA`, PEM private keys, `https://user:pass@` URLs) and **deletes** forbidden files (`.credentials.json`, `*.pem`, `id_rsa`, `.env`). It does **not** match bare `AIza…`/`sk-…` by default (they collide with base64 image data in transcripts — `--extra` to force).
+
+**Rules:**
+- **Never** publish `.credentials.json` (live Claude OAuth `sk-ant-` tokens) — it must stay only in the live `.claude/`.
+- A leaked secret-shaped string lands in the *current* session's transcript too; scrubbing one file is best-effort — **rotate any exposed credential at the source**, that is the only durable fix.
+- Run the redactor against the publish target in `/results` (writable as root) right before versioning the asset.
+
 ---
 
 # 🧠 Core Principle
