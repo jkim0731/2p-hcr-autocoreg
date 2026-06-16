@@ -1,0 +1,9 @@
+{
+  "id": "18",
+  "subject": "Step 2.5 shape-context comparison",
+  "description": "Re-run shape-context Step 2 winning config (R_outer=150, r=6, θ=5, φ=10, az_shift=0) with Step 2.5 pool refinements (Z-density bounds + pia anchor + GFP+ ∩ argmax-ok). Report recall@K, AUC50, mutual-best fraction. Save matches per subject.",
+  "activeForm": "Running shape-context in Step 2.5 setup",
+  "status": "completed",
+  "blocks": [],
+  "blockedBy": []
+}

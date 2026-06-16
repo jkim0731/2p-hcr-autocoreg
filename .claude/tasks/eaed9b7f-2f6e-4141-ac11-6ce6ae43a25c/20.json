@@ -1,0 +1,9 @@
+{
+  "id": "20",
+  "subject": "Better slab selection + paired CZ/HCR figures",
+  "description": "(1) Update run_visualize_matches.py to choose 6 slabs by match-density. (2) Create paired CZ-zstack ↔ HCR-488 side-by-side figures. (3) Run both for soma-print + SC-local. (4) Document napari workflow.",
+  "activeForm": "Building paired CZ/HCR figures",
+  "status": "completed",
+  "blocks": [],
+  "blockedBy": []
+}

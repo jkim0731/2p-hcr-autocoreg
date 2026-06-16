@@ -1,0 +1,9 @@
+{
+  "id": "8",
+  "subject": "Add-ons (symmetric AUC, Wang GMM-LR, mutual-best)",
+  "description": "run_addons.py: compute all-CZ × candidate-HCR scores under locked frame; per-pair Wang LR; CZ-side near-miss AUC; mutual-best fraction.",
+  "activeForm": "Running add-ons",
+  "status": "completed",
+  "blocks": [],
+  "blockedBy": []
+}

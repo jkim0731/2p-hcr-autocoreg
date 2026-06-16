@@ -1,0 +1,9 @@
+{
+  "id": "22",
+  "subject": "Wang LR threshold diagnostic",
+  "description": "run_step3_v2_diag_lr.py: per subject, fit 2-Gaussian mixture on best-soma-score histogram and single Gaussian on 2nd-best; report stability, overlap, LR<0.05 vs mutual-best agreement; figures + CSV.",
+  "activeForm": "Running Wang LR diagnostic",
+  "status": "completed",
+  "blocks": [],
+  "blockedBy": []
+}

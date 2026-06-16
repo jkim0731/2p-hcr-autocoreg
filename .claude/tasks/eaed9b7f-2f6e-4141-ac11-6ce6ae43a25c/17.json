@@ -1,0 +1,9 @@
+{
+  "id": "17",
+  "subject": "Napari interactive viewer",
+  "description": "code/sessions/15_geom_features/view_in_napari.py — loads HCR 488 volume + matched-pair lines as Vectors layer + CZ centroids + HCR centroids for a chosen subject.",
+  "activeForm": "Building napari viewer",
+  "status": "completed",
+  "blocks": [],
+  "blockedBy": []
+}

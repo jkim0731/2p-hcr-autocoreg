@@ -1,0 +1,17 @@
+[2026-06-05T20:14:41.402Z] [supervisor] ─── daemon start ─── version=2.1.165 pid=24640 origin=transient
+[2026-06-05T20:14:41.433Z] [supervisor] auth: scheduling proactive refresh in 5s
+[2026-06-05T20:14:41.642Z] [supervisor] auth: scheduling proactive refresh in 5s
+[2026-06-05T20:14:41.644Z] [supervisor] workers=0
+[2026-06-05T20:14:41.718Z] [bg] bg spawned 7c2500ec (slash)
+[2026-06-05T20:14:41.720Z] [bg] bg spawned a3e28425 (spare)
+[2026-06-05T20:14:41.726Z] [bg] bg spare spawned host pid=24668
+[2026-06-05T20:14:46.643Z] [supervisor] auth: proactive refresh starting
+[2026-06-05T20:14:46.644Z] [supervisor] auth: proactive refresh failed, signalling re-auth required
+[2026-06-05T20:14:46.651Z] [supervisor] auth: headless daemon cannot complete OAuth — run `claude auth login` to refresh
+[2026-06-05T20:14:46.652Z] [supervisor] auth: no token found, will re-check keychain every 30s
+[2026-06-05T20:16:46.654Z] [supervisor] auth: scheduling proactive refresh in 28531s
+[2026-06-05T20:16:46.654Z] [supervisor] auth: token found via keychain re-check
+[2026-06-05T20:18:08.329Z] [bg] bg settled a3e28425 (killed)
+[2026-06-05T21:18:41.745Z] [bg] bg settled 7c2500ec (done)
+[2026-06-05T21:18:46.748Z] [supervisor] idle 5s with no clients — exiting
+[2026-06-05T21:18:46.748Z] [supervisor] shutting down

@@ -1,0 +1,17 @@
+base) root@0ab1e1abac6e:/code/sessions/15_geom_features# python view_in_napari.py --sid 755252 --level 4
+[overlap_crop] 755252: raw CZ bbox in HCR µm z=[311, 1388] y=[549, 1370] x=[563, 1426]  extents: dz=1077 dy=821 dx=863 µm
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+[overlap_crop] 755252: final bbox (margin 10%) z=[203, 1495] (1292 µm) y=[467, 1452] (985 µm) x=[476, 1512] (1036 µm)
+loaded 528 soma matches for 755252; 357 GT, 171 non-GT
+WARNING: QStandardPaths: XDG_RUNTIME_DIR not set, defaulting to '/tmp/runtime-root'
+WARNING: QStandardPaths: XDG_RUNTIME_DIR not set, defaulting to '/tmp/runtime-root'
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+Traceback (most recent call last):
+  File "/code/sessions/15_geom_features/view_in_napari.py", line 185, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/code/sessions/15_geom_features/view_in_napari.py", line 116, in main
+    viewer.add_points(
+TypeError: add_points() got an unexpected keyword argument 'edge_color'

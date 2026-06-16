@@ -1,0 +1,9 @@
+{
+  "id": "19",
+  "subject": "Shape-context with per-CZ R_cand",
+  "description": "Re-run shape-context Step 2.5 but with the same per-subject R_cand proximity filter as soma-print. Only score CZ × HCR pairs within R_cand. Compare mutual-best precision.",
+  "activeForm": "Running shape-context with R_cand",
+  "status": "completed",
+  "blocks": [],
+  "blockedBy": []
+}

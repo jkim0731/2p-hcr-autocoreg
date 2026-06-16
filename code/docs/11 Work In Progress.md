@@ -5,15 +5,22 @@
 - Pia / surface fits — `code/dev_code/surfaces_iter08.py`
   (`get_cz_surface_iter08`, `get_hcr_top_surface_iter07`,
   `get_hcr_bottom_surface_iter08`).
-- `sxy` from per-cell ROI-area ratio — `code/dev_code/roi_area_sxy.py`
-  (`estimate_sxy_roi_area`); ±2 % on the two good spot subjects,
-  −15 % on 782149 (open issue).
+- `sxy` from per-cell ROI cross-sections — `code/dev_code/roi_area_sxy.py`.
+  **PRODUCTION (promoted 2026-06-04): `estimate_sxy_min_rule` — min-rule 2×
+  ¼-FOV.** `hcr_slab = min(p99(HCR GFP+∩ok∩¼-FOV depth), 2·p99(CZ depth))`,
+  `cz_slab = hcr_slab/2` (CZ slab is HALF the HCR slab; axial ~2× expansion,
+  capping CZ shallower raises sxy), `sxy = sqrt(median HCR max-xsection /
+  median CZ max-xsection)`; the 2× is a heuristic, NOT measured sz (circular).
+  GT-free. Recovers thin-HCR **782149 → 1.7336** (the old −15 % full-span case).
+  Grid-search fallback at `SXY_GRID_SEARCH_OFFSETS` for new roaming subjects.
+  Supersedes the prior full-span `estimate_sxy_roi_area` / slab-auto estimators.
 - 2-D top-slab surface registration —
   `code/dev_code/surface_registration_v2.py::get_surface_registration(s)`.
   JSON-cached; picks the best of rigid / affine / PWR 3×3 / PWR 4×4,
   scored as Pearson NCC of the warped CZ binary against the raw 488
-  MIP. PWR 4×4 wins all 6 subjects. See
-  `docs/08 Automated surface registration.md`.
+  MIP. **Registration MIP promoted 2026-06-04 to 80/150** (`CZ_SLAB=(0,80)`,
+  `HCR_SLAB=(0,150)`, was 50/100 — a denser MIP lands the fit for thin-HCR
+  subjects like 782149). See `docs/08 Automated surface registration.md`.
 - Locked-prior warm-start (Stage A) —
   `code/dev_code/locked_prior_warm.py::compute_locked_prior_warm_start(s)`.
   Pins all 7 affine DOF (R, sxy, sxy, sz_prior, t_x, t_y, t_z) using
@@ -61,6 +68,14 @@ The detailed staged design lives in
 `docs/07 Grand Plan.md` §13.  The ledger in §11 covers the v1 catalog
 work (sessions S01–S64 in `full_automatic_execution_01/`).
 The active v3 plan is `docs/10 Grand Plan v3 — Cell-cell matching and QC.md`.
+
+**Metric definition correction (2026-06-04):** all recall/precision figures from
+Session 15 used a **pose-dependent GT** (coreg pairs filtered to those with both
+CZ and HCR inside the spatial pool). This is circular. The authoritative GT is now
+`scoring_gt(inp)` in `sessions/15_geom_features/_data.py`: coreg pairs whose HCR
+cell is GFP+∩ok, with the CZ side unfiltered. Corrected 6-subject tables are at
+`sessions/15_geom_features/outputs/corrected_gt_rescore/`. Gate rankings are
+qualitatively unchanged.
 
 ---
 

@@ -1,0 +1,9 @@
+{
+  "id": "9",
+  "subject": "Step 3 iterative loop",
+  "description": "run_step3_iterative.py: round-by-round (anchor-vote + mutual-NN gate, TPS refit, descriptor rebuild from anchors, NCC LOO), per-subject. Stop when matches saturate.",
+  "activeForm": "Running Step 3 loop",
+  "status": "completed",
+  "blocks": [],
+  "blockedBy": []
+}

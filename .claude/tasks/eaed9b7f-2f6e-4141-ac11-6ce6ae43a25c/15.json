@@ -1,0 +1,9 @@
+{
+  "id": "15",
+  "subject": "Fix Z lower bound + save matches",
+  "description": "Update step 2.5: z_lo = min(density_intersection_z_lo, hcr_pia_z_min). Always include pia. Save per-subject matched pairs CSV.",
+  "activeForm": "Updating Step 2.5 + saving matches",
+  "status": "completed",
+  "blocks": [],
+  "blockedBy": []
+}

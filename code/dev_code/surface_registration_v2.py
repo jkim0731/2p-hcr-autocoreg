@@ -9,11 +9,16 @@ and the best-of-four was selected per subject.
 
 This module promotes that recipe to the main pipeline:
 
-* **CZ source**: binary CZ-ROI top-slab MIP (0–50 µm beneath CZ pia,
+* **CZ source**: binary CZ-ROI top-slab MIP (0–80 µm beneath CZ pia,
   fill-then-MIP of the level-0 segmentation outline) on the HCR-level-4
   pixel grid (warm-started by 180° rotation + ``sxy`` rescale).
-* **HCR target**: raw 488 MIP, depth slab 0–100 µm beneath HCR pia
+* **HCR target**: raw 488 MIP, depth slab 0–150 µm beneath HCR pia
   (no binarisation in the comparison metric).
+
+  MIP slab thickness was promoted 2026-06-04 from 50/100 to **80/150 µm** (a
+  denser registration MIP lands for thin-HCR subjects like 782149).  ``sxy``
+  base now comes from the min-rule 2× ¼-FOV estimator
+  (``roi_area_sxy.estimate_sxy_min_rule``), also promoted 2026-06-04.
 * **Stage 1 rigid bootstrap**: binarised (watershed) 488 MIP, used only
   to seed the rigid θ + tx/ty sweep so the optimisation is stable when
   the initial overlap is poor.
@@ -62,12 +67,17 @@ if str(_S08) not in sys.path:
 from compare_binarization import variant_watershed  # type: ignore  # noqa: E402
 from register_binary import (  # type: ignore  # noqa: E402
     cz_binary_top_mip,
-    get_sxy_with_fallback,
     hcr488_top_mip,
     stage1_rigid,
     stage2_affine,
     warm_start_cz_binary,
 )
+# NOTE: get_sxy_with_fallback (from register_binary) is intentionally NOT imported
+# here. compute_surface_registration now uses estimate_sxy_min_rule from
+# roi_area_sxy (PROMOTED 2026-06-04) — GT-free, min-rule 2× ¼-FOV; it recovers
+# thin-HCR 782149 where the old full-span/slab-auto estimators collapsed.  The
+# old fallback had a landmark_gt_fallback that was a GT-leak for 782149 (see
+# project_782149_sxy_gt_leak memory).
 from register_nonrigid_variants import (  # type: ignore  # noqa: E402
     nonrigid_piecewise_rigid,
 )
@@ -81,8 +91,15 @@ CACHE_DIR = Path("/root/capsule/code/dev_code/cached_surface_registration")
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 # Default protocol constants.
-CZ_SLAB = (0.0, 50.0)
-HCR_SLAB = (0.0, 100.0)
+# Registration MIP slab thickness (PROMOTED 2026-06-04): CZ 0–80 µm, HCR 0–150 µm.
+# A denser (thicker) MIP packs more 488 signal into the registration target, so
+# the rigid/affine/PWR fit lands for thin-HCR subjects whose top slab is sparse
+# (e.g. 782149: at the old 50/100 the 488-MIP NCC was ~0.115, lowest of the panel,
+# and the matcher collapsed to ~0 matches). 80/150 keeps the same 1:~1.9 CZ:HCR
+# axial ratio while giving the optimiser enough structure to converge.
+# Supersedes the prior 50/100 MIP. See docs/08 Automated surface registration.md.
+CZ_SLAB = (0.0, 80.0)
+HCR_SLAB = (0.0, 150.0)
 HCR_LEVEL = 4
 SCALE_BOUNDS = (0.85, 1.15)
 THETA_BOUND_DEG = 15.0
@@ -171,8 +188,14 @@ def compute_surface_registration(
         Optional pre-fit surfaces.  Defaults call
         :func:`get_hcr_top_surface_iter07` / :func:`get_cz_surface_iter08`.
     sxy
-        Anisotropy scale (CZ-µm → HCR-µm).  Falls back to
-        :func:`get_sxy_with_fallback` when ``None``.
+        Anisotropy scale (CZ-µm → HCR-µm).  When ``None``,
+        :func:`roi_area_sxy.estimate_sxy_min_rule` is called (PRODUCTION,
+        promoted 2026-06-04): the min-rule 2× ¼-FOV estimator (HCR slab =
+        min(p99 HCR GFP+∩ok∩¼-FOV depth, 2·p99 CZ depth); CZ slab = half that;
+        sxy = sqrt(median HCR max-xsection / median CZ max-xsection)).  GT-free;
+        recovers thin-HCR 782149.  Grid-search fallback at
+        ``SXY_GRID_SEARCH_OFFSETS`` for new subjects that roam.  Never falls
+        back to GT.
     sxy_source
         Provenance label propagated into the result dict.
     return_warps
@@ -191,8 +214,23 @@ def compute_surface_registration(
     if cz_surface is None:
         cz_surface = get_cz_surface_iter08(s)
     if sxy is None:
-        sxy_v, sxy_src = get_sxy_with_fallback(sid, s)
-        sxy = float(sxy_v); sxy_source = sxy_source or sxy_src
+        # PRODUCTION base sxy (PROMOTED 2026-06-04): min-rule, 2× heuristic, ¼-FOV.
+        # GT-free. Rule (see roi_area_sxy.estimate_sxy_min_rule for the full
+        # derivation): zstack_thickness = p99(CZ depth); hcr_slab = min(p99(HCR
+        # GFP+∩ok∩¼-FOV depth), 2·zstack_thickness); cz_slab = hcr_slab/2 (CZ slab
+        # is HALF the HCR slab — axial ~2× expansion, capping CZ shallower raises
+        # sxy); sxy = sqrt(median max_xsection HCR[0,hcr_slab] / median CZ[0,cz_slab]).
+        # The 2× is a heuristic, NOT the measured sz (sz needs a pose → circular).
+        # Recovers thin-HCR 782149 (→1.7336) where the prior full-span/slab-auto
+        # estimator collapsed.  Never falls back to GT.
+        #
+        # FALLBACK for a NEW subject whose registration roams / matcher collapses
+        # at this sxy: grid-search the base sxy at roi_area_sxy.SXY_GRID_SEARCH_OFFSETS
+        # and pick the pose that lands (highest soma-print mutual-best / lowest
+        # rigid off-centre). GT-free.
+        from roi_area_sxy import estimate_sxy_min_rule
+        sxy = float(estimate_sxy_min_rule(sid)["sxy_median"])
+        sxy_source = sxy_source or "min_rule_2x_quarterfov"
 
     # Targets: raw 488 MIP for *comparison*, watershed binary for
     # *rigid bootstrap* (more robust when initial overlap is small).

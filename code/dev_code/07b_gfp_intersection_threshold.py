@@ -231,9 +231,18 @@ def _load_spot_feature(sid: str) -> pd.DataFrame:
 
 def _load_intensity_feature(sid: str) -> pd.DataFrame:
     """Return DataFrame with columns [hcr_id, mean_minus_bg] for intensity subject."""
-    p = Path(DATA_DIR) / f"cell_data_mean_{sid}_R1.csv"
-    if not p.exists():
-        raise RuntimeError(f"No intensity CSV for {sid}: {p}")
+    fname = f"cell_data_mean_{sid}_R1.csv"
+    # The two intensity subjects' CSVs were re-attached only under the archived
+    # data dir (read-only), not directly under DATA_DIR — search both.
+    candidates = [
+        Path(DATA_DIR) / fname,
+        Path(DATA_DIR) / "claude-data_ophys-mfish-autocoreg_260503" / fname,
+    ]
+    p = next((c for c in candidates if c.exists()), None)
+    if p is None:
+        raise RuntimeError(
+            f"No intensity CSV for {sid}: searched {[str(c) for c in candidates]}"
+        )
     df = pd.read_csv(p)
     if "channel" in df.columns:
         df = df[df["channel"] == 488]

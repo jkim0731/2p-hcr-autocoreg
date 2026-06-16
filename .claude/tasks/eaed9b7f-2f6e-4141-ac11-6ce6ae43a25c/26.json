@@ -1,0 +1,9 @@
+{
+  "id": "26",
+  "subject": "Build napari QC app with click-to-highlight",
+  "description": "napari viewer: HCR-488 + warped CZ + 4 contour layers (matched/unmatched × CZ/HCR). Clicking a matched CZ contour highlights the matched HCR cell in white. Uses Path A v2 matches (default: local_flow).",
+  "activeForm": "Building napari QC app",
+  "status": "completed",
+  "blocks": [],
+  "blockedBy": []
+}

@@ -1,0 +1,42 @@
+{
+  "state": "done",
+  "detail": "permissions.defaultMode changed to bypassPermissions in settings.json; restart Claude Code to apply",
+  "tempo": "idle",
+  "inFlight": {
+    "tasks": 0,
+    "queued": 0,
+    "kinds": []
+  },
+  "output": {
+    "result": "settings.json updated: defaultMode → bypassPermissions (restart to activate)"
+  },
+  "children": null,
+  "linkScanOffset": 265145,
+  "linkScanPath": "/root/capsule/.claude/projects/-root/7c2500ec-c3ab-4bfe-abbb-8b6d2bb2132f.jsonl",
+  "template": "bg",
+  "respawnFlags": [
+    "--effort",
+    "xhigh",
+    "--permission-mode",
+    "dontAsk",
+    "--model",
+    "opus"
+  ],
+  "intent": "how can I give you full permissions to you?",
+  "name": "Grant full permissions to Claude Code",
+  "nameSource": "auto",
+  "sessionId": "7c2500ec-c3ab-4bfe-abbb-8b6d2bb2132f",
+  "resumeSessionId": "7c2500ec-c3ab-4bfe-abbb-8b6d2bb2132f",
+  "daemonShort": "7c2500ec",
+  "cliVersion": "2.1.165",
+  "cwd": "/root",
+  "bgIsolation": "none",
+  "providerEnv": {
+    "CLAUDE_CONFIG_DIR": "/root/capsule/.claude",
+    "AWS_DEFAULT_REGION": "us-west-2"
+  },
+  "backend": "daemon",
+  "createdAt": "2026-06-05T20:14:41.005Z",
+  "updatedAt": "2026-06-05T20:17:40.255Z",
+  "firstTerminalAt": "2026-06-05T20:17:40.255Z"
+}

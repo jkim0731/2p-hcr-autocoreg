@@ -5,4 +5,8 @@
 .cache
 .local
 code/__pycache__
+code/sessions
+code/.space_test
 metadata
+
+.claude/file-history

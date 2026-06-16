@@ -1,0 +1,9 @@
+{
+  "id": "24",
+  "subject": "Wang descriptor final-round addendum",
+  "description": "After Path A converges, run one more round with Wang-anchor descriptor (n=10 matched anchors). Compute M_Wang_final and M_mNN_final on the same TPS; compare diff and precision/recall.",
+  "activeForm": "Running Wang descriptor addendum",
+  "status": "in_progress",
+  "blocks": [],
+  "blockedBy": []
+}

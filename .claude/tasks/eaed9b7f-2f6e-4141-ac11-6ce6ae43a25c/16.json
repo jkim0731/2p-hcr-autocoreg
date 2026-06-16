@@ -1,0 +1,9 @@
+{
+  "id": "16",
+  "subject": "MIP-slab visualization with linked pairs",
+  "description": "Per subject, render HCR-488 MIP slabs (100 µm thick) covering the LP overlap bbox; draw lines between matched (cz_lp_xy, hcr_xy) pairs within each slab. Skip pairs that cross slab boundaries.",
+  "activeForm": "Building visualization",
+  "status": "completed",
+  "blocks": [],
+  "blockedBy": []
+}
