@@ -12,7 +12,7 @@
 
 We have crossed a real threshold:
 
-* The 2-D PWR 4×4 surface registration (`dev_code/surface_registration_v2.py`) pins `(R, sxy, t_x, t_y)` on **all 6 benchmark subjects** with PWR-NCC 0.15–0.32, including the v1-unreachable 782149.
+* The 2-D PWR 4×4 surface registration (`dev_code/surface_registration_v2.py`) pins `(R, sxy, t_x, t_y)` on **all 6 benchmark subjects** with PWR-NCC 0.15–0.32, including the v1-unreachable 782149. **(2026-06-04: base `sxy` = min-rule 2× ¼-FOV `estimate_sxy_min_rule`; registration MIP promoted to 80/150 — together these legitimately recover 782149's pose, GT-free.)**
 * The slab-rigid-NCC `sz` estimator (v2-S02 iter 7) pins `sz` on **6/6** with mean |err| 0.04 (range −0.09 to +0.06).
 * `LockedPriorWarmStart` consumes both and pins all 5 of `(R, sxy, sxy, sz, t_x, t_y)` — only `t_z` and a small `θ_residual` remain for any downstream fit.
 * The v2-S03 gated ensemble (`M3-ICP-locked` when ICP improves Δd_med < −5 µm, else `C5_szp`) reaches **sum r@20 = 2.95 vs v1's 1.05** (+1.90, ~2.8×). Per-subject: 755252=0.07, 767018=0.86, 767022=0.66, 782149=0.16, 788406=0.44, 790322=0.76.
@@ -27,6 +27,14 @@ What's left is to take that locked frame all the way to a per-cell coreg table a
 ## 1. Goal and success criteria
 
 **Goal.** Produce a per-subject coreg table `[(cz_id, hcr_id, confidence)]` that approaches manual baseline (r@20 ≥ 0.50; recall vs `coreg_table.csv` ≥ 0.70 on dense subjects; precision ≥ 0.90 after a human-in-the-loop pass). **v3 is *not* aiming for hands-off automation yet** — the operating mode is "algorithm proposes, human reviews / corrects in the GUI." Full automation may follow once classifier confidence is calibrated and the GUI's accept-rate stabilises across subjects, but that is out of scope for v3.
+
+> **Metric definition (2026-06-04):** recall and precision are scored against the
+> **pose-independent GT** — `scoring_gt(inp)` in
+> `sessions/15_geom_features/_data.py`. GT = coreg pairs whose HCR cell is
+> GFP+∩ok; CZ side unfiltered; NO spatial/bbox/pool filter. Prior Session-15
+> figures used a pose-dependent GT (both CZ and HCR in spatial pool), which was
+> circular. The authoritative metric is recall = TP / |scoring_gt|,
+> precision = TP / |M|.
 
 **Two-track problem (per Notes.md 2026-04-29).**
 
@@ -54,8 +62,8 @@ These tracks are not exclusive. The default v3 pipeline is **Track A produces th
 | Artefact | Status | Location |
 |----------|--------|----------|
 | Pia/top/bottom surface fits (iter08 CZ, iter07 HCR top, iter08 HCR bottom) | promoted | `code/dev_code/surfaces_iter08.py`, cached JSON in `code/dev_code/cached_surfaces/` |
-| ROI-area sxy estimator (bootstrap-only) | promoted | `code/dev_code/roi_area_sxy.py` |
-| 2-D top-slab surface registration v2 (PWR 4×4 wins 6/6) | promoted | `code/dev_code/surface_registration_v2.py`, cache in `code/dev_code/cached_surface_registration/<sid>.json` |
+| sxy estimator — **min-rule 2× ¼-FOV (PRODUCTION, promoted 2026-06-04)** | promoted | `code/dev_code/roi_area_sxy.py::estimate_sxy_min_rule`; GT-free, recovers thin-HCR 782149 (→1.7336); grid-search fallback `SXY_GRID_SEARCH_OFFSETS`; supersedes full-span/slab-auto |
+| 2-D top-slab surface registration v2 (PWR 4×4 wins 6/6); **registration MIP 80/150 (promoted 2026-06-04, was 50/100)** | promoted | `code/dev_code/surface_registration_v2.py`, cache in `code/dev_code/cached_surface_registration/<sid>.json` |
 | Locked-prior warm-start (Stage A) | **promoted** (2026-05-02) | `code/dev_code/locked_prior_warm.py` (`LockedPriorWarmStart`, `compute_locked_prior_warm_start`, `apply_to_cz_um`) |
 | Slab-rigid `sz` estimator (Stage B iter 7) | **promoted** (2026-05-02; 6/6 within ±0.30 of GT) | `code/dev_code/sz_estimator.py` (`get_sz(s)` JSON-cached, `estimate_sz_image_ncc`); cache `code/dev_code/cached_sz/<sid>.json` |
 | 3-D **overlap crop** of CZ→HCR after (R, sxy, surface 2-D affine, sz) | **promoted** (2026-05-02) | `code/dev_code/overlap_crop.py` (`get_overlap_crop(s, margin_frac=0.10)`, `crop_hcr_volume(s, vol, margin_frac=0.10)`) |

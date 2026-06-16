@@ -9,6 +9,33 @@
 **Status:** PROMOTED to main pipeline (2026-04-26).
 **Module:** `code/dev_code/surface_registration_v2.py`
 **Cache:** `code/dev_code/cached_surface_registration/<sid>.json`
+
+> **PROMOTION 2026-06-04 — production `sxy` + MIP thickness (PERSISTENT).**
+> Two persistent changes were made and all 6 caches recomputed (old caches
+> backed up to `<sid>.json.bak_minrule_promo`; the **new** values are
+> production):
+>
+> 1. **Base `sxy` = min-rule 2× ¼-FOV** (`roi_area_sxy.estimate_sxy_min_rule`),
+>    replacing the prior full-span / slab-auto ROI-area estimator. Rule:
+>    `zstack_thickness = p99(CZ max_xsection depth)`; `hcr_slab =
+>    min(p99(HCR GFP+∩ok∩¼-FOV depth), 2·zstack_thickness)`; `cz_slab =
+>    hcr_slab / 2` (the **CZ slab is HALF the HCR slab** — HCR is axially
+>    expanded ~2×, so capping CZ shallower lowers its median area and raises
+>    `sxy`); `sxy = sqrt(median HCR max-xsection[0,hcr_slab] / median CZ
+>    max-xsection[0,cz_slab])`. The 2× is a **heuristic, not the measured `sz`**
+>    (`sz` needs a pose → circular). ¼-FOV is HCR-side only. GT-free; reference
+>    `782149 → 1.7336`.
+> 2. **Registration MIP thickness = 80/150** (`CZ_SLAB=(0,80)`,
+>    `HCR_SLAB=(0,150)`), replacing 50/100. A denser MIP lands the rigid/PWR
+>    fit for thin-HCR subjects (782149's 488-MIP NCC was the panel-lowest at
+>    50/100 and the matcher collapsed to ~0 matches).
+>
+> **Grid-search fallback (GT-free):** if a NEW subject's registration roams /
+> the matcher collapses at the min-rule `sxy`, grid-search the base `sxy` at
+> `roi_area_sxy.SXY_GRID_SEARCH_OFFSETS = (−0.10,−0.05,−0.02,+0.02,+0.05,+0.10)`
+> and keep the pose that lands (highest soma-print mutual-best count / lowest
+> rigid off-centre). Never falls back to GT.
+
 **Development home / regression tests:**
 `data/claude-data_ophys-mfish-autocoreg_260503/sessions/08_surface_vascular_match/` (read-only;
 formerly `code/sessions/08_surface_vascular_match/`).
@@ -40,11 +67,11 @@ sum r@20 = 2.67 vs v1 1.080.
 
 | Side | What is fed in |
 |------|----------------|
-| CZ source | binary CZ-ROI top-slab MIP, depth 0–50 µm beneath CZ pia (fill-holes on the outline TIFF, then max-MIP), warm-started by 180° rotation + `sxy` rescale onto the HCR-level-4 grid |
-| HCR target (comparison metric) | **raw 488 MIP, depth 0–100 µm beneath HCR top surface** — no binarisation |
+| CZ source | binary CZ-ROI top-slab MIP, depth **0–80 µm** beneath CZ pia (promoted 2026-06-04 from 0–50; fill-holes on the outline TIFF, then max-MIP), warm-started by 180° rotation + `sxy` rescale onto the HCR-level-4 grid |
+| HCR target (comparison metric) | **raw 488 MIP, depth 0–150 µm** beneath HCR top surface (promoted 2026-06-04 from 0–100) — no binarisation |
 | HCR target (rigid bootstrap) | watershed-binarised 488 MIP — only used to seed Stage 1 because the rigid θ + tx/ty sweep is unstable when initial overlap is poor |
 | Surfaces | `surfaces_iter08.get_cz_surface_iter08(s)` (CZ pia) and `get_hcr_top_surface_iter07(s, level=4)` (HCR top) |
-| `sxy` (CZ → HCR µm scale) | `register_binary.get_sxy_with_fallback(sid, s)` — ROI-area `sxy` when available, landmark-GT fallback for subjects without `metrics.pickle` |
+| `sxy` (CZ → HCR µm scale) | **`roi_area_sxy.estimate_sxy_min_rule(sid)["sxy_median"]`** (PRODUCTION, promoted 2026-06-04): min-rule 2× ¼-FOV (see promotion note above). GT-free; grid-search fallback at `SXY_GRID_SEARCH_OFFSETS` for new roaming subjects. Supersedes `get_sxy_with_fallback` (which had a landmark-GT leak) and the prior full-span / slab-auto ROI-area estimator. |
 
 The decision to keep the comparison metric on **raw 488 intensity** (not
 the watershed binary, not the GFP+ ROI MIP) was made in session 08:

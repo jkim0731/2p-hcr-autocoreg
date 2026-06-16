@@ -30,6 +30,22 @@ Instead, identify which documents are relevant to the current task and consult t
 
 ---
 
+# 🗄️ Archived Data, History & Projects
+
+Relevant data, plus **Claude's own session history and projects**, can also be found in the read-only data assets:
+
+- `/data/claude-data_ophys-mfish-autocoreg_*`  (mirrored at `/root/capsule/data/claude-data_ophys-mfish-autocoreg_*`)
+
+Within an asset:
+
+- `sessions/` — prior session outputs, cached intermediates, notebooks
+- `.claude/projects/` — Claude's session **history/projects** (the `*.jsonl` transcripts)
+- `.claude/file-history/` — per-edit file-version snapshots
+
+These assets hold material too big to keep in the live `.claude/`. They are **read-only** — consult them for past context, but write new work under `/root/capsule/code/` (or `/results`).
+
+---
+
 # 🧠 Core Principle
 
 > First localize → then align → then map → then validate

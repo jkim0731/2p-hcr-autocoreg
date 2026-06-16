@@ -66,6 +66,10 @@
 			"mount": "multiplane-ophys_767018_2025-02-13_14-09-49_cortical-zstack-seg_2025-10-08_15-36-00"
 		},
 		{
+			"id": "67a348d5-46b1-43af-8015-c985e3ba94b1",
+			"mount": "claude-data_ophys-mfish-autocoreg_soma-print_260616"
+		},
+		{
 			"id": "6e8cb0ee-ddae-460b-aefb-41676e224dba",
 			"mount": "multiplane-ophys_767018_2025-02-18_12-28-32_cortical-zstack-reg_2025-03-09_22-40-48"
 		},
@@ -108,6 +112,10 @@
 		{
 			"id": "ad1bb1fc-e054-4c42-b49f-338e08a9adf7",
 			"mount": "HCR_790322_2025-11-05_13-00-00_processed_2025-11-10_20-36-20"
+		},
+		{
+			"id": "b3edd86a-2233-4d66-82ef-c58e4a9ab3a1",
+			"mount": "claude-data_ophys-mfish-autocoreg_soma-print_260616_1"
 		},
 		{
 			"id": "b620b6c7-2d7f-445c-9c52-7412e4b98992",
