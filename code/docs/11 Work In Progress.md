@@ -1,195 +1,192 @@
+# Work In Progress
 
-## Automated branch (in development)
-
-**Currently promoted (cached for all 6 benchmark subjects):**
-- Pia / surface fits — `code/dev_code/surfaces_iter08.py`
-  (`get_cz_surface_iter08`, `get_hcr_top_surface_iter07`,
-  `get_hcr_bottom_surface_iter08`).
-- `sxy` from per-cell ROI cross-sections — `code/dev_code/roi_area_sxy.py`.
-  **PRODUCTION (promoted 2026-06-04): `estimate_sxy_min_rule` — min-rule 2×
-  ¼-FOV.** `hcr_slab = min(p99(HCR GFP+∩ok∩¼-FOV depth), 2·p99(CZ depth))`,
-  `cz_slab = hcr_slab/2` (CZ slab is HALF the HCR slab; axial ~2× expansion,
-  capping CZ shallower raises sxy), `sxy = sqrt(median HCR max-xsection /
-  median CZ max-xsection)`; the 2× is a heuristic, NOT measured sz (circular).
-  GT-free. Recovers thin-HCR **782149 → 1.7336** (the old −15 % full-span case).
-  Grid-search fallback at `SXY_GRID_SEARCH_OFFSETS` for new roaming subjects.
-  Supersedes the prior full-span `estimate_sxy_roi_area` / slab-auto estimators.
-- 2-D top-slab surface registration —
-  `code/dev_code/surface_registration_v2.py::get_surface_registration(s)`.
-  JSON-cached; picks the best of rigid / affine / PWR 3×3 / PWR 4×4,
-  scored as Pearson NCC of the warped CZ binary against the raw 488
-  MIP. **Registration MIP promoted 2026-06-04 to 80/150** (`CZ_SLAB=(0,80)`,
-  `HCR_SLAB=(0,150)`, was 50/100 — a denser MIP lands the fit for thin-HCR
-  subjects like 782149). See `docs/08 Automated surface registration.md`.
-- Locked-prior warm-start (Stage A) —
-  `code/dev_code/locked_prior_warm.py::compute_locked_prior_warm_start(s)`.
-  Pins all 7 affine DOF (R, sxy, sxy, sz_prior, t_x, t_y, t_z) using
-  `surface_registration_v2` (sxy + tilt + tx/ty) and `surfaces_iter08`
-  (CZ pia / HCR top for tilt + tz anchor). Stage B refines sz.
-- Slab-rigid `sz` estimator (Stage B) —
-  `code/dev_code/sz_estimator.py::get_sz(s)`. JSON-cached (v2 schema)
-  at `code/dev_code/cached_sz/<sid>.json`. Iter-7 slab-side-view FFT
-  rigid NCC: binarized CZ ROI warped into the HCR crop, x-MIP slabs
-  over the central 500 µm of x as 5×100 µm slabs, 2-D FFT cross-corr
-  per slab, mean NCC across slabs scored on the sz grid. 6/6 subjects
-  exact match to the iter-7 GT peak (grid step 0.10 µm/vox).
-- 3-D overlap crop after (R, sxy, surface 2-D affine, sz) —
-  `code/dev_code/overlap_crop.py::get_overlap_crop(s, margin_frac=0.10)`
-  and `crop_hcr_volume(s, vol, margin_frac=0.10)`. **Binding rule for
-  all v3 sessions: work only inside this crop + 10 % margin** (see
-  "Working-volume contract" below).
-- HCR per-ROI quality classifier (S11 v5d, stage 2) —
-  `code/dev_code/roi_quality_v5d.py`. 92 voxel-unit + within-subject
-  pct-rank features (no µm-suffixed features, no expansion-rate
-  dependence); LightGBM binary + 4-class. LOSO @ 1648 labels:
-  binary AUC 0.917, 4-class f1_macro 0.720. Public API:
-  `extract_features(sid)`, `predict(features)`, `predict_subject(sid)`,
-  `train(...)`. Models + meta + per-subject OOF parquets cached at
-  `code/dev_code/cached_roi_quality/`. Feature-extraction modules
-  (`roi_quality_v{2,3,4,5}.py`, `roi_v3_axis_features.py`,
-  `roi_v6_voxel.py`) are also under `code/dev_code/`; the µm /
-  dead-feature / low-gain peak-counter code paths have been physically
-  removed.
-- HCR ROI labelling GUI (standalone matplotlib app) —
-  `code/dev_code/roi_label_gui.py`. CLI:
-  `python code/dev_code/roi_label_gui.py --sid 788406 --reviewer alice`.
-  Uses `roi_quality_v5d.py` for inference. Labels still append to the
-  session JSONL `code/sessions/v3_S11_roi_quality/outputs/roi_qc_actions.jsonl`
-  for label-history continuity.
-
-**Not yet promoted (the next implementation push):**
-- Surface-anchored seed constellation + TPS expansion that mimics
-  the manual workflow (subgoal 4.5 in `10 Grand Plan v3`).
-- Track B per-pair image-NCC scoring (subgoal 4.2).
-- Pair-level GBT classifier (subgoal 4.3).
-
-The detailed staged design lives in
-**`docs/09 Full automatic v2 plan.md`** and is summarised in
-`docs/07 Grand Plan.md` §13.  The ledger in §11 covers the v1 catalog
-work (sessions S01–S64 in `full_automatic_execution_01/`).
-The active v3 plan is `docs/10 Grand Plan v3 — Cell-cell matching and QC.md`.
-
-**Metric definition correction (2026-06-04):** all recall/precision figures from
-Session 15 used a **pose-dependent GT** (coreg pairs filtered to those with both
-CZ and HCR inside the spatial pool). This is circular. The authoritative GT is now
-`scoring_gt(inp)` in `sessions/15_geom_features/_data.py`: coreg pairs whose HCR
-cell is GFP+∩ok, with the CZ side unfiltered. Corrected 6-subject tables are at
-`sessions/15_geom_features/outputs/corrected_gt_rescore/`. Gate rankings are
-qualitatively unchanged.
+_Current-state snapshot. Last major update: **2026-06-17**._
+_Long-form handoff: `/scratch/sessions/17_interim_summary/README.md`._
+_How to run / where the code lives: `docs/12 Code repositories and how to run.md`._
 
 ---
 
-## Session 13b — GFP+ threshold feature compare (2026-05-14)
+## Status at a glance (2026-06-17)
 
-Compared three per-cell GFP signals on all 6 benchmark subjects using
-BIC-best GMM on `log(positive feature)` fit to the v5d-kept (good +
-bad_ok) ROI subset:
+Automated CZ (2p-GCaMP z-stack) → HCR (light-sheet mFISH) coregistration now
+runs **end-to-end as a 2-step process** and has been migrated out of the
+`code/dev_code` scratch tree into two clean, installable repos.
 
-1. **spot_density** — `spot_count / volume` from the per-subject best
-   spot source (`spot_488_counts.csv` / R1 aggregated spots / R2
-   `mixed_cell_by_gene.csv` for the R1-failed subjects 755252 + 767022).
-2. **unmix_density** — `spot_count / volume` from `unmixed_all_cells.csv`.
-3. **mean_minus_bg** — channel-488 `mean − background` from
-   `cell_data_mean_*_R1.csv` (computed on the fly from L2 zarrs for the
-   four subjects without the CSV).
-
-Metric: `shape_score = (μ_right − μ_next) / max(σ_right, σ_next)` on the
-top two GMM components (right-most positive mode separation from its
-left neighbour). Higher = cleaner bimodality.
-
-| subject | mean−bg | spot | unmix |
-|---------|--------:|-----:|------:|
-| 755252  | 2.41    | 1.00 | 2.62  |
-| 767018  | 2.72    | 4.17 | 4.58  |
-| 767022  | 2.61    | 2.63 | 2.53  |
-| 782149  | 3.07    | 4.03 | 1.53  |
-| 788406  | 2.62    | 3.41 | 1.76  |
-| 790322  | 2.49    | 3.67 | 2.06  |
-| **mean**| **2.65**| **3.15** | **2.51** |
-
-Fraction of coreg-matched-and-kept cells that fall above the BIC cutoff
-(recall on the GT match set, per fit_subset='kept'):
-
-| subject | mean−bg | spot | unmix |
-|---------|--------:|-----:|------:|
-| 755252  | 0.648   | 0.707| 0.479 |
-| 767018  | 0.856   | 0.975| 0.980 |
-| 767022  | 0.883   | 0.796| 0.770 |
-| 782149  | 0.878   | 0.956| 0.961 |
-| 788406  | 0.862   | 0.937| 0.883 |
-| 790322  | 0.978   | 0.950| 0.988 |
-| **mean**| **0.851**| **0.887**| **0.844** |
-
-**Findings:**
-- Spot-density wins shape_score on 4/6 subjects (767018, 782149,
-  788406, 790322) and the column mean (3.15 vs 2.65 / 2.51) and recall
-  mean (0.887 vs 0.851 / 0.844).
-- The two R1-failed subjects (755252, 767022) are spot-density's only
-  losses; their R2 GFP probe likely has lower SNR than the other
-  subjects' R1 probe — but spot-density still beats unmix-density
-  there.
-- Unmix-density is competitive only on 767018; it underperforms on
-  every spot subject (the unmixing trims spots in a way that flattens
-  the bimodal mode separation).
-- mean−bg is the most consistent fallback (2.4–3.1 across subjects)
-  but rarely wins.
-
-**Action:** stay with **spot_density + BIC-best GMM** for GFP+
-thresholding across all 6 subjects (now feasible since the R2
-`mixed_cell_by_gene.csv` is plugged in for 755252/767022). Code:
-`code/sessions/13_pairwise_unmix_gfp/run_gfp_filter_compare.py`; output:
-`outputs/gfp_filter_compare/summary.csv` (36 rows) + 18 PNG histograms.
+| area | status |
+|---|---|
+| **Step 1 — image-based rough/warm registration** (locked prior) | ✅ working, GT-free |
+| **Step 2 — soma-print 3-D cell-cell matching + iterative TPS** (fine reg, custom filters) | ✅ working |
+| **HCR 3-D ROI quality classifier** (required by the matcher) | ✅ working (v5d, LightGBM) |
+| **Presentation video + figures** | ✅ done (session 16) |
+| 3-D shape-context matcher ("ROI ContextNet") | ❌ abandoned (soma-print won) |
+| Cellpose-SAM resegmentation | ❌ abandoned for now (no quality gain; GPU-gated) |
+| **QC app** | 🟡 ~half done (pass/fail labeller built; manual-improvement app not built) |
 
 ---
 
-## Working-volume contract (binding for all future v3 sessions, 2026-05-02)
+## The pipeline (2-step)
 
-**Rule.** Every future session — registration refinement, cell-cell
-matching, classifier training, QC, GUI — operates **only inside the
-3-D overlap crop** delivered by the locked frame, plus a **10 % margin
-on each axis** (default `margin_frac = 0.10`). Out-of-crop voxels and
-ROIs are dropped before any compute.
+**Step 1 — rough/warm registration** (`autocoreg` package), order
+**surfaces → sxy → top-slab 2-D reg → sz → overlap crop**:
+- Pia/surface fits — `surfaces_iter08` (`get_cz_surface_iter08`,
+  `get_hcr_top_surface_iter07`, `get_hcr_bottom_surface_iter08`).
+- Lateral scale `sxy` — `roi_area_sxy.estimate_sxy_min_rule` (**PRODUCTION,
+  promoted 2026-06-04**): min-rule 2× ¼-FOV, `hcr_slab = min(p99(HCR GFP+∩ok∩
+  ¼-FOV depth), 2·p99(CZ depth))`, `cz_slab = hcr_slab/2`, `sxy = √(median HCR
+  max-xsection / median CZ max-xsection)`. GT-free; the 2× is a heuristic, not
+  measured sz (that would be circular). Recovers thin-HCR 782149 (1.7336).
+- 2-D top-slab registration — `surface_registration_v2.get_surface_registration`:
+  best of rigid/affine/PWR 3×3/PWR 4×4, scored as Pearson NCC of warped-CZ binary
+  vs raw 488 MIP. **Registration MIP promoted 2026-06-04 to CZ 0–80 / HCR
+  0–150 µm.**
+- Axial scale `sz` — `sz_estimator.get_sz`: slab side-view FFT-NCC sweep (6/6
+  subjects exact-match to the iter-7 GT peak).
+- Lock + crop — `locked_prior_warm`, `overlap_crop` (cuts GFP+ search ~7×).
 
-**Why.** The two assumptions that broke v1 (unknown global pose; no
-shared image-level anchor) are gone. Every remaining method should
-respect that and refuse to operate over the full HCR volume — both
-because it's wasteful and because it dilutes signal with regions where
-the registration prior says nothing useful can match.
+**Step 2 — soma-print fine registration** (`autocoreg` package):
+- Descriptor — `soma_print.py` (Wang 2026 adapted): per-cell m-NN relative
+  vectors; pair score = mean of n-best of m_cz × m_hcr vector distances
+  (production m_cz=15, m_hcr=30, n=5).
+- Matcher — `run_step3_v3.py` (spec `step3_v3_spec_2026-06-01.md`): per round,
+  candidates within **fixed R_cand=150 µm** → **mutual-best** → **round-0-only
+  local-flow** pre-filter → **anchor-vote** gate (production) → fit **TPS**,
+  re-warp, iterate to convergence (e.g. 790322: 667→692→698). Gate alternatives
+  compared: LR (high-precision/low-recall), NCC (image-validated → kept as a
+  **QC validator**, not the primary sweep).
+- Performance (anchor_vote, pose-independent GT, 2026-06-04): recall 0.87–0.97,
+  precision dominated by silence-FP (likely-real, unlabeled). See the interim
+  summary for the per-subject table.
 
-**How to apply.** A session that needs the working volume calls:
+**Why soma-print** (fig_09, load-bearing): under the realistic *locked* pose
+soma-print barely degrades (AUC@50 0.997→0.993, recall@5≈1.0); shape-context
+collapses (recall@1 0.86→0.56); centroid stays weak (AUC≈0.63).
+
+**HCR 3-D ROI classifier** (`mfish-roi-classifier`): LightGBM binary + 4-class
+(good/bad_ok/bad/merged) on 91 voxel-unit features. LOSO binary AUC 0.921,
+4-class acc 0.703. Supplies the GFP+∩ok pool + junk removal the matcher needs;
+cross-repo contract = `{sid}_stage2_4class_proba_v5d_um.parquet`.
+
+---
+
+## Code now lives in two repos (dev_code is legacy)
+
+- **`2p2fish`** (`github.com/jkim0731/2p2fish`, package `autocoreg`) — full
+  pipeline: rough reg + soma-print fine reg + matcher + Qt QC viewer.
+- **`mfish-roi-classifier`** (`github.com/jkim0731/mfish-roi-classifier`) — the
+  v5d ROI-quality classifier ("repo B"); ships trained models + label log.
+
+`code/dev_code/` is **legacy** (development scratch). It had a real standalone
+bug — `surfaces_iter08` / `surface_registration_v2` imported 6 helper modules via
+a **stale, non-existent** path (`data/claude_data/...`). **Fixed 2026-06-17**:
+vendored the 6 + 1 transitive modules (`iter07_compute`, `iter08_cz_prior`,
+`iter08_hcr_bottom`, `compare_binarization`, `register_binary`,
+`register_nonrigid_variants`, `compute_projections`) from `2p2fish` (flat
+imports) and removed the dead `sys.path` hacks; all promoted modules now import
+cleanly. Apply script: `/scratch/dev_code_standalone_fix/apply.py`. For new work,
+**edit the repos, not dev_code.**
+
+See `docs/12 Code repositories and how to run.md`.
+
+---
+
+## Abandoned approaches
+
+- **3-D shape-context matcher ("3D ROI ContextNet")** — `shape_context.py`
+  (Belongie-2002 log-spherical descriptor, pia-normal oriented). Tried as the
+  geometric matcher; stopped because soma-print clearly won (fig_09). Retained as
+  a comparison component, not production.
+- **Cellpose-SAM resegmentation** — session 14 plan: finetune cpsam on HCR GT +
+  405/488, judge with v5d. Abandoned for now: only 2 fully-labeled 405-only 3-D
+  GT blocks, ~40 GPU-hr, no quality gain over released-cpsam-on-405. Parked.
+
+---
+
+## QC app (≈ half done)
+
+- **Pass/fail labeller — BUILT.** Per-CZ-ROI / per-pair reviewer over matcher
+  output (cube view: 488 background, CZ contour, matched HCR contour, neighbour
+  contours; radio good/bad/unsure for matched, visible/not-visible for
+  unmatched; autosave). In the repo as `autocoreg/qc/app.py`; launch via
+  `autocoreg run <sid> --qc`. Session variants: `qc_qt_app.py`, `qc_pair_app.py`,
+  `qc_app.py`.
+- **Manual-improvement app — IN PROGRESS / not built.** Intended to let an
+  operator improve a registration by hand, mimicking the automatic part of the
+  previous manual BigWarp process (seed near-surface landmarks → TPS → add
+  landmarks descending in depth → iterate). This is the remaining half.
+
+---
+
+## Presentation materials (done) — session 16
+
+`16_intermediate_summary_materials` (example 790322; GT panels over 6 subjects).
+13 figures (PNG@300 + PDF) + movies: **5 auto-pipeline movies** (`mov_auto_1..5`:
+problem → rough reg → soma-print → customized matcher → result), **1
+manual-protocol movie** (`mov_D_manual_registration`), **1 combined film**
+(`mov_grand_registration`). Colours: CZ=magenta, HCR 405=white, HCR 488=cyan,
+matches=gold. Read-only at
+`/data/claude-data_ophys-mfish-autocoreg_soma-print_260616/sessions/16_intermediate_summary_materials/`.
+
+---
+
+## GFP+ thresholding decision (settled, 2026-05-14)
+
+Use **spot_density + BIC-best GMM** on `log(spot_count / volume)` for GFP+
+thresholding across all 6 subjects (beats unmix-density and mean−bg on shape and
+recall; the R2 `mixed_cell_by_gene.csv` covers the R1-failed 755252/767022).
+
+---
+
+## Working-volume contract (binding for all v3 work, 2026-05-02)
+
+**Rule.** Every stage — registration refinement, cell-cell matching, classifier,
+QC, GUI — operates **only inside the 3-D overlap crop** delivered by the locked
+frame, plus a **10 % margin per axis** (default `margin_frac=0.10`). Out-of-crop
+voxels and ROIs are dropped before any compute.
+
+**Why.** The two assumptions that broke v1 (unknown global pose; no shared
+image-level anchor) are gone; nothing should operate over the full HCR volume —
+it is wasteful and dilutes signal with regions the prior says cannot match.
+
+**How.** A session that needs the working volume calls:
 
 ```python
-from overlap_crop import get_overlap_crop, crop_hcr_volume
-
+from overlap_crop import get_overlap_crop, crop_hcr_volume   # autocoreg.overlap_crop in the repo
 crop = get_overlap_crop(s, margin_frac=0.10)
-# crop["bbox_hcr_um"]    -> [z0, z1, y0, y1, x0, x1] in HCR µm
-# crop["bbox_hcr_l2_vox"] -> level-2 voxel indices
-# crop["sz_used"], crop["margin_frac"], crop["hcr_voxel_um"]
-
 hcr_slab = crop_hcr_volume(s, hcr_vol, margin_frac=0.10)
 ```
 
-ROI / centroid filtering is on the caller; image slicing should go
-through `crop_hcr_volume(s, vol)` so the same bbox + margin definition
-is used everywhere.
+The crop is defined by R (180° + tilt + PWR θ), sxy, the surface 2-D affine, and
+sz. Anything finer (TPS, accepted-pair refit) refines **inside** the crop, never
+outside.
 
-**Inputs that define the crop.** Rotation `R` (180° prior + tilt + PWR
-θ residual), `sxy` (PWR-affine image-NCC, the source of truth —
-`roi_area_sxy` is bootstrap-only per `feedback_sxy_source_of_truth`),
-surface 2-D affine (`surface_registration_v2`), `sz`
-(`sz_estimator.get_sz`). These four pieces are the **only**
-registrations expected by `get_overlap_crop`; anything finer (TPS,
-accepted-pair refit, etc.) refines *inside* the crop, never outside.
+---
 
-**Out-of-crop behaviour.** Functions in `code/dev_code/` should not
-assume cropped input — they accept full volumes / centroid lists for
-backwards compatibility. The cropping discipline is enforced by
-**session-level callers**: each new session begins by calling
-`get_overlap_crop(s)` and slicing every downstream input through it.
-If a session's first cell is "load full HCR volume" without that crop,
-the session is wrong.
+## Metric definition (authoritative, corrected 2026-06-04)
 
-**Margin choice.** 10 % is the default; sessions that need more (e.g.
-surface-anchored seed search at the periphery) may override
-`margin_frac=` on the call but must justify the choice in the
-session's `log.md`.
+All recall/precision use the **pose-independent GT** (`scoring_gt`: coreg pairs
+whose HCR cell is GFP+∩ok, CZ side unfiltered). The earlier pose-dependent GT
+(both sides filtered to the pool) was circular and is **superseded**. Gate
+rankings are qualitatively unchanged (anchor_vote still leads).
+
+---
+
+## Open items / next steps
+
+1. Build the **manual-improvement QC app** (remaining half of QC).
+2. Relabel **767018** ROI GT (under-labeled → inflated silence-FP).
+3. ~~mfish-roi-classifier cold-start builders missing~~ **DONE 2026-06-17** —
+   the refactor dropped two builders (tight-bbox and per-cell crops); both ported
+   as `roi_classifier/feat_tight_bbox.py` + `feat_per_cell_crops.py` with CLI
+   `build-bbox` / `build-crops` / `build-features` (chain: bbox → crops → 4 feature
+   groups → predict). Tight-bbox verified against the segmentation on 790322
+   (exact tight bounds + volume). Note: `dev_code/cached_hcr_cell_tight_bbox/` is
+   **level-0** and incompatible with the current level-2 extractors — rebuild with
+   `build-bbox`. (shape/v2 `stage1_score` parquet is optional → NaN if absent.)
+   Also reconciled the extractors to the **µm** feature set the production `_v5d_um`
+   model expects (the refactor had dropped µm outputs); verified exact vs the
+   original features + `predict` reproduces the auto-coreg keep-set 97–98 % on 3
+   subjects. And parallelized v2/v3 z-strip extraction (`MFISH_FEAT_WORKERS`).
+   Full record: **`docs/13 ROI classifier um-vs-vox decision and reconciliation.md`**.
+4. Revisit Cellpose-SAM only if a real segmentation-gain case appears.
+5. Keep NCC as the soft/top-2 QC validator (ceiling ~86 % argmax / 94 % top-2;
+   do not build a hard argmax gate — too lossy).

@@ -47,12 +47,8 @@ import numpy as np
 import pandas as pd
 import tifffile
 
-_ROOT = Path("/root/capsule")
-# The 03c session was archived to data/claude_data/ on 2026-04-28; the old
-# code/sessions/ path no longer exists.
-_SESSION = _ROOT / "data" / "claude_data" / "sessions" / "03c_onset_features" / "iterations"
-if str(_SESSION) not in sys.path:
-    sys.path.insert(0, str(_SESSION))
+# iter07_compute / iter08_cz_prior / iter08_hcr_bottom are now vendored as
+# sibling modules in dev_code (2026-06-17 standalone fix); no sys.path hack.
 
 from iter07_compute import (  # type: ignore  # noqa: E402
     EPS,

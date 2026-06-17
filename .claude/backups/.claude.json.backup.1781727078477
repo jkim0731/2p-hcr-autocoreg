@@ -43,8 +43,9 @@
     "team-onboarding-share": 70,
     "agents-view-multiclauding": 78
   },
-  "promptQueueUseCount": 1653,
+  "promptQueueUseCount": 1652,
   "btwUseCount": 14,
+  "showExpandedTodos": true,
   "cachedGrowthBookFeatures": {
     "tengu_jade_anvil_4": false,
     "tengu_pewter_brook": true,

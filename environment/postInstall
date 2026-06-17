@@ -10,6 +10,13 @@ cd /
 git clone https://github.com/AllenNeuralDynamics/lamf-analysis
 cd /lamf-analysis && pip install -e .
 
+cd /
+git clone https://github.com/AllenNeuralDynamics/2p2fish
+cd /2p2fish && pip install -e .
+cd /
+git clone https://github.com/AllenNeuralDynamics/mfish-roi-classifier
+cd /mfish-roi-classifier && pip install -e .
+
 echo "Writing VS Code profile settings for stable kernel detection..."
 mkdir -p /root/capsule/scratch/.vscode-root/User
 cat > /root/capsule/scratch/.vscode-root/User/settings.json << 'EOF'

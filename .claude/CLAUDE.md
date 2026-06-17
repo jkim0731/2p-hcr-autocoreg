@@ -129,6 +129,15 @@ Avoid:
 - unnecessary complexity
 - skipping validation steps
 
+### Large runs / parallelism
+
+For big runs (many sessions, volumes, or files), **default to parallel processing** rather than serial loops — but size the parallelism deliberately:
+
+- **RAM first.** Estimate peak memory per worker (e.g. one loaded volume/array) and set `n_workers ≈ available_RAM / peak_per_worker`, leaving headroom. Never spawn so many workers that the run risks OOM/swap; fewer workers that fit in RAM beat many that thrash.
+- **Amortize spawn time.** Process spawning and data serialization have fixed overhead. Use a pool/batched chunks so each worker handles many items; don't spawn a fresh process per tiny task. If per-item work is shorter than spawn+IPC cost, the run is faster serial — say so and stay serial.
+- **Pick the right axis.** Parallelize over the coarsest independent unit (per-session/per-volume), not the innermost loop, to keep overhead low and memory predictable.
+- **Log it.** Record chosen `n_workers`, per-worker memory estimate, and the reasoning so the choice is reproducible and debuggable.
+
 ---
 
 ## 3. Evaluator (Validation)

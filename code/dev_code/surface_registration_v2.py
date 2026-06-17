@@ -57,11 +57,8 @@ import numpy as np
 import pandas as pd
 from scipy.ndimage import affine_transform
 
-_ROOT = Path("/root/capsule")
-# Session 08 was moved to read-only /data/claude_data/ (2026-04-28 dir reshuffle).
-_S08 = _ROOT / "data" / "claude_data" / "sessions" / "08_surface_vascular_match"
-if str(_S08) not in sys.path:
-    sys.path.insert(0, str(_S08))
+# compare_binarization / register_binary / register_nonrigid_variants are now
+# vendored as sibling modules in dev_code (2026-06-17 standalone fix).
 
 # Helpers lifted from session 08 (kept there as the development home).
 from compare_binarization import variant_watershed  # type: ignore  # noqa: E402

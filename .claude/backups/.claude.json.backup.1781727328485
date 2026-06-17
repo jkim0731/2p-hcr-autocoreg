@@ -45,6 +45,7 @@
   },
   "promptQueueUseCount": 1653,
   "btwUseCount": 14,
+  "showExpandedTodos": true,
   "cachedGrowthBookFeatures": {
     "tengu_jade_anvil_4": false,
     "tengu_pewter_brook": true,

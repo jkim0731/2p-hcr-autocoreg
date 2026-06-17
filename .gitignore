@@ -4,7 +4,8 @@
 .claude/.credentials.json
 .cache
 .local
-code/__pycache__
+__pycache__/
+*.py[cod]
 code/sessions
 code/.space_test
 metadata
