@@ -16,7 +16,7 @@ runs **end-to-end as a 2-step process** and has been migrated out of the
 |---|---|
 | **Step 1 — image-based rough/warm registration** (locked prior) | ✅ working, GT-free |
 | **Step 2 — soma-print 3-D cell-cell matching + iterative TPS** (fine reg, custom filters) | ✅ working |
-| **HCR 3-D ROI quality classifier** (required by the matcher) | ✅ working (v5d, LightGBM) |
+| **HCR 3-D ROI quality classifier** (required by the matcher) | ✅ working — self-contained C2 (101 µm feat, 405-only, no stage-1; LightGBM) |
 | **Presentation video + figures** | ✅ done (session 16) |
 | 3-D shape-context matcher ("ROI ContextNet") | ❌ abandoned (soma-print won) |
 | Cellpose-SAM resegmentation | ❌ abandoned for now (no quality gain; GPU-gated) |
@@ -62,9 +62,10 @@ soma-print barely degrades (AUC@50 0.997→0.993, recall@5≈1.0); shape-context
 collapses (recall@1 0.86→0.56); centroid stays weak (AUC≈0.63).
 
 **HCR 3-D ROI classifier** (`mfish-roi-classifier`): LightGBM binary + 4-class
-(good/bad_ok/bad/merged) on 91 voxel-unit features. LOSO binary AUC 0.921,
-4-class acc 0.703. Supplies the GFP+∩ok pool + junk removal the matcher needs;
-cross-repo contract = `{sid}_stage2_4class_proba_v5d_um.parquet`.
+(good/bad_ok/bad/merged), **self-contained C2** — 101 µm features, 405-only, no stage-1
+(12 neighbour-quality features replace the old stage-1 neighbour scores). LOSO binary AUC
+0.922, 4-class acc 0.710. Supplies the GFP+∩ok pool + junk removal the matcher needs;
+cross-repo contract = `{sid}_stage2_4class_proba.parquet`. See docs/13 §7.
 
 ---
 
@@ -181,7 +182,8 @@ rankings are qualitatively unchanged (anchor_vote still leads).
    groups → predict). Tight-bbox verified against the segmentation on 790322
    (exact tight bounds + volume). Note: `dev_code/cached_hcr_cell_tight_bbox/` is
    **level-0** and incompatible with the current level-2 extractors — rebuild with
-   `build-bbox`. (shape/v2 `stage1_score` parquet is optional → NaN if absent.)
+   `build-bbox`. (The `stage1_score` dependency has since been **removed** — the model
+   is self-contained / 405-only as of 2026-06-18; see docs/13 §7.)
    Also reconciled the extractors to the **µm** feature set the production `_v5d_um`
    model expects (the refactor had dropped µm outputs); verified exact vs the
    original features + `predict` reproduces the auto-coreg keep-set 97–98 % on 3

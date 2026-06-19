@@ -7,7 +7,7 @@ development scratch — read it for history, but do new work in the repos.
 | repo | package | role |
 |---|---|---|
 | **`2p2fish`** (`github.com/jkim0731/2p2fish`) | `autocoreg` | full coregistration pipeline: rough/warm registration + soma-print fine registration + matcher + Qt QC viewer |
-| **`mfish-roi-classifier`** (`github.com/jkim0731/mfish-roi-classifier`) | `roi_classifier` | v5d HCR ROI-quality classifier ("repo B"); ships trained models + label log |
+| **`mfish-roi-classifier`** (`github.com/jkim0731/mfish-roi-classifier`) | `roi_classifier` | self-contained HCR ROI-quality classifier ("repo B"; 101 µm features, 405-only, no stage-1 — see docs/13 §7); ships trained models + label log |
 
 ---
 
@@ -16,8 +16,9 @@ development scratch — read it for history, but do new work in the repos.
 `mfish-roi-classifier` writes, and `autocoreg` reads:
 
 ```
-{MFISH_ROI_QUALITY_DIR}/{sid}_stage2_4class_proba_v5d_um.parquet
+{MFISH_ROI_QUALITY_DIR}/{sid}_stage2_4class_proba.parquet
 columns: hcr_id, p_bad, p_bad_ok, p_good, p_merged   (+ human_label if labelled)
+(renamed from {sid}_stage2_4class_proba_v5d_um.parquet, 2026-06-18 — 2p2fish reader to match)
 ```
 
 `autocoreg` keeps cells where `argmax ∈ {p_good, p_bad_ok}` (the GFP+∩ok pool the
@@ -52,16 +53,18 @@ Config via env vars: `MFISH_DATA_ROOT` (default `/root/capsule/data`),
 pip install -e .                 # core (inference + training)
 pip install -e ".[label]"        # + labelling GUI
 
-roi-classifier build-features 790322   # cold-start: tight-bbox + 4 feature parquets
-roi-classifier predict 790322          # inference (reads the cached feature parquets)
+roi-classifier build-features 790322   # cold-start: tight-bbox + unified feature pass
+roi-classifier predict 790322          # inference (reads {sid}_features_all.parquet)
 roi-classifier build-bbox 790322       # just the tight-bbox cache (--force to rebuild)
 roi-classifier train                   # LOSO CV + production model training
 roi-classifier-label                   # labelling GUI
 ```
 
-Cold-start chain: `build-bbox` → `build-features` → `predict` (see the repo
-README). `predict` only **reads** the per-group feature parquets; `build-features`
-is what creates them (and the tight-bbox they depend on).
+Cold-start chain: `build-bbox` → `build-features` (a **single unified extraction
+pass** — all feature families from each cell's mask/405-crop read once, written to
+one `{sid}_features_all.parquet`) → `predict`. Parallelism is via
+`MFISH_FEAT_WORKERS` (z-strip cell-chunking inside the pass); see
+`docs/13 …` for the unify + timing details.
 
 Python API:
 
@@ -92,25 +95,26 @@ for inference).
 >   `02_dump_per_cell_crops.py`; packbits-encoded padded mask crops (needed by the
 >   surface/v4 + protrusion/v5 extractors).
 >
-> `build-features <sid>` runs the whole chain: bbox → crops → 4 feature groups,
-> leaving the subject ready for `predict`. (The shape/v2 `{sid}_stage1_score`
-> parquet is *optional* — absent → NaN adjacency features, not a blocker.)
+>   `02_dump_per_cell_crops.py` — now **optional**, used only by the legacy
+>   per-group extractors; the unified pass (below) doesn't need it.
 >
-> **µm-feature reconciliation (2026-06-17).** `predict` initially failed because the
-> refactored extractors emitted a reduced/vox-named feature set that matched neither
-> shipped model. Fixed by restoring the **µm** feature set the production `_v5d_um`
-> model expects (`feat_surface` µm surface/volume/core-shell; `feat_shape` µm shape +
-> `n_neighbors_30um`). Verified **exact** vs the original features (782149 coldcache)
-> and `predict` reproduces the auto-coreg keep-set 97–98 %. See
-> **`docs/13 ROI classifier um-vs-vox decision and reconciliation.md`** for the full
-> decision + reasoning. (µm was chosen over vox: A/B-tied accuracy, µm is free vs
-> vox's `v6_vox` ~58 % extraction cost; rank dropped for sample-prep sensitivity.)
+> **µm reconciliation + unified pass (2026-06-17).** `predict` initially failed
+> because the refactored extractors emitted a reduced/vox-named feature set
+> matching neither shipped model. Fixed by restoring the **µm** feature set the
+> production `_v5d_um` model expects, then **unifying** the 4 extractors into one
+> pass (`build-features` = `bbox → unified pass → {sid}_features_all.parquet`; per
+> cell the mask/opening/405-crop are computed once and shared across families).
+> Verified **exact** vs the original features (782149 coldcache; worst err 3.9e-4
+> on one pre-existing intensity percentile) and `predict` reproduces the auto-coreg
+> keep-set 97–98 %. (µm chosen over vox: A/B-tied accuracy, µm is free vs vox's
+> `v6_vox`; rank dropped for sample-prep sensitivity.) Full record: **`docs/13`**.
 >
-> **Parallel extraction.** `feat_shape`/`feat_axis` parallelize their z-strip loop
-> across cores via `MFISH_FEAT_WORKERS` (default cpu−2). Recommended run axis:
-> **serialize mice, parallelize within** — `build-features <sid> -j 1` (serial groups)
-> + `MFISH_FEAT_WORKERS` (parallel strips). Do not combine high `-j` with high
-> `MFISH_FEAT_WORKERS` (nested pools over-subscribe).
+> **Parallel extraction.** The unified pass splits each z-strip's cells into
+> spatially-contiguous chunks across `MFISH_FEAT_WORKERS` (default cpu−2), exact.
+> Run axis: **serialize mice, parallelize within** —
+> `MFISH_FEAT_WORKERS=14 build-features <sid>`. Modest speedup only
+> (~16% vs the old separate pipeline) — extraction is memory-bandwidth-bound.
+> `MFISH_STRIP_Z` is overridable but leave at 128 (lower skips boundary cells).
 >
 > ⚠️ **Do NOT reuse `dev_code/cached_hcr_cell_tight_bbox/`** with the current
 > extractors: those parquets are in the **level-0** XY frame (4× larger Y/X, 16×

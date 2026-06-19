@@ -3,7 +3,9 @@
 Records (a) the historical µm-vs-vox feature decision, recovered from the session
 transcripts; (b) the extractor↔model mismatch that surfaced when the refactored
 `mfish-roi-classifier` ran `predict` end-to-end; (c) the reconciliation that fixed
-it; (d) the within-mouse z-strip parallelization of the feature extractors.
+it; (d) the within-mouse z-strip parallelization of the feature extractors;
+(e) the stage-1/stage-2 architecture decision and the **self-contained C2 promotion**
+(§7, 2026-06-18) — the current production model.
 
 ---
 
@@ -120,9 +122,104 @@ over-subscribe). Production single-mouse extraction is the main beneficiary.
 
 ---
 
-## 5. Files changed (mfish-roi-classifier, uncommitted)
-- `src/roi_classifier/roi_v4_features.py` — restore µm v4 features.
-- `src/roi_classifier/feat_shape.py` — v2 µm/neighbor features + z-strip pool.
-- `src/roi_classifier/feat_axis.py` — z-strip pool.
-- (earlier) `feat_tight_bbox.py`, `feat_per_cell_crops.py`, `cli.py`
-  (build-bbox / build-crops / build-features).
+## 5. Unified single-pass extractor + cell-chunking (2026-06-17)
+
+The 4 extractors (`feat_shape`/`feat_axis`/`feat_surface`/`feat_protrusion`) each
+re-read the volume and recomputed the per-cell opening. They were **merged into
+one pass** in `feat_shape`: per cell the raw mask + opening + 405 crop are computed
+once and fed to all family-math functions (`all_v3_axis_features`,
+`all_v4_features`, `protrusion_features`), merged into one row (with the
+`volume_um3_raw → volume_um3_raw_v4` rename that matches the old 4-parquet merge).
+Output is one `{sid}_features_all.parquet`; the per-cell-crops cache is no longer
+needed; `build-features` = `bbox → unified pass`. Verified **exact** vs the
+coldcache originals on 782149 (worst err 3.9e-4 on the one pre-existing intensity
+percentile, 0 NaN mismatches), and `predict` reproduces the auto-coreg keep-set.
+
+**Parallelism — balanced cell-chunking.** All four extractors used identical
+opening (`_CROSS_3D`, `OPENING_RADIUS=3`, pad 4), so the single shared computation
+is safe. The pass parallelizes by splitting each z-strip's cells into
+spatially-contiguous chunks (sorted by ymin → compact block per chunk) across
+`MFISH_FEAT_WORKERS` (default cpu−2); `STRIP_Z` stays 128 so the z-context — and
+thus which boundary cells are skipped — is unchanged → exact.
+
+**Timing reality (782149).** Unified+chunked ≈ 833 s vs the old separate pipeline
+≈ 987 s (~16% faster) and simpler (one parquet, no crops cache). It is **not** the
+~3× one might expect: the I/O redundancy was not the bottleneck (v4/v5 already read
+cheap precomputed crops), and the workload is **memory-bandwidth-bound** — 14
+workers streaming GB-scale seg+405 blocks saturate RAM bandwidth, so per-cell
+parallelism is sub-linear. A larger win would require optimizing the per-cell
+compute itself (dominated by the v3 axis-profile math) — a separate effort.
+
+> ⚠️ `MFISH_STRIP_Z` is overridable but **not** freely tunable: lowering it puts
+> more cells at strip boundaries where large-z-extent cells overflow the smaller
+> loaded block and get skipped (tested STRIP_Z=32 → 47k value mismatches). Leave
+> it at 128 unless `Z_PAD` is raised accordingly.
+
+---
+
+## 6. Files changed (mfish-roi-classifier, uncommitted)
+- `roi_v4_features.py` — restore µm v4 features (un-drop `DROP_UM_FEATURES`).
+- `feat_shape.py` — v2 µm/neighbor features; **unified single-pass extractor** with
+  z-strip cell-chunking; env-configurable `MFISH_STRIP_Z` (default 128).
+- `features.py` — read/produce the single `{sid}_features_all.parquet`.
+- `cli.py` — `build-features` = bbox → unified pass (no crops, no 4-group DAG).
+- `feat_axis.py` — z-strip pool (now also superseded by the unified pass for the
+  default flow; family math reused from `roi_v3_axis_features`).
+- (earlier) `feat_tight_bbox.py`, `feat_per_cell_crops.py` (`build-bbox` /
+  `build-crops`; crops now optional, used only by the legacy per-group extractors).
+
+---
+
+## 7. Stage-1 / Stage-2 architecture + self-contained C2 promotion (2026-06-18)
+
+The classifier was a **two-model** pipeline; this session retired stage-1 and promoted a
+self-contained model. Full record: `/scratch/sessions/17_interim_summary/stage1_stage2_architecture.md`.
+
+**The two models (corrected understanding):**
+- **Stage-1** — *not in this repo* (upstream/legacy). A per-cell *"is this a real, cleanly
+  segmented cell?"* detector: ~48 features incl. **multi-channel** intensity (405, 488,
+  probe=561 or 514 per subject, 594) + **GFP** + segmentation-provenance flags; trained on
+  **pseudo-labels** (heuristics: low_solidity, nuclear_inversion, not_found_in_seg,
+  volume_high/low, boundary_touching), ~291 k cells, LOSO AUC 0.99998. Emits a per-cell score
+  for *all* cells → `{sid}_stage1_score.parquet`.
+- **Stage-2** — *this repo*. Per-cell **human-labeled quality** classifier (4-class
+  good/bad_ok/bad/merged; binary keep = good∪bad_ok). 405-only. The v5d_um set had 91 features,
+  **2 of them stage-1-derived**: `mean/min_touching_score_stage1` = mean/min stage-1 score of a
+  cell's *touching neighbours* — the only cross-stage coupling.
+
+**Decision — retire stage-1, ship the self-contained "C2" model.** Drop the 2 stage-1 features
+(and the whole stage-1 dependency: no second model, no extra channels) and replace them with
+**12 self-contained neighbour-quality features** — mean+min over each cell's **6 nearest
+neighbours** (centroid, µm) of `solidity_opened, sphericity_opened, bbox_occupancy_raw,
+frac_kept_opening, volume_um3_opened, c405_shell_minus_core_p50`. Production set is now
+**101 features, 405-only, no upstream dependency**; cold-start collapses to
+`build-bbox → build-features → predict`.
+
+**Evidence (LOSO, 6 subjects):**
+| model | feats | binary AUC | 4-class F1m |
+|---|---:|---:|---:|
+| shipped v5d_um (stage-1) | 91 | 0.9206 | 0.6981 |
+| 91-feat retrain + recovered cells | 91 | 0.9254 | 0.7069 |
+| naïve drop (no neighbour quality) | 89 | 0.9160 | 0.6994 |
+| **C2 self-contained (promoted)** | **101** | **0.9220** | 0.7021 |
+
+- Naïve stage-1 drop costs **−0.009** binary AUC (below baseline, worse in 6/6 folds) → the
+  stage-1 signal is real and *not* captured by plain adjacency features.
+- The neighbour-quality proxy recovers most of it → **0.9220 > shipped 0.9206**, self-contained.
+- **Other channels were tested and rejected:** adding 488/594/GFP to C2 leaves binary flat-to-noise
+  and gives only a ~noise 4-class bump; 594 (SYTO59, nuclear) and 488 (GFP) did **not** improve the
+  `merged` class via simple intensity summaries (the merge-detection mechanism would need a
+  purpose-built intra-ROI bimodality / nucleus-count feature, not channel means). 488 also risks
+  **GFP/matching-signal circularity** (it is the coreg matching channel). → **405-only retained.**
+
+**Also this session:**
+- **Adaptive per-chunk bbox** (`feat_shape`) eliminated boundary-overflow skips, recovering
+  **24 previously-skipped labeled cells** (782149 ×23, 788406 ×1) into training; bit-exact on
+  fitting cells.
+- **`PCT_RANK_COLS` bug fix** — `model.train()` referenced an undefined name → `NameError` at
+  meta-write (train was broken on a clean checkout); fixed to `PCT_RANK_COLS = []`.
+- **Contract rename (this repo only; 2p2fish to match):** dropped `_v5d_um` from filenames —
+  model `roi_quality_stage2_{binary,4class}.txt` + `…_meta.json`; contract output
+  **`{sid}_stage2_4class_proba.parquet`**. Old stage-1 model archived at
+  `models/_archive_v5d_stage1/`. Meta `version = v6_selfcontained_c2` + provenance (commit,
+  n_labels, feature lineage). All changes uncommitted (working tree).

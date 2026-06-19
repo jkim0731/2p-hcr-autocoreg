@@ -1,0 +1,29 @@
+(base) root@666a1e0c8f93:/mfish-roi-classifier# roi-classifier-label --sid 782149,788406 --candidates /scratch/recon_validate/recovered_rois.csv --reviewer jinho
+  candidates loaded from /scratch/recon_validate/recovered_rois.csv: 782149=23, 788406=1
+S11 standalone labeller  backend=TkAgg
+  sids=['782149', '788406']  n_rois=80  band=(0.3, 0.7)  reviewer=jinho  [CANDIDATES MODE]
+Traceback (most recent call last):
+  File "/opt/conda/bin/roi-classifier-label", line 8, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/mfish-roi-classifier/src/roi_classifier/label_gui/app.py", line 1040, in main
+    app = StandaloneLabeller(
+          ^^^^^^^^^^^^^^^^^^^
+  File "/mfish-roi-classifier/src/roi_classifier/label_gui/app.py", line 331, in __init__
+    self._load_subject()
+  File "/mfish-roi-classifier/src/roi_classifier/label_gui/app.py", line 628, in _load_subject
+    self.rois = _sample_from_candidates(
+                ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mfish-roi-classifier/src/roi_classifier/label_gui/app.py", line 233, in _sample_from_candidates
+    feats = _load_all_features(sid)
+            ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mfish-roi-classifier/src/roi_classifier/label_gui/gui.py", line 174, in _load_all_features
+    return _load_v5d_features(sid)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mfish-roi-classifier/src/roi_classifier/label_gui/gui.py", line 167, in _load_v5d_features
+    return _features.extract_features(sid)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mfish-roi-classifier/src/roi_classifier/features.py", line 59, in extract_features
+    raise FileNotFoundError(
+FileNotFoundError: [782149] feature parquet missing: /root/.cache/mfish-roi-classifier/roi_quality/782149_features_all.parquet
+Build it with `roi-classifier build-features 782149` (or point MFISH_ROI_QUALITY_DIR at a directory that contains it).

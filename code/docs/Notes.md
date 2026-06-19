@@ -29,10 +29,22 @@
   #3 manual-workflow-mimic is the in-progress QC manual-improvement app. #2
   piecewise volumetric nonrigid not pursued (TPS on matched cells suffices).
 - CP-SAM confirmed not worth it for now (no quality gain; GPU-gated) → abandoned.
-- HCR ROI classifier (v5d) is required by the matcher (GFP+∩ok pool + junk removal).
+- HCR ROI classifier is required by the matcher (GFP+∩ok pool + junk removal).
 - Presentation video + figures done (session 16).
 - Code migrated to two repos: **2p2fish** (autocoreg) + **mfish-roi-classifier**.
   `dev_code` is now legacy (standalone import bug fixed 2026-06-17).
 - QC app ~half done: pass/fail labeller built; manual-improvement app to build.
 - See `docs/11 Work In Progress.md`, `docs/12 Code repositories and how to run.md`,
   and `/scratch/sessions/17_interim_summary/README.md`.
+
+# 260618
+- **HCR ROI classifier → self-contained.** Retired the upstream stage-1 dependency
+  (multi-channel + GFP); production model is now **C2**: 101 µm features, 405-only, with
+  12 neighbour-quality features replacing the 2 stage-1 neighbour scores. Binary LOSO 0.922
+  (> prior 0.9206). Other channels (488/594/GFP) tested, **not** adopted (binary flat-to-noise;
+  GFP = matching-signal circularity). Adaptive bbox recovered 24 boundary-skipped labeled cells.
+  Contract renamed `…_proba_v5d_um.parquet → …_proba.parquet` (2p2fish to match). Fixed a
+  `PCT_RANK_COLS` train bug. Record: docs/13 §7 +
+  `/scratch/sessions/17_interim_summary/stage1_stage2_architecture.md`.
+- Next (session 18): plan to split into 3 CodeOcean capsules (extract+infer | labeling |
+  training+MLflow); per-session timestamped label assets, newest-wins merge.
