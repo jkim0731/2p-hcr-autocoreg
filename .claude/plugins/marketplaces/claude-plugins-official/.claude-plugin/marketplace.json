@@ -265,9 +265,10 @@
     },
     {
       "name": "auth0",
-      "description": "Add authentication to any app with Auth0. This plugin detects your framework, scaffolds the right Auth0 SDK integration, and guides you through login, logout, sessions, and protected routes — using current SDK patterns.",
+      "description": "Enterprise-grade auth, easy to implement. Add login, SSO, MFA, and access control to any app with framework-aware guidance.",
       "author": {
-        "name": "Auth0"
+        "name": "Auth0",
+        "url": "https://auth0.com"
       },
       "category": "security",
       "source": {
@@ -275,9 +276,9 @@
         "url": "https://github.com/auth0/agent-skills.git",
         "path": "plugins/auth0",
         "ref": "main",
-        "sha": "5ea574addd98d585edafde7ba7df9957cd04d0d3"
+        "sha": "838a181a235d8e563b437555794ddfe9bd60284b"
       },
-      "homepage": "https://auth0.com/docs/quickstart/agent-skills"
+      "homepage": "https://auth0.com"
     },
     {
       "name": "aws-agents",
@@ -609,7 +610,7 @@
       "source": {
         "source": "url",
         "url": "https://github.com/ChromeDevTools/chrome-devtools-mcp.git",
-        "sha": "5a9d6af743109e3bb9703cf0c9a46f9cb2a97480"
+        "sha": "6225ffbaf1ceb2d9d0f8b2f3b7380aa8a710b857"
       },
       "homepage": "https://github.com/ChromeDevTools/chrome-devtools-mcp"
     },
@@ -852,7 +853,7 @@
       "source": {
         "source": "url",
         "url": "https://github.com/CodSpeedHQ/codspeed.git",
-        "sha": "10e74bab4db2a97e008ceaa89977b08ad3be0485"
+        "sha": "2533b0cf879d39ea13ae9c80f5d97ec3aa2d3e1d"
       },
       "homepage": "https://codspeed.io"
     },
@@ -1306,7 +1307,7 @@
       "source": {
         "source": "url",
         "url": "https://github.com/atlassian/forge-skills.git",
-        "sha": "8c1c2488f213f8f4bf0647b87176c36549e61e3f"
+        "sha": "ea409cc73b8cac3b6710c3ca7976dd64e570a2fc"
       },
       "homepage": "https://developer.atlassian.com/platform/forge/"
     },
@@ -1423,7 +1424,7 @@
       "source": {
         "source": "url",
         "url": "https://github.com/heygen-com/hyperframes.git",
-        "sha": "fdb8f33fc099f0c7ba5ef3dfb033def561234e92"
+        "sha": "ae40498433de266999031d8230a232f89f4a9cad"
       },
       "homepage": "https://hyperframes.heygen.com"
     },
@@ -1540,6 +1541,26 @@
       "category": "development",
       "source": "./external_plugins/laravel-boost",
       "homepage": "https://github.com/anthropics/claude-plugins-public/tree/main/external_plugins/laravel-boost"
+    },
+    {
+      "name": "learn-with-coursera",
+      "description": "Turn any learning intent into a personalized Coursera experience. Asks three quick questions (topic, familiarity, preferred format), searches Coursera's catalog, and delivers the right next step — a course, hands-on project, short video, or live roleplay — then maps a path forward. Requires the Coursera connector for catalog tools.",
+      "author": {
+        "name": "Coursera"
+      },
+      "category": "learning",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/coursera/skills.git",
+        "path": "skills",
+        "ref": "main",
+        "sha": "ac28fd6ebf8584e3ee196159bd6d4514fa07de0f"
+      },
+      "strict": false,
+      "skills": [
+        "./learn-with-coursera"
+      ],
+      "homepage": "https://github.com/coursera/skills"
     },
     {
       "name": "learning-output-style",
@@ -1908,13 +1929,17 @@
         "url": "https://github.com/oracle/netsuite-suitecloud-sdk.git",
         "path": "packages/agent-skills",
         "ref": "master",
-        "sha": "43bacf43763e1eedd0892b4652be3d45df94f0e7"
+        "sha": "b3ff2a960eb4e2f39d645ba10789d7d583fbf051"
       },
       "strict": false,
       "skills": [
         "./netsuite-ai-connector-instructions",
         "./netsuite-sdf-roles-and-permissions",
-        "./netsuite-uif-spa-reference"
+        "./netsuite-uif-spa-reference",
+        "./netsuite-owasp-secure-coding",
+        "./netsuite-sdf-project-documentation",
+        "./netsuite-suitescript-records-reference",
+        "./netsuite-suitescript-upgrade"
       ],
       "homepage": "https://github.com/oracle/netsuite-suitecloud-sdk"
     },
@@ -2071,7 +2096,7 @@
       "source": {
         "source": "url",
         "url": "https://github.com/gopigment/ai-plugins.git",
-        "sha": "f7bb2190a3f072bd9be5175bde6a0aa9596fcaaa"
+        "sha": "9ca3af072cee634848c2fc10c41ad399cca7522a"
       },
       "homepage": "https://www.pigment.com"
     },
@@ -2276,7 +2301,7 @@
       "source": {
         "source": "url",
         "url": "https://github.com/quarkusio/quarkus-agent-mcp.git",
-        "sha": "2bcba2030e9dca23b18845d026af7b97ad18515a"
+        "sha": "63b88c3e8f9778146f6f2ce5964679a2d29f9164"
       },
       "homepage": "https://quarkus.io"
     },
@@ -2338,7 +2363,7 @@
       "source": {
         "source": "url",
         "url": "https://github.com/Digital-Process-Tools/claude-remember.git",
-        "sha": "02791ae02fce39217a360e53f3227183179814a9"
+        "sha": "afb83cc76af7242e2792e7ca88572550b386592d"
       },
       "homepage": "https://github.com/Digital-Process-Tools/claude-remember"
     },
@@ -2511,7 +2536,7 @@
         "url": "https://github.com/SAP/open-ux-tools.git",
         "path": "packages/fiori-mcp-server",
         "ref": "main",
-        "sha": "5f7ba664c63cdd8912233b8b7693ea343b4e3209"
+        "sha": "7f4ae6e74d4ff326b6306f67c27877b5e609b86d"
       },
       "homepage": "https://github.com/SAP/open-ux-tools/tree/main/packages/fiori-mcp-server"
     },
@@ -2681,7 +2706,7 @@
       "source": {
         "source": "url",
         "url": "https://github.com/slackapi/slack-mcp-plugin.git",
-        "sha": "4729a3eefeacf32548fc1bd27f0e51700a2a8d11"
+        "sha": "70302918f8e1492915c3f31cac275ce44d947b85"
       },
       "homepage": "https://github.com/slackapi/slack-mcp-plugin/tree/main"
     },
@@ -2839,7 +2864,7 @@
       "source": {
         "source": "url",
         "url": "https://github.com/JetBrains/teamcity-cli.git",
-        "sha": "55117e13846d1f66a99cc1cb4b763435ee6afe4d"
+        "sha": "cdd1f78121adc4d87362e8d871c13462dded13a5"
       },
       "homepage": "https://www.jetbrains.com/teamcity/"
     },
@@ -2870,7 +2895,7 @@
       "source": {
         "source": "url",
         "url": "https://github.com/togethercomputer/skills.git",
-        "sha": "86bdd6627675eac3f2055f028e4acdd4d1b03fb0"
+        "sha": "9815b94d8ffd8a0c56a0c91faf266e82df7ff59f"
       },
       "homepage": "https://www.together.ai"
     },

@@ -66,6 +66,10 @@
 			"mount": "HCR_790322_pairwise-unmixing_2026-04-20_00-00-01"
 		},
 		{
+			"id": "60273109-23bc-4ed9-9cae-2ce601bb54ee",
+			"mount": "model_3D-HCR-ROI_LGBM_4-class_2026-06-19_14-26-00"
+		},
+		{
 			"id": "61ec67e2-55cc-42f3-9623-f6342062b5fd",
 			"mount": "multiplane-ophys_767018_2025-02-13_14-09-49_cortical-zstack-seg_2025-10-08_15-36-00"
 		},
