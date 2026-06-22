@@ -5,8 +5,7 @@ echo "Installing optional repos..."
 cd / && git clone https://github.com/AllenNeuralDynamics/comb
 cd /comb && git checkout for_gcamp_validation && pip install -e .
 
-cd /
-git clone https://github.com/AllenNeuralDynamics/lamf-analysis
+cd / && git clone https://github.com/AllenNeuralDynamics/lamf-analysis
 cd /lamf-analysis && pip install -e .
 
 cd / && git clone https://github.com/jkim0731/2p2fish
@@ -14,16 +13,12 @@ cd /2p2fish && pip install -e .
 cd / &&git clone https://github.com/jkim0731/mfish-roi-classifier
 cd /mfish-roi-classifier && pip install -e .
 cd / && git clone https://github.com/AllenNeuralDynamics/capsule-3D-HCR-ROI-labeling
-cd /capsule-3D-HCR-ROI-labeling && pip install -e .
 cd / && git clone https://github.com/AllenNeuralDynamics/capsule-3D-HCR-ROI-classifier
-cd /capsule-3D-HCR-ROI-classifier && pip install -e .
 cd /&& git clone https://github.com/AllenNeuralDynamics/capsule-3D-HCR-ROI-classifier-training
-cd /capsule-3D-HCR-ROI-classifier-training && pip install -e .
 
 chmod -R a+rwX /lamf-analysis /comb 
 chmod -R a+rwX /2p2fish /mfish-roi-classifier 
 chmod -R a+rwX /capsule-3D-HCR-ROI-labeling /capsule-3D-HCR-ROI-classifier /capsule-3D-HCR-ROI-classifier-training
-
 
 
 # # Updating FIJI
