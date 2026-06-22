@@ -1,5 +1,17 @@
 # Grand Plan — Automated CZStack ↔ HCR Coregistration (Revised, 2026-04-18)
 
+> **STATUS UPDATE (2026-06-17):** the pipeline this roadmap planned is now
+> realized. Automatic coregistration runs end-to-end as a **2-step** process —
+> image-based rough/warm registration, then **soma-print** 3-D cell-cell matching
+> + iterative TPS (the geometric-matching candidate family won; shape-context and
+> Cellpose-SAM were tried and dropped). Code now lives in two repos — **`2p2fish`**
+> (`autocoreg`) and **`mfish-roi-classifier`** — and `code/dev_code` is legacy.
+> For the current state read **`docs/11 Work In Progress.md`**,
+> **`docs/12 Code repositories and how to run.md`**, and the long-form handoff
+> `/scratch/sessions/17_interim_summary/README.md`. The candidate catalogue below
+> remains useful as the design rationale and for not-yet-built pieces (e.g. the
+> manual-improvement QC app).
+
 > **Path note (2026-04-28):** `notebooks/`, `sessions/`, and
 > `full_automatic_execution_01/` were moved to
 > `/root/capsule/data/claude-data_ophys-mfish-autocoreg_260503/` (read-only). All references below

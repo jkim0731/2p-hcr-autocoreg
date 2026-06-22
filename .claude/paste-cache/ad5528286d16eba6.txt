@@ -1,0 +1,29 @@
+Launching GUI on the workstation desktop — label, then press q to quit...
+
+[label] building tight-bbox for 790322 ...
+[build-bbox] subject=790322
+
+GUI exited (code 1). Labels written under /scratch/labels.
+Add +100 more? re-run attach_data.ipynb cell 3, then re-run this cell.
+Done labeling? run create_label_asset.ipynb to publish.
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/mfish-roi-classifier/src/roi_classifier/cli.py", line 237, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/mfish-roi-classifier/src/roi_classifier/cli.py", line 225, in main
+    return _cmd_build_bbox(args)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/mfish-roi-classifier/src/roi_classifier/cli.py", line 133, in _cmd_build_bbox
+    df = build_tight_bbox_sid(sid, cache=True, force=args.force)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mfish-roi-classifier/src/roi_classifier/feat_tight_bbox.py", line 198, in build_tight_bbox_sid
+    return build_tight_bbox(load_subject(sid), cache=cache, force=force)
+                            ^^^^^^^^^^^^^^^^^
+  File "/mfish-roi-classifier/src/roi_classifier/benchmark_data_loader.py", line 639, in load_subject
+    hcr = _load_hcr_centroids(hcr_dir, coreg_dir)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mfish-roi-classifier/src/roi_classifier/benchmark_data_loader.py", line 243, in _load_hcr_centroids
+    raise FileNotFoundError(f"No HCR centroid file for {hcr_dir}")
+FileNotFoundError: No HCR centroid file for /root/capsule/data/HCR_790322_2025-11-05_13-00-00_processed_2025-11-10_20-36-20_HCR-ROI-label_2026-06-20_20-43-55

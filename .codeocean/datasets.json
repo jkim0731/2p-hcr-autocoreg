@@ -54,6 +54,10 @@
 			"mount": "HCR_767018_pairwise-unmixing_2026-03-06_12-00-00"
 		},
 		{
+			"id": "54e49dc6-0b4c-4a1e-ab52-ced571a03110",
+			"mount": "claude-data_ophys-mfish-autocoreg_main-claude_260616"
+		},
+		{
 			"id": "557ed1b4-fed2-4f26-9d9b-e7519f4fce07",
 			"mount": "Oi1_Oi4_confocal"
 		},
@@ -62,12 +66,12 @@
 			"mount": "HCR_790322_pairwise-unmixing_2026-04-20_00-00-01"
 		},
 		{
-			"id": "61ec67e2-55cc-42f3-9623-f6342062b5fd",
-			"mount": "multiplane-ophys_767018_2025-02-13_14-09-49_cortical-zstack-seg_2025-10-08_15-36-00"
+			"id": "60273109-23bc-4ed9-9cae-2ce601bb54ee",
+			"mount": "model_3D-HCR-ROI_LGBM_4-class_2026-06-19_14-26-00"
 		},
 		{
-			"id": "67a348d5-46b1-43af-8015-c985e3ba94b1",
-			"mount": "claude-data_ophys-mfish-autocoreg_soma-print_260616"
+			"id": "61ec67e2-55cc-42f3-9623-f6342062b5fd",
+			"mount": "multiplane-ophys_767018_2025-02-13_14-09-49_cortical-zstack-seg_2025-10-08_15-36-00"
 		},
 		{
 			"id": "6e8cb0ee-ddae-460b-aefb-41676e224dba",
@@ -115,7 +119,7 @@
 		},
 		{
 			"id": "b3edd86a-2233-4d66-82ef-c58e4a9ab3a1",
-			"mount": "claude-data_ophys-mfish-autocoreg_soma-print_260616_1"
+			"mount": "claude-data_ophys-mfish-autocoreg_soma-print_260616"
 		},
 		{
 			"id": "b620b6c7-2d7f-445c-9c52-7412e4b98992",
