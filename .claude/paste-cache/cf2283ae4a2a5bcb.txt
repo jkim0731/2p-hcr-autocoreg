@@ -1,0 +1,22 @@
+[build-features] subject=755252
+[load_subject] 755252: no coreg dir found ? HCR-only load (classifier feature path needs only HCR; cz/gfp/landmarks/coreg_table left empty).
+[755252] tight-bbox build | seg (Z,Y,X)=(1641,1847,1848) | 84233 centroids | z-strips [161,1412) n=10
+
+[755252] tbbox z-strips:   0%|          | 0/10 [00:00<?, ?strip/s]
+[755252] tbbox z-strips:  10%|?         | 1/10 [00:04<00:40,  4.46s/strip]
+[755252] tbbox z-strips:  20%|??        | 2/10 [00:09<00:36,  4.58s/strip]
+[755252] tbbox z-strips:  30%|???       | 3/10 [00:14<00:35,  5.02s/strip]
+[755252] tbbox z-strips:  40%|????      | 4/10 [00:21<00:34,  5.74s/strip]
+[755252] tbbox z-strips:  50%|?????     | 5/10 [00:29<00:32,  6.59s/strip]
+[755252] tbbox z-strips:  60%|??????    | 6/10 [00:37<00:28,  7.08s/strip]
+[755252] tbbox z-strips:  70%|???????   | 7/10 [00:45<00:22,  7.44s/strip]
+[755252] tbbox z-strips:  80%|????????  | 8/10 [00:53<00:14,  7.48s/strip]
+[755252] tbbox z-strips:  90%|????????? | 9/10 [00:58<00:06,  6.72s/strip]
+[755252] tbbox z-strips: 100%|??????????| 10/10 [01:01<00:00,  5.63s/strip]
+[755252] tbbox z-strips: 100%|??????????| 10/10 [01:01<00:00,  6.16s/strip]
+  [755252] tight-bbox: 77785/84233 cells found in seg in 62.0s
+  [755252] tight-bbox cache written ? /root/capsule/scratch/mfish_cache/hcr_cell_tight_bbox/755252_hcr_cell_tight_bbox_v1.parquet
+
+[755252] v2 extract | seg shape Z=1641 Y=1847 X=1848 | xy=0.9865 �m  z=1.0000 �m
+  [755252] tight bbox cache loaded: 77785 cells
+  [755252] v2 strips=10 chunks=48 (~2006 cells/chunk) workers=14

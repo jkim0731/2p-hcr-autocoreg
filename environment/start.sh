@@ -9,3 +9,5 @@ chmod -R a+wX /root/capsule/code
 chmod -R a+wX /results
 chmod o+rx /root/capsule/data
 chmod a+wX /
+
+bash /root/capsule/environment/vscode_setting.sh

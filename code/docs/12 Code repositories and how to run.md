@@ -157,3 +157,57 @@ modules (`surfaces_iter08`, `roi_area_sxy`, `surface_registration_v2`,
 
 Apply script (idempotent): `/scratch/dev_code_standalone_fix/apply.py`.
 For new work, edit the repos — not `dev_code`.
+
+---
+
+## 3-capsule HCR ROI-quality pipeline (2026-06-20)
+
+### Capsule 1 — `capsule-3D-HCR-ROI-classifier` (inference) [`ce67ff73-8963-4eed-ade8-4d3d5248a3f5`]
+- **No coreg dir.** Only the subject's `HCR_{sid}_*_processed_*` asset (405-only, HCR-only;
+  `benchmark_data_loader.load_subject` is coreg-optional).
+- **Model = the attached CodeOcean model data asset** under `/data`, auto-detected by FORMAT at
+  ANY depth (rglob to the dir holding `roi_quality_4class.txt` + `roi_quality_meta.json`), so the
+  MLflow `{asset}/{name}/model/artifacts/` layout works; no vendored model at run time. The huge
+  `HCR_*` asset is skipped during the scan. `--models_dir` overrides.
+- Runs **in-process** (no CLI subprocess). Contract `{sid}_roi_quality_proba.parquet` =
+  `hcr_id, p_bad, p_bad_ok, p_good, p_merged` (no `human_label`; no-voxel ROIs dropped).
+- `--max_cells N` = quick smoke (N lowest-z ROIs, isolated temp cache; production caches untouched).
+
+### Capsule 2 — `capsule-3D-HCR-ROI-labeling` (interactive labeling, cloud workstation)
+Human-labels a smart subset of ROIs to grow the training set. **Not a Reproducible Run** — three
+notebooks driven on the workstation desktop (the `roi-classifier-label` GUI needs a display):
+1. **`code/attach_data.ipynb`** — per subject, finds + attaches Capsule 1's classifier output
+   (`3D-HCR-ROI-4-class-label`: `{sid}_features_all.parquet` + `{sid}_roi_quality_proba.parquet`),
+   the R1 HCR data it was derived from (via `provenance`), and **prior `HCR-ROI-human-labeling`
+   assets** (tag search). Then builds the candidate list (`make_candidates.py` →
+   `/scratch/label_candidates.csv`): mostly keep/reject-**borderline** ROIs (smallest
+   `|P(good)+P(bad_ok) − 0.5|`) + a few **confident** per class, **excluding already-labeled** ROIs.
+2. **`code/run_labeling.ipynb`** (= `bash code/label.sh "<sids>"`) — rebuilds the tight-bbox cache
+   and opens the GUI over the candidates. Labels saved to **`/scratch/labels`** (persistent on a
+   workstation) — NOT `/results` (ephemeral there). The GUI **reads** Capsule 1's proba contract
+   (`score = P(good)+P(bad_ok)`); no model needed at label time.
+3. **+100 more:** re-run `attach_data.ipynb` cell 3 (excludes what was just labeled → next batch)
+   → re-run `run_labeling.ipynb`. Prior+current labels are read & merged newest-wins from
+   `/scratch/all_labels`.
+4. **`code/create_label_asset.ipynb`** — publishes `/scratch/labels` as a new
+   `HCR-ROI-human-labeling` asset (`CloudWorkstationSource`), which Capsule 3 then consumes.
+
+### Capsule 3 — `capsule-3D-HCR-ROI-classifier-training` (training, native MLflow)
+- Enable **Capsule Settings → MLflow tab → "Track this Capsule"**; `MLFLOW_TRACKING_URI` is
+  auto-injected (never set it; no `set_experiment`). See `code/temp/MLflow_in_CodeOcean.md`.
+- Input = label data assets only (auto-discovered under `/data`, merged newest-wins); **subjects
+  derived from the labels** (no subject arg; trains all labeled subjects).
+- No base model: feature schema is derived from the labels' embedded features (strict same-set).
+- Logs a registrable **pyfunc** model (`mlflow.pyfunc.log_model`, bundles the 4-class booster +
+  meta) → register from the MLflow UI → CodeOcean Models dashboard → attach to Capsule 1 as `/data` model.
+
+### Monitor — `Jinho_pipeline-monitor_HCR-ROI-classifier`  (origin AllenNeuralDynamics)
+- Input `subject_id` only (comma-sep for many). Mirrors `Jinho_pipeline-monitor_ROICaT`.
+- Finds each subject's **Round-1 HCR processed** asset (tag `HCR` + name `HCR_{sid}`, `_processed_`,
+  earliest date, tie→latest-created; see `step_1_process_files.ipynb`) and triggers Capsule 1
+  (`HCR_CLASSIFIER_CAPSULE_ID = ce67ff73-…`) via the all-users monitor
+  (`PIPELINE_MONITOR_CAPSULE_ID = 567b5b98-8d41-413b-9375-9ca610ca2fd3`), capturing the result
+  (process suffix `3D-HCR-ROI-4-class-label`). Mounts the HCR asset under its own name so Capsule 1's
+  `HCR_{sid}_*_processed_*` glob resolves it.
+- A reproducible run can't attach a data asset to itself — that's why the HCR asset is attached from
+  the monitor's `RunParams`. (Assumes Capsule 1's pre-attached model persists on an API-triggered run.)

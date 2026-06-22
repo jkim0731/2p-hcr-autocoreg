@@ -223,3 +223,57 @@ frac_kept_opening, volume_um3_opened, c405_shell_minus_core_p50`. Production set
   **`{sid}_stage2_4class_proba.parquet`**. Old stage-1 model archived at
   `models/_archive_v5d_stage1/`. Meta `version = v6_selfcontained_c2` + provenance (commit,
   n_labels, feature lineage). All changes uncommitted (working tree).
+
+## 8. Single 4-class model; binary keep = derived marginal (2026-06-19)
+
+The separate binary keep-classifier was **removed** (supersedes the §7 `…_binary.txt` head).
+The keep score is now the 4-class marginal **`P(good) + P(bad_ok)`**, derived in `predict`.
+Rationale (out-of-fold A/B):
+- 4-class marginal: binary AUC **0.9265**, AP 0.9456, Brier 0.1110.
+- dedicated binary head: AUC 0.9236 — i.e. matched/beaten by the marginal.
+- the two disagreed on the keep/reject call for **~8%** of cells; consolidating removes that.
+
+Decision rule: keep iff `P(good)+P(bad_ok) ≥ 0.5` — Bayes-optimal for the binary objective
+under calibration; beats argmax-then-group (0.838 vs 0.833 acc) and exposes a tunable
+threshold. Only `roi_quality_4class.txt` + `roi_quality_meta.json` are produced;
+`roi_quality_binary.txt`, `_train_binary`, `LGB_BINARY`, `MODEL_BINARY` deleted.
+
+## 9. Headline metric: pooled out-of-fold (micro)
+
+Per-subject LOSO means are fragile when a held-out subject has a single class or few labels
+(undefined AUC silently dropped from the mean). The **headline is now the pooled OOF (micro)
+metric** — every held-out prediction in one pool — defined regardless of per-subject balance.
+Per-subject means kept as diagnostics; degenerate folds flagged (`loso_nan_auc_subjects`,
+`loso_low_n_subjects`, `loso_valid_auc_folds`; `LOSO_MIN_EVAL=20`).
+
+## 10. Why not all centroids are scored ("X/Y cells found in seg")
+
+Cells are matched to `segmentation_mask_orig_res.zarr` by **label id**; a cell is "found" only
+if its id has ≥1 voxel in the mask. The unfound fraction (e.g. 755252: 6448/84233 ≈ 7.7%) is
+**scattered across id + z, flat within-strip** (not boundary loss — big cells are merged across
+z-strips). They are centroids with **zero voxels** in the orig-res mask: `cell_centroids.npy`
+lists cells the orig-res mask doesn't contain (upstream HCR provenance/resolution mismatch, not
+a classifier bug). These are now **dropped from the contract** (can't be feature-extracted /
+coregistered).
+
+## 11. NaN feature values are expected and informative
+
+NaN counts beyond the no-voxel cells are by-design, by family:
+- raw-mask features: NaN only for no-voxel cells;
+- `*_opened` features: NaN when the morphological opening (ball r=3) erodes a small cell to
+  zero voxels (~8k cells on 755252); 4 µm core/width need a still-larger opened mask;
+- peak/waist features (`axis3d_peak_*`, `proj_*_peak_prom_max`): NaN unless ≥1 (or ≥2) peaks —
+  most single-blob cells → NaN; the merged-cell detector fires only on multi-lobed candidates
+  (`peak_sep` NaN for ~83k/84k);
+- `nbr_*`: NaN for the few isolated cells (<K=6 neighbours).
+LightGBM handles NaN natively and trains on the same NaN structure → no imputation; NaN is a
+valid signal ("opening emptied this cell" / "no waist" / "isolated").
+
+## 12. Naming: removed internal `v1`/`v2`/… extractor tags (2026-06-20)
+
+The tight-bbox cache `…_hcr_cell_tight_bbox_v1.parquet` → `…_hcr_cell_tight_bbox.parquet`, and
+`feat_shape` logs/docstrings de-versioned across `feat_tight_bbox`/`feat_shape`/`axis_features`/
+`surface_features`/`protrusion_features`/`feat_per_cell_crops`. These were cache-format /
+extractor-generation tags, separate from the model dev-history names (stage2/v5d/vN) purged
+earlier. Existing `_v1` caches rebuild once. (Left genuine non-version `v0/v1` axis vectors,
+`lambda1/2/3`, `subgoal vX.x`.)
