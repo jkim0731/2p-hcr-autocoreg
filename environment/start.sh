@@ -4,7 +4,7 @@ set -e
 echo "[startup] fixing permissions..."
 
 chown -R claude-user:claude-user /root/capsule/.claude
-chmod -R a+wX /scratch
+find /scratch -user root -exec chmod a+wX {} + 2>/dev/null
 chmod -R a+wX /root/capsule/code
 chmod -R a+wX /results
 chmod o+rx /root/capsule/data
