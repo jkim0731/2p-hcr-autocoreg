@@ -7,6 +7,16 @@ You are operating in a controlled research environment.
 
 Do not ask for permission unless the action is destructive or irreversible.
 
+## 🗂️ Storage rule (MANDATORY)
+
+**Never write to `/` (the filesystem root) or `/tmp` — not even for short-term or
+throwaway storage.** Use `/scratch` for everything transient or large: put scratch/temp
+files under **`/scratch/tmp`** (create it if missing) and per-session outputs under
+`/scratch/sessions/<NN>_<name>/`. This applies to your own temp files, tool/library temp
+dirs, env vars (e.g. `TMPDIR`, and any `MFISH_*`/app output dirs that default to `/tmp`),
+and background-command logs. Code and small durable artifacts still go under
+`/root/capsule/code/`; big outputs go under `/scratch`.
+
 ## 🧭 Purpose
 
 This file defines **how to approach problems and reason effectively**, not project knowledge.
@@ -312,3 +322,52 @@ When appropriate, structure responses as:
 
 **Next Step**
 - recommended direction
+
+
+# Project Addendum (supplements code/CLAUDE.md)
+
+## Temporary Files
+
+**NEVER write to `/tmp` or root filesystem (`/`). Always use `/scratch/tmp`.**
+
+- `/tmp` and all of `/` share a 5GB overlay ? it fills completely and locks the environment
+- `/scratch/` is the network scratch volume (8 exabytes, always writable)
+- **Enforcement** (automatic via `.claude/settings.json`):
+  - `TMPDIR`, `TEMP`, `TMP`, `PIP_CACHE_DIR`, `PIP_TMPDIR` are all set to `/scratch/tmp*` in env
+  - `~/.config/pip/pip.conf` forces pip to `/scratch/tmp` for all cache/build
+  - A `PreToolUse` hook auto-prepends `TMPDIR=/scratch/tmp PIP_CACHE_DIR=/scratch/tmp/pip-cache` to any bare `pip install` command
+  - A `SessionStart` hook re-applies pip config and `ulimit -c 0` each session
+
+When writing scripts that create temp files:
+```python
+TMPDIR = "/scratch/tmp"
+os.makedirs(TMPDIR, exist_ok=True)
+```
+
+**pip installs:**: always use --no-cache-dir
+
+## Parallel Processing
+
+**Default to parallel processing for multi-session/multi-video workloads.**
+
+Hardware: 16 CPUs, 124 GB RAM ? plenty for concurrent per-session workers.
+
+For TF inference across N sessions, use `multiprocessing` with `spawn` context (not `fork` ? TF is not fork-safe):
+
+```python
+import multiprocessing as mp
+
+ctx = mp.get_context('spawn')
+with ctx.Pool(processes=N_SESSIONS) as pool:
+    results = pool.map(process_session_fn, session_args)
+```
+
+Each worker loads its own TF session with limited threads to avoid over-subscription:
+```python
+cfg = tf.compat.v1.ConfigProto(
+    intra_op_parallelism_threads=3,   # 5 sessions � 3 = 15 ? 16 CPUs
+    inter_op_parallelism_threads=1,
+)
+```
+
+For non-TF parallel work (video decoding, FaceMap, etc.), `joblib.Parallel(n_jobs=-1)` or `ProcessPoolExecutor` are fine with `fork`.

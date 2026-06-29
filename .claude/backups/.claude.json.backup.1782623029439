@@ -41,7 +41,7 @@
     "fotw-campaign-upsell": 70,
     "goal-command-nudge": 70,
     "team-onboarding-share": 70,
-    "agents-view-multiclauding": 91
+    "agents-view-multiclauding": 78
   },
   "promptQueueUseCount": 1715,
   "btwUseCount": 15,
@@ -896,7 +896,7 @@
     "remote-control": 1,
     "install-github-app": 2,
     "install-slack-app": 2,
-    "agents-view-multiclauding": 2,
+    "agents-view-multiclauding": 1,
     "web-app": 1,
     "double-esc-code-restore": 1,
     "continue": 1,
