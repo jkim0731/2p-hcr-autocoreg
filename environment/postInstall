@@ -19,11 +19,14 @@ cd / && git clone https://github.com/AllenNeuralDynamics/capsule-3D-FISH-ROI-cla
 cd / && git clone https://github.com/AllenNeuralDynamics/capsule-3D-FISH-ROI-classifier-training
 cd / && git clone https://github.com/AllenNeuralDynamics/capsule-2p-3DFISH-autocoreg
 cd / && git clone https://github.com/AllenNeuralDynamics/interactive-capsule-2p-3DFISH-autocoreg-QC
+cd / && git clone https://github.com/AllenNeuralDynamics/Jinho_pipeline-monitor_HCR-ROI-classifier.git
 
 chmod -R a+rwX /lamf-analysis /comb 
 chmod -R a+rwX /2p2fish /mfish-roi-classifier 
 chmod -R a+rwX /capsule-3D-FISH-ROI-labeling /capsule-3D-FISH-ROI-classifier /capsule-3D-FISH-ROI-classifier-training
 chmod -R a+rwX /capsule-2p-3DFISH-autocoreg /interactive-capsule-2p-3DFISH-autocoreg-QC
+chmod -R a+rwX /Jinho_pipeline-monitor_HCR-ROI-classifier
+
 
 # # Updating FIJI
 # # Can be commented out if not used
