@@ -28,30 +28,30 @@ runs **end-to-end as a 2-step process** and has been migrated out of the
 
 **Step 1 — rough/warm registration** (`autocoreg` package), order
 **surfaces → sxy → top-slab 2-D reg → sz → overlap crop**:
-- Pia/surface fits — `surfaces_iter08` (`get_cz_surface_iter08`,
+- Pia/surface fits — `initial_registration.surfaces` (`get_cz_surface_iter08`,
   `get_hcr_top_surface_iter07`, `get_hcr_bottom_surface_iter08`).
-- Lateral scale `sxy` — `roi_area_sxy.estimate_sxy_min_rule` (**PRODUCTION,
+- Lateral scale `sxy` — `initial_registration.lateral_scale.estimate_sxy_min_rule` (**PRODUCTION,
   promoted 2026-06-04**): min-rule 2× ¼-FOV, `hcr_slab = min(p99(HCR GFP+∩ok∩
   ¼-FOV depth), 2·p99(CZ depth))`, `cz_slab = hcr_slab/2`, `sxy = √(median HCR
   max-xsection / median CZ max-xsection)`. GT-free; the 2× is a heuristic, not
   measured sz (that would be circular). Recovers thin-HCR 782149 (1.7336).
-- 2-D top-slab registration — `surface_registration_v2.get_surface_registration`:
+- 2-D top-slab registration — `initial_registration.surface_registration.get_surface_registration`:
   best of rigid/affine/PWR 3×3/PWR 4×4, scored as Pearson NCC of warped-CZ binary
   vs raw 488 MIP. **Registration MIP promoted 2026-06-04 to CZ 0–80 / HCR
   0–150 µm.**
-- Axial scale `sz` — `sz_estimator.get_sz`: slab side-view FFT-NCC sweep (6/6
+- Axial scale `sz` — `initial_registration.axial_scale.get_sz`: slab side-view FFT-NCC sweep (6/6
   subjects exact-match to the iter-7 GT peak).
-- Lock + crop — `locked_prior_warm`, `overlap_crop` (cuts GFP+ search ~7×).
+- Lock + crop — `initial_registration.locked_prior`, `initial_registration.overlap_crop` (cuts GFP+ search ~7×).
 
 **Step 2 — soma-print fine registration** (`autocoreg` package):
-- Descriptor — `soma_print.py` (Wang 2026 adapted): per-cell m-NN relative
+- Descriptor — `finetune_soma_print/descriptor.py` (Wang et al. 2026, adapted): per-cell m-NN relative
   vectors; pair score = mean of n-best of m_cz × m_hcr vector distances
   (production m_cz=15, m_hcr=30, n=5).
-- Matcher — `run_step3_v3.py` (spec `step3_v3_spec_2026-06-01.md`): per round,
+- Matcher — `finetune_soma_print/matcher.py` (spec `step3_v3_spec_2026-06-01.md`): per round,
   candidates within **fixed R_cand=150 µm** → **mutual-best** → **round-0-only
   local-flow** pre-filter → **anchor-vote** gate (production) → fit **TPS**,
   re-warp, iterate to convergence (e.g. 790322: 667→692→698). Gate alternatives
-  compared: LR (high-precision/low-recall), NCC (image-validated → kept as a
+  compared: `likelihood_ratio` (high-precision/low-recall), `ncc` (image-validated → kept as a
   **QC validator**, not the primary sweep).
 - Performance (anchor_vote, pose-independent GT, 2026-06-04): recall 0.87–0.97,
   precision dominated by silence-FP (likely-real, unlabeled). See the interim

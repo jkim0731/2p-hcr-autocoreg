@@ -14,14 +14,16 @@ cd / && git clone https://github.com/jkim0731/2p2fish
 cd /2p2fish && pip install -e .
 cd / &&git clone https://github.com/jkim0731/mfish-roi-classifier
 cd /mfish-roi-classifier && pip install -e .
-cd / && git clone https://github.com/AllenNeuralDynamics/capsule-3D-HCR-ROI-labeling
-cd / && git clone https://github.com/AllenNeuralDynamics/capsule-3D-HCR-ROI-classifier
-cd /&& git clone https://github.com/AllenNeuralDynamics/capsule-3D-HCR-ROI-classifier-training
+cd / && git clone https://github.com/AllenNeuralDynamics/capsule-3D-FISH-ROI-labeling
+cd / && git clone https://github.com/AllenNeuralDynamics/capsule-3D-FISH-ROI-classifier
+cd / && git clone https://github.com/AllenNeuralDynamics/capsule-3D-FISH-ROI-classifier-training
+cd / && git clone https://github.com/AllenNeuralDynamics/capsule-2p-3DFISH-autocoreg
+cd / && git clone https://github.com/AllenNeuralDynamics/interactive-capsule-2p-3DFISH-autocoreg-QC
 
 chmod -R a+rwX /lamf-analysis /comb 
 chmod -R a+rwX /2p2fish /mfish-roi-classifier 
-chmod -R a+rwX /capsule-3D-HCR-ROI-labeling /capsule-3D-HCR-ROI-classifier /capsule-3D-HCR-ROI-classifier-training
-
+chmod -R a+rwX /capsule-3D-FISH-ROI-labeling /capsule-3D-FISH-ROI-classifier /capsule-3D-FISH-ROI-classifier-training
+chmod -R a+rwX /capsule-2p-3DFISH-autocoreg /interactive-capsule-2p-3DFISH-autocoreg-QC
 
 # # Updating FIJI
 # # Can be commented out if not used

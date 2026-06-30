@@ -36,10 +36,10 @@ autocoreg run 790322             # full pipeline on one subject (GT-free)
 autocoreg run 790322 --qc        # + launch the QC viewer after matching
 ```
 
-Pipeline stages (all GT-free): 1) surface fitting (`surfaces_iter08`) →
-2) sxy (`roi_area_sxy.estimate_sxy_min_rule`) → 3) surface registration
-(`surface_registration_v2`) → 4) sz (`sz_estimator.get_sz`) → 5) matcher
-(`run_step3_v3.run_subject`).
+Pipeline stages (all GT-free): 1) surface fitting (`initial_registration.surfaces`) →
+2) sxy (`initial_registration.lateral_scale.estimate_sxy_min_rule`) → 3) surface registration
+(`initial_registration.surface_registration`) → 4) sz (`initial_registration.axial_scale.get_sz`) →
+5) matcher (`finetune_soma_print.matcher.run_subject`).
 
 Config via env vars: `MFISH_DATA_ROOT` (default `/root/capsule/data`),
 `MFISH_CACHE_DIR` (default `/root/capsule/code/dev_code`), `MFISH_ROI_QUALITY_DIR`
@@ -211,3 +211,35 @@ notebooks driven on the workstation desktop (the `roi-classifier-label` GUI need
   `HCR_{sid}_*_processed_*` glob resolves it.
 - A reproducible run can't attach a data asset to itself — that's why the HCR asset is attached from
   the monitor's `RunParams`. (Assumes Capsule 1's pre-attached model persists on an API-triggered run.)
+
+## autocoreg package refactor (2026-06-29, branch `refactor`)
+
+The flat `autocoreg` package was reorganised into a modular two-stage protocol; the
+matcher gate/stage names were made descriptive and the output variant renamed.
+Behaviour is unchanged (790322 matcher output byte-identical: 737 pairs, soma |Δ|<1e-14).
+
+Layout:
+- `initial_registration/` — rough/warm reg: `surfaces`, `lateral_scale` (sxy),
+  `surface_registration`, `axial_scale` (sz), `locked_prior`, `overlap_crop`,
+  `coarse_align`, + surface/2-D-registration helpers.
+- `finetune_soma_print/` — soma-print fine matching: `descriptor`, `pool_prep`, `tps`,
+  `scoring`, `matcher`, `local_ncc`, `loo_image_ncc`.
+- `io/` — shared loaders: `subjects`, `inputs`, `centroids`, `hcr_image`, `cz_volume`,
+  `gfp_threshold`.
+- `qc/` — PyQt5 viewer + artifact builder + launcher.
+- `archive/` — superseded protocols kept for comparison (never imported by production):
+  `shape_context`, `oracle_benchmark`, `locked_benchmark`, `refined_benchmark`,
+  `iterative_matcher`.
+
+Renames:
+- module `run_step3_v3` → `finetune_soma_print.matcher`; `soma_print` →
+  `finetune_soma_print.descriptor`; `surfaces_iter08` → `initial_registration.surfaces`;
+  `roi_area_sxy` → `…lateral_scale`; `sz_estimator` → `…axial_scale`;
+  `surface_registration_v2` → `…surface_registration`; `locked_prior_warm` → `…locked_prior`;
+  `benchmark_analysis` → `io.hcr_image`; `benchmark_data_loader` → `io.subjects`;
+  `data` → `io.inputs`.
+- matcher gate `lr` → `likelihood_ratio`; Stage-2 `wang` / `--wang_addendum` →
+  `anchor_restricted` / `--no-anchor-restricted`.
+- variant `step3_v3_anchor_vote_wang_end` → **`anchor_vote_anchor_restricted`**; output file
+  `matches_wang_round*.csv` → `matches_anchor_restricted_round*.csv` (QC code still reads the
+  legacy names). Existing `/scratch` data + variant-keyed QC labels/manual-matches were migrated.
