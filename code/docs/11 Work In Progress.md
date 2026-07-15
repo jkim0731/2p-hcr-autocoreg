@@ -1,6 +1,7 @@
 # Work In Progress
 
-_Current-state snapshot. Last major update: **2026-06-17**._
+_Current-state snapshot. Last major update: **2026-06-17**; coregistration CodeOcean capsules
+added **2026-06-30** (see `docs/12` §"CZ↔HCR coregistration capsules")._
 _Long-form handoff: `/scratch/sessions/17_interim_summary/README.md`._
 _How to run / where the code lives: `docs/12 Code repositories and how to run.md`._
 
@@ -20,7 +21,8 @@ runs **end-to-end as a 2-step process** and has been migrated out of the
 | **Presentation video + figures** | ✅ done (session 16) |
 | 3-D shape-context matcher ("ROI ContextNet") | ❌ abandoned (soma-print won) |
 | Cellpose-SAM resegmentation | ❌ abandoned for now (no quality gain; GPU-gated) |
-| **QC app** | 🟡 ~half done (pass/fail labeller built; manual-improvement app not built) |
+| **QC app** | ✅ built — `autocoreg_qc` (pass/fail least-confident-first + manual add/fix w/ live TPS); wrapped by the interactive coregistration capsule |
+| **Coregistration CodeOcean capsules** (2026-06-30) | ✅ built (staged, not pushed): A `capsule-2p-3DmFISH-autocoreg` (reproducible run → matches + QC artifacts + per-step QC PNGs/GIFs + pose); B `interactive-capsule-2p-3DFISH-autocoreg-QC` (GUI QC → `{sid}_{czdt}_coreg-table.csv` data asset). See `docs/12`. |
 
 ---
 
@@ -102,7 +104,12 @@ See `docs/12 Code repositories and how to run.md`.
 
 ---
 
-## QC app (≈ half done)
+## QC app (✅ DONE — 2026-06-30)
+
+_Both halves built: the `autocoreg_qc` viewer (pass/fail least-confident-first + manual add/fix
+with live per-axis TPS re-warp) and, now, the **interactive coregistration capsule** that wraps it
+and exports the final `{sid}_{czdt}_coreg-table.csv` data asset (see `docs/12` §"CZ↔HCR
+coregistration capsules"). Original status below, kept for history._
 
 - **Pass/fail labeller — BUILT.** Per-CZ-ROI / per-pair reviewer over matcher
   output (cube view: 488 background, CZ contour, matched HCR contour, neighbour
@@ -173,9 +180,14 @@ rankings are qualitatively unchanged (anchor_vote still leads).
 
 ## Open items / next steps
 
-1. Build the **manual-improvement QC app** (remaining half of QC).
-2. Relabel **767018** ROI GT (under-labeled → inflated silence-FP).
-3. ~~mfish-roi-classifier cold-start builders missing~~ **DONE 2026-06-17** —
+1. ~~Build the **manual-improvement QC app** (remaining half of QC).~~ **DONE 2026-06-30** —
+   `autocoreg_qc` manual add/fix + the interactive coregistration capsule (coreg-table asset). See `docs/12`.
+2. **Push the coregistration capsules** (A `capsule-2p-3DmFISH-autocoreg`, B
+   `interactive-capsule-2p-3DFISH-autocoreg-QC`) + `2p2fish` (`autocoreg.qc.positions`), rebuild
+   capsule envs, then validate end-to-end on a fresh subject. (Staged, root commit pending —
+   `/scratch/sessions/21_coreg_capsules/commit_qc_changes.sh`.)
+3. Relabel **767018** ROI GT (under-labeled → inflated silence-FP).
+4. ~~mfish-roi-classifier cold-start builders missing~~ **DONE 2026-06-17** —
    the refactor dropped two builders (tight-bbox and per-cell crops); both ported
    as `roi_classifier/feat_tight_bbox.py` + `feat_per_cell_crops.py` with CLI
    `build-bbox` / `build-crops` / `build-features` (chain: bbox → crops → 4 feature
@@ -189,6 +201,6 @@ rankings are qualitatively unchanged (anchor_vote still leads).
    original features + `predict` reproduces the auto-coreg keep-set 97–98 % on 3
    subjects. And parallelized v2/v3 z-strip extraction (`MFISH_FEAT_WORKERS`).
    Full record: **`docs/13 ROI classifier um-vs-vox decision and reconciliation.md`**.
-4. Revisit Cellpose-SAM only if a real segmentation-gain case appears.
-5. Keep NCC as the soft/top-2 QC validator (ceiling ~86 % argmax / 94 % top-2;
+5. Revisit Cellpose-SAM only if a real segmentation-gain case appears.
+6. Keep NCC as the soft/top-2 QC validator (ceiling ~86 % argmax / 94 % top-2;
    do not build a hard argmax gate — too lossy).

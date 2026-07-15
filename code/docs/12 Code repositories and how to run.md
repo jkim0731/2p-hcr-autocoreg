@@ -243,3 +243,106 @@ Renames:
 - variant `step3_v3_anchor_vote_wang_end` → **`anchor_vote_anchor_restricted`**; output file
   `matches_wang_round*.csv` → `matches_anchor_restricted_round*.csv` (QC code still reads the
   legacy names). Existing `/scratch` data + variant-keyed QC labels/manual-matches were migrated.
+
+## CZ↔HCR coregistration capsules (2026-06-30)
+
+Two CodeOcean capsules that wrap the `autocoreg` package end-to-end, modeled on the
+3-capsule HCR-ROI pipeline above. Staged + git-committed in `/scratch/sessions/21_coreg_capsules/`
+and placed at `/`; remotes set, **not pushed yet** (`.git` root-owned → commit/push via the root
+script `/scratch/sessions/21_coreg_capsules/commit_qc_changes.sh`, which commits THREE repos:
+`/2p2fish` + both capsules — then push + rebuild capsule envs, postInstall cache-bust `260629-01`).
+
+### Capsule A — `capsule-2p-3DmFISH-autocoreg` (reproducible run)  [github AllenNeuralDynamics]
+- From the `capsule-3D-HCR-ROI-classifier` template. `code/run_capsule.py` runs the full GT-free
+  pipeline in-process (surfaces → sxy → surface-registration → sz → matcher `anchor_vote` +
+  `anchor_restricted` → `build_qc_artifacts` → `score_final_pairs`), all via the installed
+  `autocoreg` package.
+- App params: `subject_id` (req), `gate` (def `anchor_vote`), `build_qc` (def 1), `anchor_restricted` (def 1).
+- **Requires** the Capsule-1 `HCR_{sid}_*_HCR-ROI-label_*` asset attached (matcher gates the HCR
+  pool on `{sid}_roi_quality_proba.parquet`; auto-resolved, fails if absent). Also attach the
+  subject's CZ/HCR assets (coreg dir, HCR processed, czstack registration + segmentation).
+- **Output asset is per-subject + FLAT** (no `<variant>/<sid>` nesting — name + data_description.json
+  carry sid; processing.json carries gate/variant). Layout under `/results`:
+  `matches/` (matcher CSVs), `for_qc_app/` (GUI cell-matching QC inputs: warped-CZ + seg volumes +
+  `final_pairs.csv` + `positions.csv`), `qc/` (per-step QC of the pipeline itself), `registration/`
+  (the pose JSONs: surfaces + sz + surface_registration — persisted, reused downstream),
+  `coreg_manifest.json`. Internal `<variant>/<sid>` nesting + bulky per-cell caches stay transient
+  in `/root/capsule/scratch/autocoreg_work`.
+- **`qc/` per-step images** (`code/pipeline_qc.py::build_pipeline_qc`, runs even at build_qc=0 for
+  the non-GIF figs): 01 surface fit per modality (HCR over the COMBINED 405+488+561+594 volume it
+  was fit to, not 488), 02 ROUGH locked-prior alignment xz/yz cross-sections (pre-matcher), 03 sxy
+  area-hist + matched-depth bands, 04 surface-reg 4-method NCC + mode-selection, 05 sz sweep
+  (sz_lp depth-ratio prior vs sz_best NCC-peak), 06 matched/unmatched centroid xy/xz/yz (z-flipped,
+  green-dot/magenta-×), and **FINAL-registration sweep GIFs** `07_sweep_image_{topdown,sideways}`
+  (warped CZ 488 from `cz_warped_in_hcr_um.tif` = matcher TPS, over HCR 488) + `08_sweep_rois_*`
+  (slab-MIP CZ vs HCR ROIs, overlap=white) — image+ROI on the same `bbox_cz_warped` grid so they
+  line up and match the QC app. Each GIF has a `<name>_frames/` PNG-pages folder.
+
+### Capsule B — `interactive-capsule-2p-3DFISH-autocoreg-QC` (interactive QC, cloud workstation)
+- From the `capsule-3D-HCR-ROI-labeling` template. **Not a Reproducible Run.** `code/`:
+  1. `attach_data.ipynb` — find+attach Capsule-A result + its provenance inputs (raw CZ/HCR +
+     ROI-quality); the asset is flat, so it reconstructs the `<variant>/<sid>` layout the GUI
+     expects under `/scratch/autocoreg_outputs/{qc,matches}` (reading variant+sid from the
+     manifest) and **seeds the package cache from `registration/`** so the GUI reuses the exact pose.
+  2. `run_qc.ipynb` / `qc.sh` — the `autocoreg_qc` PyQt5 viewer (review + manual add/fix; least-
+     confident first).
+  3. `make_coreg_table.py` + notebook — builds `{sid}_{czstack-acq-datetime}_coreg-table.csv`.
+     Positions precedence: GUI "Export all positions CSV" → Capsule-A-shipped `positions.csv`
+     (+layer manual matches from the qt-labels' hcr_id via centroids_um) → headless offscreen
+     export → ids+soma. **Qt-free / GUI-free** when the shipped positions exist (no 3 GB recompute).
+     QC semantics: keep good/unreviewed/manual, drop bad/unsure + unmatched.
+  4. `create_coreg_asset.ipynb` — publish `/scratch/coreg_tables` as a `czstack-hcr-coreg-table`
+     data asset (CloudWorkstationSource; session-attached assets = provenance).
+- README has a real `autocoreg_qc` screenshot (`docs/qc_app_overview.png`, captured by
+  `docs/grab_qc_app_screenshot.py`).
+
+### Shared change in `2p2fish` — `autocoreg/qc/positions.py` (single source of truth)
+New Qt-free module (`POS_COLS, position_row, cz_world_from_seg, compute_pair_positions,
+load_derived_from_artifacts, positions_from_artifacts, write_positions_csv`). `qc/app.py` was
+refactored to route its "Export all positions CSV" + `_positions_for` + the `cz_world` cold path
+through it, so the GUI export and Capsule-A's `positions.csv` are identical (790322: headless ==
+GUI baseline to float32). Caveat: GUI `cz_in_hcr` is TPS-warped, the shipped baseline is the
+`cz_world` seg-centroid — same correspondence, ~tiny coord diff.
+
+### Monitor — `Jinho_pipeline-monitor_2p-3DFISH-autocoreg`  (github AllenNeuralDynamics)
+Adapted from `Jinho_pipeline-monitor_HCR-ROI-classifier`. Per subject it finds + attaches the
+autocoreg inputs (mirroring `code/manual workflow/step_1_process_files.ipynb`) and triggers
+Capsule A via the all-users monitor (`567b5b98-…`), capturing the result with suffix
+**`2p-3DmFISH-autocoreg`** (matched by Capsule B's `attach_data`):
+- **R1 HCR** processed (earliest `_processed_`; tie→latest-created) — same as the HCR monitor;
+- the **LATEST cortical z-stack registration** at `czstack_xy_size` µm (param, default 400, 700
+  for some sessions) via `zstack_utils.get_cortical_zstack_reg_df` (filter `xy_size_um`, sort,
+  iloc[-1]) + the **segmentation** derived from it (`get_derived_assets('cortical-zstack-
+  segmentation')` whose `provenance.data_assets` includes the chosen reg id);
+- the **`HCR-ROI-label`** classifier output (tag search, latest).
+If the latest cortical z-stack at that xy_size is **not processed** (no registration +
+segmentation), it stops that subject and prints that the z-stack must be processed first.
+Env adds **comb + lamf-analysis** (for `zstack_utils`/`code_ocean_utils`). Params: `subject_id`
+(comma-sep), `czstack_xy_size`. **Set `AUTOCOREG_CAPSULE_ID`** (constant / env var) to Capsule A's
+CO id before a real run (`test=1` = search-only dry run).
+
+> **Loader (RESOLVED 2026-06-30):** Capsule A's `autocoreg.io.subjects.load_subject` now
+> **synthesizes a coreg dir** from the attached cortical-zstack registration + segmentation when
+> no manual `*ctl-czstack-hcr-coreg_*` dir is present (`_synthesize_coreg_dir`, mirroring `step_1`):
+> symlinks the `*_2xREG.tif` as the CZ z-stack, writes the seg binary as the `*seg-mask-outline.tif`
+> (`load_cz_binary_volume` fill-holes → same solid cells), and writes the center-of-mass
+> `*czstack_cell_centroids.csv`. `_find_coreg_dir` returns the manual dir if present, else the
+> synthesized one (`MFISH_COREG_DIR`-overridable scratch). Verified on 790322: synthesized CZ
+> centroids == the manual ones to 0.0. The GT (`coreg_table` / qced landmarks) is **matcher-optional**
+> and degrades to empty — all its downstream uses (`inputs.scoring_gt`, `gfp_threshold` coverage with
+> `max(.,1)` guard, `hcr_image` stats) are empty-safe, so nothing had to be removed.
+>
+> **GFP/sxy generalized to new subjects (RESOLVED 2026-06-30):** the GFP/sxy paths no longer
+> depend on hardcoded subject lists or a pre-cached threshold.
+> `gfp_threshold.detect_gfp_class(sid)` classifies **spot-vs-intensity from the attached HCR data**
+> (a `*spot_488_counts.csv` in the coreg dir or `image_spot_detection/channel_488_spots/spots.csv`
+> in the HCR asset → `spot`; a `cell_data_mean_{sid}_R1.csv` → `intensity`; else default `spot`),
+> with the 6 hardcoded benchmark subjects still taking precedence (behaviour unchanged).
+> `analyze_subject` / `strict_gfp_df` use it; `inputs.strict_gfp_ids` falls back to a **live seeded
+> GMM cutoff** (`gfp_threshold.analyze_subject`) when the subject is absent from `GMM_THRESH_JSON`;
+> `lateral_scale` drops its `unknown subject` gates and **guards the GT-only `sxy_gt`/`sz_gt`
+> diagnostics** (→ NaN when no qced landmarks). **Verified:** disabling the hardcoded sets (i.e.
+> treating 790322 as brand-new) reproduces its cutoff (`0.00169317`), strict-GFP+ ids (`9675`),
+> and `sxy_median` (`1.7678`) **bit-for-bit**; the live `strict_gfp_ids` fallback yields the
+> identical id set; and new subjects `800792`/`800995`/`804363` detect as `spot`. So the automated
+> path now runs end-to-end for both the benchmark subjects and genuinely-new ones.

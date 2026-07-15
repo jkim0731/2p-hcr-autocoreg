@@ -1,0 +1,85 @@
++ python -u run_capsule.py --subject_id=755252 --gate=anchor_vote --build_qc=1 --anchor_restricted=1 --seg_round=1 --gfp_round=2
+[capsule] seg HCR (R1) = HCR_755252_2025-07-02_13-00-00_processed_2025-07-18_09-27-44
+[capsule] gfp HCR (R2) = HCR_755252_2025-07-10_13-00-00_processed_2025-07-21_17-35-04  [different round]
+[capsule] subject=755252  gate=anchor_vote  anchor_restricted=True  build_qc=True
+[autocoreg] loading subject 755252
+[load_subject] no manual coreg dir for 755252; synthesized one from the cortical-zstack registration + segmentation -> /root/capsule/scratch/autocoreg_work/cache/synthesized_coreg/755252_2024-12-19_ctl-czstack-hcr-coreg_auto
+[autocoreg] fitting surfaces
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  CZ surface: True  HCR top surface: True
+[autocoreg] estimating sxy (min-rule)
+[load_subject] no manual coreg dir for 755252; synthesized one from the cortical-zstack registration + segmentation -> /root/capsule/scratch/autocoreg_work/cache/synthesized_coreg/755252_2024-12-19_ctl-czstack-hcr-coreg_auto
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+[load_subject] no manual coreg dir for 755252; synthesized one from the cortical-zstack registration + segmentation -> /root/capsule/scratch/autocoreg_work/cache/synthesized_coreg/755252_2024-12-19_ctl-czstack-hcr-coreg_auto
+[load_subject] no manual coreg dir for 755252; synthesized one from the cortical-zstack registration + segmentation -> /root/capsule/scratch/autocoreg_work/cache/synthesized_coreg/755252_2024-12-19_ctl-czstack-hcr-coreg_auto
+[load_subject] no manual coreg dir for 755252; synthesized one from the cortical-zstack registration + segmentation -> /root/capsule/scratch/autocoreg_work/cache/synthesized_coreg/755252_2024-12-19_ctl-czstack-hcr-coreg_auto
+[load_subject] no manual coreg dir for 755252; synthesized one from the cortical-zstack registration + segmentation -> /root/capsule/scratch/autocoreg_work/cache/synthesized_coreg/755252_2024-12-19_ctl-czstack-hcr-coreg_auto
+[load_subject] no manual coreg dir for 755252; synthesized one from the cortical-zstack registration + segmentation -> /root/capsule/scratch/autocoreg_work/cache/synthesized_coreg/755252_2024-12-19_ctl-czstack-hcr-coreg_auto
+  [755252] tight-bbox: 0 cached, 477 to compute
+    200/477  (4.9 cells/s)
+    400/477  (4.9 cells/s)
+    477/477  (5.2 cells/s)
+  [755252] max-xsection: 0 cached, 477 to compute
+    200/477  (35.8 cells/s)
+    400/477  (33.4 cells/s)
+    477/477  (33.2 cells/s)
+  sxy = 1.4337
+[autocoreg] surface registration
+[load_subject] no manual coreg dir for 755252; synthesized one from the cortical-zstack registration + segmentation -> /root/capsule/scratch/autocoreg_work/cache/synthesized_coreg/755252_2024-12-19_ctl-czstack-hcr-coreg_auto
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+[load_subject] no manual coreg dir for 755252; synthesized one from the cortical-zstack registration + segmentation -> /root/capsule/scratch/autocoreg_work/cache/synthesized_coreg/755252_2024-12-19_ctl-czstack-hcr-coreg_auto
+[load_subject] no manual coreg dir for 755252; synthesized one from the cortical-zstack registration + segmentation -> /root/capsule/scratch/autocoreg_work/cache/synthesized_coreg/755252_2024-12-19_ctl-czstack-hcr-coreg_auto
+[load_subject] no manual coreg dir for 755252; synthesized one from the cortical-zstack registration + segmentation -> /root/capsule/scratch/autocoreg_work/cache/synthesized_coreg/755252_2024-12-19_ctl-czstack-hcr-coreg_auto
+[load_subject] no manual coreg dir for 755252; synthesized one from the cortical-zstack registration + segmentation -> /root/capsule/scratch/autocoreg_work/cache/synthesized_coreg/755252_2024-12-19_ctl-czstack-hcr-coreg_auto
+[load_subject] no manual coreg dir for 755252; synthesized one from the cortical-zstack registration + segmentation -> /root/capsule/scratch/autocoreg_work/cache/synthesized_coreg/755252_2024-12-19_ctl-czstack-hcr-coreg_auto
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  method: surface_registration_v2
+[autocoreg] estimating sz
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+  755252: HCR target (410, 192, 194)  sz_lp=2.462  cz_depth=191.9�m  slabs x?[767,1267]�m
+  755252: 26/26 sz candidates have finite NCC  ncc range [0.022, 0.091]
+  755252: sz_best=2.10  ncc_peak=0.0905  ncc_median=0.0610  peak_ratio=1.484
+  sz = 2.1000
+[autocoreg] matching (variant=anchor_vote_anchor_restricted) -> /root/capsule/scratch/autocoreg_work/matches/anchor_vote_anchor_restricted/755252
+
+=== 755252 [gate=anchor_vote  local_flow_rd0=True] ===
+[load_subject] no manual coreg dir for 755252; synthesized one from the cortical-zstack registration + segmentation -> /root/capsule/scratch/autocoreg_work/cache/synthesized_coreg/755252_2024-12-19_ctl-czstack-hcr-coreg_auto
+[overlap_crop] 755252: raw CZ bbox in HCR �m z=[323, 1374] y=[612, 1261] x=[656, 1348]  extents: dz=1051 dy=649 dx=692 �m
+/opt/conda/lib/python3.11/site-packages/zarr/core/metadata/v2.py:190: ZarrUserWarning: Found an empty list of filters in the array metadata document. This is contrary to the Zarr V2 specification, and will cause an error in the future. Use None (or Null in a JSON document) instead of an empty list of filters.
+  warnings.warn(msg, ZarrUserWarning, stacklevel=1)
+[overlap_crop] 755252: final bbox (margin 10%) z=[218, 1479] (1261 �m) y=[548, 1326] (779 �m) x=[587, 1418] (831 �m)
+[load_subject] no manual coreg dir for 755252; synthesized one from the cortical-zstack registration + segmentation -> /root/capsule/scratch/autocoreg_work/cache/synthesized_coreg/755252_2024-12-19_ctl-czstack-hcr-coreg_auto
+[load_subject] no manual coreg dir for 755252; synthesized one from the cortical-zstack registration + segmentation -> /root/capsule/scratch/autocoreg_work/cache/synthesized_coreg/755252_2024-12-19_ctl-czstack-hcr-coreg_auto
+[load_subject] no manual coreg dir for 755252; synthesized one from the cortical-zstack registration + segmentation -> /root/capsule/scratch/autocoreg_work/cache/synthesized_coreg/755252_2024-12-19_ctl-czstack-hcr-coreg_auto
+[load_subject] no manual coreg dir for 755252; synthesized one from the cortical-zstack registration + segmentation -> /root/capsule/scratch/autocoreg_work/cache/synthesized_coreg/755252_2024-12-19_ctl-czstack-hcr-coreg_auto
+Traceback (most recent call last):
+  File "/code/run_capsule.py", line 338, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/code/run_capsule.py", line 220, in main
+    run_subject(sid, sz_pins, gate=args.gate, use_local_flow_rd0=True,
+  File "/2p2fish/src/autocoreg/finetune_soma_print/matcher.py", line 501, in run_subject
+    subj = prepare_subject(sid, sz_pins=sz_pins)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/2p2fish/src/autocoreg/finetune_soma_print/pool_prep.py", line 84, in prepare_subject
+    inp = subject_inputs(sid, sz_pins=sz_pins)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/2p2fish/src/autocoreg/io/inputs.py", line 178, in subject_inputs
+    gfp_ids, gmm_meta = strict_gfp_ids(sid)
+                        ^^^^^^^^^^^^^^^^^^^
+  File "/2p2fish/src/autocoreg/io/inputs.py", line 75, in strict_gfp_ids
+    tbl = agg[["hcr_id", "density"]].dropna()
+          ~~~^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not subscriptable
+
