@@ -22,6 +22,10 @@ cat > /root/capsule/scratch/.vscode-root/User/settings.json << 'EOF'
   "python.terminal.activateEnvironment": true,
   "python.experiments.enabled": false,
   "python.testing.pytestEnabled": false,
+  "quarto.path": "/scratch/tools/quarto/bin/quarto",
+  "terminal.integrated.env.linux": {
+    "PATH": "/scratch/tools/quarto/bin:${env:PATH}"
+  },
   "claudeCode.preferredLocation": "panel",
   "search.followSymlinks": false,
   "files.watcherExclude": {

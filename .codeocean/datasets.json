@@ -26,6 +26,10 @@
 			"mount": "HCR_755252_2025-07-10_13-00-00_processed_2025-07-21_17-35-04"
 		},
 		{
+			"id": "25c05284-b70e-4127-bd3a-79d0d057f7de",
+			"mount": "multiplane-ophys_790322_2025-07-03_14-03-48_processed_2025-10-26_17-50-01"
+		},
+		{
 			"id": "2a7781cf-1668-406b-9f73-92ea9ee5aabb",
 			"mount": "multiplane-ophys_767018_2025-02-19_14-02-36_cortical-zstack-reg_2025-03-09_22-43-48"
 		},
@@ -62,6 +66,10 @@
 			"mount": "HCR_767018_pairwise-unmixing_2026-03-06_12-00-00"
 		},
 		{
+			"id": "47df6778-ee35-4cb2-a123-9ffce8193dc8",
+			"mount": "HCR_837568-01_2026-05-20_13-00-00_2p-3DFISH-autocoreg_2026-08-04_21-36-47"
+		},
+		{
 			"id": "54e49dc6-0b4c-4a1e-ab52-ced571a03110",
 			"mount": "claude-data_ophys-mfish-autocoreg_main-claude_260616"
 		},
@@ -94,6 +102,10 @@
 			"mount": "multiplane-ophys_767018_2025-02-18_12-28-32_cortical-zstack-reg_2025-03-09_22-40-48"
 		},
 		{
+			"id": "7776da7d-f1f1-4c67-80aa-a5f3aa7e7842",
+			"mount": "multiplane-ophys_790322_2025-07-02_14-00-54_processed_2025-09-30_16-41-30"
+		},
+		{
 			"id": "7fd39c26-3ee0-438b-8cee-ab6ff1230695",
 			"mount": "multiplane-ophys_767022_2025-03-06_09-17-27_cortical-zstack-reg_2025-03-09_21-55-47"
 		},
@@ -104,6 +116,10 @@
 		{
 			"id": "88bbee99-2e34-421d-bf45-01e3ef963847",
 			"mount": "HCR_755252_2025-07-02_13-00-00_processed_2025-07-18_09-27-44"
+		},
+		{
+			"id": "8c9f049f-227c-40f1-9d18-7704e15215be",
+			"mount": "multiplane-ophys_790322_2025-07-03_14-03-48_processed_2025-09-30_16-58-24"
 		},
 		{
 			"id": "931279cc-726c-473b-a29f-3d3e10d193f0",
@@ -138,6 +154,10 @@
 			"mount": "HCR_790322_2025-11-05_13-00-00_processed_2025-11-10_20-36-20"
 		},
 		{
+			"id": "ad884886-f06c-45e5-86ec-e627179c8cb9",
+			"mount": "multiplane-ophys_790322_2025-06-11_15-09-29_processed_2025-10-06_19-49-40_CTL-coreg-id-mapping_2026-07-08_21-26-07"
+		},
+		{
 			"id": "adba5f37-b5f6-4164-b727-6d46a9270b18",
 			"mount": "HCR_790322_2025-11-05_13-00-00_processed_2025-11-10_20-36-20_HCR-ROI-label_2026-06-20_20-43-55"
 		},
@@ -154,12 +174,20 @@
 			"mount": "767018_ctl-czstack-hcr-coreg_2025-10-16_00-00-00"
 		},
 		{
+			"id": "b8fb9a41-579e-4532-a89d-adb1ee1aa368",
+			"mount": "multiplane-ophys_837568_2026-02-13_14-38-22_cortical-zstack-registration_2026-08-03_22-44-14"
+		},
+		{
 			"id": "ba535a87-8433-41d6-b3a5-1f425bdfadc1",
 			"mount": "HCR_767022_2025-07-03_13-00-00_processed_2025-07-18_09-27-44"
 		},
 		{
 			"id": "c448324c-019c-4c25-8a8e-e20933abc67b",
 			"mount": "755252_2024-12-19_ctl-czstack-hcr-coreg_2025-11-18_00-00-00"
+		},
+		{
+			"id": "c5d57935-f1f3-497a-8be4-b9af1e3c9352",
+			"mount": "multiplane-ophys_837568_2026-02-13_14-38-22_cortical-zstack-segmentation_2026-08-04_04-38-48"
 		},
 		{
 			"id": "c609d656-adc3-4526-8a36-633845d54ee0",
@@ -178,12 +206,20 @@
 			"mount": "multiplane-ophys_782149_2025-05-01_09-20-00_cortical-zstack-segmentation_2025-11-14_04-37-35"
 		},
 		{
+			"id": "d1e4eaf3-52c6-43b0-aa90-a91387b0e079",
+			"mount": "HCR_837568-01_2026-05-20_13-00-00_processed_2026-06-04_19-00-46"
+		},
+		{
 			"id": "d43a47f7-b690-4db0-863f-aab39e15ff37",
 			"mount": "HCR_754803_2025-08-20_14-00-00_processed_2025-09-10_00-33-24"
 		},
 		{
 			"id": "d49166e2-1a39-4626-bde1-a0f4cb2865a1",
 			"mount": "multiplane-ophys_755252_2024-12-19_11-34-11_cortical-zstack-seg_2025-07-25_10-41-00"
+		},
+		{
+			"id": "d83b9ab1-bb2e-45e5-8fd0-e0e3acbca55e",
+			"mount": "HCR_837568-01_2026-05-20_13-00-00_HCR-ROI-label_2026-08-04_04-03-02"
 		},
 		{
 			"id": "d868764e-6253-4651-9c48-a9072ca579c0",

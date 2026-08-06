@@ -2,6 +2,7 @@
 set -euxo pipefail
 
 echo "Installing optional repos..."
+cd / && git clone https://github.com/jkim0731/claude-code-skills-codeocean
 cd /
 git clone https://github.com/AllenNeuralDynamics/comb
 cd /comb && git checkout for_gcamp_validation && pip install -e .

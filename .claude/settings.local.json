@@ -61,7 +61,9 @@
       "Bash(touch /root/capsule/code/dev_code/cached_surfaces/.w)",
       "Bash(rm /root/capsule/code/dev_code/cached_surfaces/.w)",
       "Bash(touch /root/capsule/.claude/cache/.w)",
-      "Bash(rm /root/capsule/.claude/cache/.w)"
+      "Bash(rm /root/capsule/.claude/cache/.w)",
+      "Read(//root/capsule/scratch/pub_work/blog/**)",
+      "Read(//root/capsule/scratch/pub_work/blog/posts/**)"
     ]
   },
   "hooks": {

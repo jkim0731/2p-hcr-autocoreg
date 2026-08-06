@@ -60,7 +60,7 @@
     ],
     "defaultMode": "bypassPermissions"
   },
-  "model": "opus",
+  "model": "claude-fable-5[1m]",
   "effortLevel": "xhigh",
   "skipDangerousModePermissionPrompt": true,
   "theme": "light",

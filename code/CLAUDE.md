@@ -92,6 +92,11 @@ Avoid skipping stages unless there is a strong, well-justified reason.
 - Communicate clearly and persuasively — reasoning should support conclusions.
 - Prefer clarity over speed; think before acting.
 - Be precise and concise, but do not omit important reasoning steps.
+- **Always refer to files/images by their full absolute path** (e.g.
+  `/scratch/sessions/22_pan_neuronal_surface/out/fig.png`) — never a relative path or a
+  bare "here is …". The user opens these directly (often in FIJI), so every time you
+  display, save, or name an artifact (figure, TIF, CSV, script, output), write its
+  complete absolute path inline.
 
 ---
 
