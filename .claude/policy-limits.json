@@ -1,19 +1,16 @@
 {
   "restrictions": {
-    "allow_remote_control": {
-      "allowed": false
-    },
-    "allow_routines": {
+    "allow_product_feedback": {
       "allowed": false
     },
     "allow_quick_web_setup": {
       "allowed": false
     },
-    "allow_cobalt_plinth": {
-      "allowed": false
-    },
     "enforce_web_search_mcp_isolation": {
       "allowed": false
+    },
+    "require_trusted_devices": {
+      "allowed": true
     }
   },
   "compliance_taints": [],

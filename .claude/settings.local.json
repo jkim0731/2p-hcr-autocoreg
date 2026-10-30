@@ -63,7 +63,9 @@
       "Bash(touch /root/capsule/.claude/cache/.w)",
       "Bash(rm /root/capsule/.claude/cache/.w)",
       "Read(//root/capsule/scratch/pub_work/blog/**)",
-      "Read(//root/capsule/scratch/pub_work/blog/posts/**)"
+      "Read(//root/capsule/scratch/pub_work/blog/posts/**)",
+      "Bash(cd /root/capsule/code/docs; cat \"11 Work In Progress.md\"; echo =====; cat Notes.md; echo ====; cat \"02 Goals.md\" \"03 Problem Setting.md\"; ls -d /root/capsule/data/claude-data*/*; ls /root/capsule/data/claude-data*/.claude 2>/dev/null; ls /data | head -40)",
+      "Read(//data/**)"
     ]
   },
   "hooks": {

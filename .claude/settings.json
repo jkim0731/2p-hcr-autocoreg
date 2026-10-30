@@ -60,9 +60,14 @@
     ],
     "defaultMode": "bypassPermissions"
   },
-  "model": "claude-fable-5[1m]",
+  "model": "sonnet",
   "effortLevel": "xhigh",
   "skipDangerousModePermissionPrompt": true,
   "theme": "light",
-  "agentPushNotifEnabled": true
+  "agentPushNotifEnabled": true,
+  "modelSettings": {
+    "claude-sonnet-5-5": {
+      "effortLevel": "high"
+    }
+  }
 }
